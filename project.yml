@@ -1,0 +1,87 @@
+# XcodeGen spec for the Xcode project. Generate with `xcodegen` in this
+# directory; the .xcodeproj is not committed.
+#
+# The demo app target compiles Sources/UltraViewDemo itself and links the
+# package's `UltraView` product. Each directory under Tests/ is a unit-test
+# bundle; none is hosted in the app. `xcodebuild test -scheme UltraViewDemo`
+# runs all of them in the simulator.
+name: UltraView
+options:
+  bundleIdPrefix: dev.ultraview
+  deploymentTarget:
+    iOS: "26.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    IPHONEOS_DEPLOYMENT_TARGET: "26.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    DEAD_CODE_STRIPPING: YES
+packages:
+  UltraView:
+    path: .
+targetTemplates:
+  PackageTests:
+    type: bundle.unit-test
+    platform: iOS
+    dependencies:
+      - package: UltraView
+        product: UltraView
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: dev.ultraview.tests.$(TARGET_NAME)
+targets:
+  UltraViewDemo:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources/UltraViewDemo
+    dependencies:
+      - package: UltraView
+        product: UltraView
+    settings:
+      base:
+        PRODUCT_NAME: UltraViewDemo
+        PRODUCT_BUNDLE_IDENTIFIER: dev.ultraview.demo
+        INFOPLIST_FILE: App/Info.plist
+        GENERATE_INFOPLIST_FILE: YES
+        TARGETED_DEVICE_FAMILY: "1,2"
+        CODE_SIGN_STYLE: Automatic
+  UltraLayoutTests:
+    templates: [PackageTests]
+    sources:
+      - path: Tests/UltraLayoutTests
+  UltraNodeTests:
+    templates: [PackageTests]
+    sources:
+      - path: Tests/UltraNodeTests
+  UltraListTests:
+    templates: [PackageTests]
+    sources:
+      - path: Tests/UltraListTests
+  UltraViewUIKitTests:
+    # Needs UIKit; runs only here, in the simulator.
+    templates: [PackageTests]
+    sources:
+      - path: Tests/UltraViewUIKitTests
+schemes:
+  UltraViewDemo:
+    build:
+      targets:
+        UltraViewDemo: all
+        UltraLayoutTests: [test]
+        UltraNodeTests: [test]
+        UltraListTests: [test]
+        UltraViewUIKitTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - UltraLayoutTests
+        - UltraNodeTests
+        - UltraListTests
+        - UltraViewUIKitTests
