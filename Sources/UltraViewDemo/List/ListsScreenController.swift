@@ -4,7 +4,7 @@ import UltraView
 
 @MainActor
 final class ListsScreenController: UIViewController {
-    private let tabs = UISegmentedControl(items: ["Chat", "10k feed", "Compare", "Record"])
+    private let tabs = UISegmentedControl(items: ["Chat", "10k feed", "Compare", "Record", "Across"])
     private let engines = UISegmentedControl(items: ["UIKit", "Stepped", "Keyframe"])
     private let blocker = UISegmentedControl(items: ["Main off", "50 ms", "100 ms", "250 ms"])
     private let controls = UIStackView()
@@ -14,7 +14,7 @@ final class ListsScreenController: UIViewController {
         super.viewDidLoad(); view.backgroundColor = .systemBackground
         tabs.accessibilityIdentifier = "listScreens"; engines.accessibilityIdentifier = "listEngines"
         let screen = UserDefaults.standard.string(forKey: "listScreen") ?? "feed"
-        tabs.selectedSegmentIndex = ["chat", "feed", "compare", "record"].firstIndex(of: screen) ?? 1
+        tabs.selectedSegmentIndex = ["chat", "feed", "compare", "record", "horizontal"].firstIndex(of: screen) ?? 1
         let initialEngine = UserDefaults.standard.string(forKey: "listEngine") ?? "keyframe"
         engines.selectedSegmentIndex = ScrollEngineMode.allCases.firstIndex(where: { $0.rawValue == initialEngine }) ?? 2
         tabs.addTarget(self, action: #selector(showScreen), for: .valueChanged)
@@ -65,6 +65,7 @@ final class ListsScreenController: UIViewController {
         case 0: next = ListChatController(mode: mode)
         case 2: next = ListComparisonController()
         case 3: next = GestureRecorderController()
+        case 4: next = HorizontalListController(mode: mode)
         default: next = LargeListController(mode: mode)
         }
         addChild(next); next.view.translatesAutoresizingMaskIntoConstraints = false; view.addSubview(next.view)
@@ -88,6 +89,8 @@ struct DemoListRow: ListRow {
     var pinsToBottomEdge = false
     var section: String?
     var extraAttachments: [String: any ListAttachment] = [:]
+    var leadingSwipeActions: [ListSwipeAction] = []
+    var trailingSwipeActions: [ListSwipeAction] = []
     private let storage = DemoRowStorage()
     init(identity: String, revision: UInt64 = 0, title: String, body: String, height: Double, tint: UIColor = .systemIndigo, inverted: Bool = false, pinsToBottomEdge: Bool = false, section: String? = nil) {
         self.identity = identity; self.revision = revision; self.title = title; self.body = body; self.height = height
@@ -118,6 +121,9 @@ struct DemoListRow: ListRow {
         nodeRow.apply(to: view, transition: transition)
         view.transform = inverted ? .init(scaleX: 1, y: -1) : .identity
         view.accessibilityIdentifier = "row-\(identity)"; view.accessibilityLabel = title
+        // A row with swipe actions is one element, so VoiceOver offers its actions.
+        let swipes = !leadingSwipeActions.isEmpty || !trailingSwipeActions.isEmpty
+        view.isAccessibilityElement = swipes; view.accessibilityValue = swipes ? body : nil
     }
     func measure(width: Double, environment: RenderEnvironment) async -> Double? { await nodeRow.measure(width: width, environment: environment) }
     func prepare(width: Double, environment: RenderEnvironment) async -> ListPreparation? { await nodeRow.prepare(width: width, environment: environment) }
@@ -167,6 +173,8 @@ final class LargeListController: UIViewController, ListChaosRowHost {
     private var rows: [DemoListRow] = []
     private var counter = 10_000
     private let monitor = ListFrameMonitor(name: "feed")
+    private var carousels: [String: DemoCarouselRow] = [:]
+    private var swipeProbe: ListSwipeProbe?
     var chaosRows: [DemoListRow] { get { rows } set { rows = newValue } }
     init(mode: ScrollEngineMode) { list = UltraListView(engineMode: mode); super.init(nibName: nil, bundle: nil) }
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
@@ -176,6 +184,11 @@ final class LargeListController: UIViewController, ListChaosRowHost {
             let body = String(repeating: "Independent rows. Measured windows. Smooth motion. ", count: 1 + index % 4)
             let height: Double = 88 + Double(index % 5) * 24
             return DemoListRow(identity: String(index), title: "Row \(index.formatted())", body: body, height: height, section: "SECTION \(index / 20 + 1)")
+        }
+        rows = rows.map(withSwipeActions)
+        // Carousels follow these rows; chaos runs keep the plain collection it checks.
+        if UserDefaults.standard.string(forKey: "listChaos") == nil {
+            for anchor in ["2", "45", "130"] { carousels[anchor] = DemoCarouselRow(identity: "carousel-\(anchor)", mode: list.engineMode, count: 40 + anchor.count * 20) }
         }
         actions.distribution = .fillEqually
         for (title, selector) in [("Insert", #selector(insertRows)), ("Delete", #selector(deleteRows)), ("Move", #selector(moveRows)), ("Resize", #selector(resizeRow)), ("5,000", #selector(jump)), ("Top", #selector(top))] {
@@ -195,7 +208,8 @@ final class LargeListController: UIViewController, ListChaosRowHost {
             let text = "\(rows.count.formatted()) rows · \(list.loadedIndexRange.count) loaded · \(list.engineMode.rawValue)"
             if status.text != text { status.text = text }
         }
-        list.applyChanges(items: rows)
+        list.applyChanges(items: displayed)
+        if UserDefaults.standard.bool(forKey: "listSwipeProbe") { swipeProbe = ListSwipeProbe(owner: view, list: list) }
         monitor.start()
         if UserDefaults.standard.bool(forKey: "listProbe") {
             Task { [weak self] in
@@ -210,18 +224,65 @@ final class LargeListController: UIViewController, ListChaosRowHost {
             }
         }
     }
-    private var visibleIndex: Int {
-        list.loadedIndexRange.first(where: { (list.settledFrame(at: $0)?.maxY ?? 0) > 0 }) ?? 0
+    /// The rows with each carousel after its anchor row.
+    private var displayed: [any ListRow] {
+        guard !carousels.isEmpty else { return rows }
+        var items: [any ListRow] = []
+        items.reserveCapacity(rows.count + carousels.count)
+        for row in rows {
+            items.append(row)
+            if let carousel = carousels[row.identity] { items.append(carousel) }
+        }
+        return items
     }
-    @objc private func insertRows() { counter += 1; rows.insert(.init(identity: String(counter), title: "Inserted \(counter)", body: "A new row in the visible window.", height: 112, tint: .systemGreen), at: min(visibleIndex + 1, rows.count)); list.applyChanges(items: rows) }
+    /// The first visible row of `rows`.
+    private var visibleIndex: Int {
+        let index = list.loadedIndexRange.first(where: { (list.settledFrame(at: $0)?.maxY ?? 0) > 0 }) ?? 0
+        let items = list.items
+        for candidate in index..<max(index, items.count) {
+            if let row = rows.firstIndex(where: { $0.identity == items[candidate].identity }) { return row }
+        }
+        return 0
+    }
+    private func withSwipeActions(_ row: DemoListRow) -> DemoListRow {
+        var row = row
+        let identity = row.identity
+        row.trailingSwipeActions = [
+            ListSwipeAction(title: "Delete", image: UIImage(systemName: "trash"), isDestructive: true) { [weak self] in self?.remove(identity, action: "delete") },
+            ListSwipeAction(title: "Archive", image: UIImage(systemName: "archivebox"), color: .systemIndigo) { [weak self] in self?.remove(identity, action: "archive") },
+        ]
+        row.leadingSwipeActions = [
+            ListSwipeAction(title: row.title.hasPrefix("Pinned") ? "Unpin" : "Pin", image: UIImage(systemName: "pin"), color: .systemOrange) { [weak self] in self?.togglePin(identity) },
+        ]
+        return row
+    }
+    private func remove(_ identity: String, action: String) {
+        guard let index = rows.firstIndex(where: { $0.identity == identity }) else { return }
+        swipeProbe?.willRemove(identity, action: action)
+        rows.remove(at: index)
+        let items = swipeProbe?.measure("buildItems") { displayed } ?? displayed
+        if let swipeProbe { swipeProbe.measure("applyChanges") { list.applyChanges(items: items) } } else { list.applyChanges(items: items) }
+    }
+    private func togglePin(_ identity: String) {
+        guard let index = rows.firstIndex(where: { $0.identity == identity }) else { return }
+        swipeProbe?.record("pin:\(identity)")
+        var row = rows[index]
+        let pinned = row.title.hasPrefix("Pinned · ")
+        row.title = pinned ? String(row.title.dropFirst("Pinned · ".count)) : "Pinned · " + row.title
+        row.tint = pinned ? .systemIndigo : .systemOrange
+        row.revision += 1
+        rows[index] = withSwipeActions(row)
+        list.applyChanges(items: displayed)
+    }
+    @objc private func insertRows() { counter += 1; rows.insert(withSwipeActions(.init(identity: String(counter), title: "Inserted \(counter)", body: "A new row in the visible window.", height: 112, tint: .systemGreen)), at: min(visibleIndex + 1, rows.count)); list.applyChanges(items: displayed) }
     override func viewDidDisappear(_ animated: Bool) { super.viewDidDisappear(animated); monitor.finish() }
-    @objc private func deleteRows() { if !rows.isEmpty { rows.remove(at: min(visibleIndex + 1, rows.count - 1)); list.applyChanges(items: rows) } }
-    @objc private func moveRows() { if rows.count > 5 { let index = min(visibleIndex + 1, rows.count - 1); rows.insert(rows.remove(at: index), at: min(index + 4, rows.count)); list.applyChanges(items: rows) } }
+    @objc private func deleteRows() { if !rows.isEmpty { rows.remove(at: min(visibleIndex + 1, rows.count - 1)); list.applyChanges(items: displayed) } }
+    @objc private func moveRows() { if rows.count > 5 { let index = min(visibleIndex + 1, rows.count - 1); rows.insert(rows.remove(at: index), at: min(index + 4, rows.count)); list.applyChanges(items: displayed) } }
     @objc private func resizeRow() {
         guard !rows.isEmpty else { return }
         let index = min(visibleIndex, rows.count - 1)
         rows[index].height = rows[index].height < 200 ? 240 : 88; rows[index].revision += 1
-        list.applyChanges(items: rows)
+        list.applyChanges(items: displayed)
     }
     @objc private func jump() { list.scrollTo(.init(index: min(5000, rows.count - 1)), transition: .smoothDeceleration()) }
     @objc private func top() { list.scrollTo(.init(index: 0), transition: .smoothDeceleration()) }

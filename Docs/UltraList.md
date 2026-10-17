@@ -118,6 +118,97 @@ disappears silently. A genuinely removed attachment fades, joining its departing
 row block when all members share that block. Attachment containers pass through
 touches outside interactive children.
 
+## Swipe actions
+
+A row offers buttons behind its content through `leadingSwipeActions` and
+`trailingSwipeActions`. Both default to empty, and rows without actions are never
+touched. A `ListSwipeAction` has a title, an optional image, a color (red when
+`isDestructive`, gray otherwise), a width of 76 points by default and a
+main-actor handler. The first action of a side sits at the row edge, and a full
+swipe performs it.
+
+```swift
+var row = MessageRow(message)
+row.trailingSwipeActions = [
+    ListSwipeAction(title: "Delete", image: UIImage(systemName: "trash"), isDestructive: true) { [weak self] in
+        self?.delete(message.id)   // applyChanges without the row
+    },
+    ListSwipeAction(title: "Archive", color: .systemIndigo) { [weak self] in self?.archive(message.id) },
+]
+row.leadingSwipeActions = [ListSwipeAction(title: "Reply", color: .systemBlue) { [weak self] in self?.reply(to: message.id) }]
+```
+
+`list.swipeActions` controls the reveal. `transition` (default `.spring(0.5)`)
+moves a released row to rest. Spring curves start with the finger's velocity,
+limited so the row never overshoots. `allowsFullSwipe` turns full swipes off.
+`revealedIdentity` names the open row, and `close(animated:)` closes it.
+
+- **Tracking.** The content follows the finger exactly up to the buttons' total
+  width. With a full swipe available, it follows to the row width, and the
+  movement past it rubber-bands with coefficient 0.55. Without one, the
+  rubber band starts at the buttons' width.
+- **Release.** `SwipeRelease.decide` projects the reveal by 0.12 s of release
+  velocity and opens when the projection reaches half the buttons' width. A
+  reveal at the full-swipe threshold performs the edge action instead. The
+  threshold is the larger of the buttons' width plus 48 points and 55% of the
+  row. The decision is monotone in both reveal and velocity.
+- **Full swipe.** The edge button expands over the whole revealed area while the
+  reveal is past the threshold. One haptic fires per crossing; moving 16 points
+  back below the threshold re-arms it.
+- **One row at a time.** Starting a list drag, swiping another row, or tapping
+  anywhere else closes the open row. The closing tap is swallowed, so it neither
+  selects nor presses what it lands on. Tapping a button performs it and closes
+  the row, unless the handler removed it.
+- **Deleting.** A handler that removes its row through `applyChanges` gets the
+  list's normal departure. The departing row keeps its buttons and shrinks to
+  zero height on the departure's own timing. It keeps the edge whose neighbour
+  stays still, so the rows sliding into its place stay against it in the same
+  transaction.
+- **Accessibility.** Every action is also a VoiceOver custom action on the row
+  view, looked up again at activation so the newest row revision's handler runs.
+  Custom actions a row sets itself are left alone.
+- **Gestures.** The reveal pan begins only for mostly horizontal motion toward a
+  side with actions. The list's pan, the keyboard-dismiss pan and enclosing pans
+  wait for it to fail. A touch that lands on a moving list catches the list and
+  never starts a reveal.
+
+The content moves through the row layer's `sublayerTransform`. Rows must not set
+that property while swipe actions are attached; a debug assertion checks it.
+Buttons are row sublayers, so list motion carries them. Their labels are drawn
+off main and cached, prewarmed for rows as they load. `masksToBounds` is
+restored to the row's own value when the reveal closes. The motion runs as
+additive Core Animation animations. The main thread only writes final values and
+adds animations, and stays idle while a spring runs.
+
+## Horizontal lists
+
+`HorizontalListView` scrolls left and right. It hosts an ordinary
+`UltraListView` laid along the screen's x axis: transposed for left to right, a
+quarter turn clockwise for right to left. Windowing, diffing, transitions, all
+three engines, deceleration, bounce and the flight band are the vertical list's
+own. Wrap each row in `HorizontalRow(row, width:)`, which shows the row upright
+at that width and the list's full height. The width is fixed per revision; a
+row cannot measure its own width.
+
+```swift
+let carousel = HorizontalListView(engineMode: .keyframe)
+carousel.list.applyChanges(items: cards.map { HorizontalRow(CardRow($0), width: 148) },
+                           newInsets: .init(top: 12, left: 8, bottom: 12, right: 8))
+```
+
+Geometry stays in the inner list's space: its top and bottom insets are the
+leading and trailing ones, and its left and right insets are the top and
+bottom. `screenFrame(_:)` maps `settledFrame` and `presentedFrame` to the view.
+VoiceOver's left and right scrolls page the list in screen direction. Its up
+and down scrolls go to an enclosing scroller.
+
+Two gates arbitrate nested scrolling. They decide the axis once per touch, at
+the first movement past 10 points, with a tie going to vertical (`AxisLock`).
+A vertical decision cancels the inner list's pan, so an enclosing vertical list
+scrolls. A horizontal decision fails the enclosing pans, so the carousel takes
+the drag and its fling. A touch that lands on a moving carousel or feed belongs
+to that scroller and catches it. The horizontal list has no scroll indicator.
+
 ## Physics and clocks
 
 Physics uses full precision internally and ties-to-even pixel rounding at writes.
@@ -396,6 +487,31 @@ layout, text measurement and drawing on main stayed at zero. The maximum busy
 turn was 252.2 ms, including the deliberate block; p99 was 1.45 ms. This checks
 motion state after a delayed sample, rather than every rendered frame.
 
+Swipe actions and horizontal lists have exact Linux tests for the axis lock,
+reveal layout, release decision, spring motion, open-row registry and
+horizontal geometry. Simulator unit tests sample presentation layers in all
+three engines, upright and inverted. They check 1:1 tracking, springs that
+settle exactly without overshoot, buttons attached to the content and the
+departing row against its neighbours on every frame. The demo's
+`-listSwipeProbe YES` exports the same per-frame measurements for
+`SwipeInteractionTests`, which drive real drags in every engine:
+- a horizontal drag on a carousel in the feed;
+- a vertical drag starting on the carousel;
+- diagonal drags each way;
+- a tap during a carousel fling;
+- reveal followed by a tap elsewhere, and reveal followed by a vertical scroll;
+- a full-swipe delete;
+- the chat with the keyboard up.
+
+On an iPhone 17 Pro simulator (Debug) these interactions ran with zero layout,
+text or drawing on main. Main-thread p99 while swiping, carousel scrolling and
+deleting was 0.99–1.48 ms across engines. The worst seam between a departing
+row and its neighbours was 0.002 point; the buttons stayed attached within
+1e-13 point. A full-swipe delete in the 10,000-row feed has one 34–51 ms
+release turn: `applyChanges` diffs the whole collection on main in 26–40 ms and
+the demo rebuilds its item array in 5–6 ms. That cost belongs to collection
+diffing and scales with the row count; the chat's delete turn is about 11 ms.
+
 The Xcode app target is `UltraViewDemoApp`, distinct from the SwiftPM demo library.
 The shared scheme is `UltraViewDemo`. `DEMO_BUNDLE_ID` overrides only the app's
 bundle identifier so independent test runners retain their own identities.
@@ -409,6 +525,8 @@ bundle identifier so independent test runners retain their own identities.
 | Node row revisions | Ready content remains visible until the newest replacement applies its visible commit; superseded candidates are discarded. | Node-internal property and text animations. Custom row hosts receive the pass transition; the default bridge animates its outer row geometry. |
 | Trackpad | Continuous indirect pan input has its own drag baseline and rubber-band coefficient. The physics model supports indirect replay. | Physical trackpad parity, indirect recording fixtures and discrete wheel input. The committed public gesture fixtures use direct touch. |
 | Paging | Hosts can supply measured row targets and append new data through `applyChanges`. | Built-in page snapping and network loading policy. |
+| Swipe actions | Leading and trailing actions, full swipe with one haptic per crossing, one open row, closing on drag, tap or another swipe, collapse on delete, VoiceOver custom actions. Presentation-layer simulator tests and real synthesized drags cover all three engines and the inverted chat. | Device timing. In the stepped engine, a tap that stops a fling still presses the content under it (a list-core issue; keyframe and the platform engine don't). Tapping the platform engine mid-fling can't be automated. |
+| Horizontal lists | Transposed and right-to-left lists with every engine, mutations and VoiceOver paging; nested axis arbitration inside a vertical list. | A scroll indicator, self-measured row widths and paging. |
 | Attachments | Run serial continuity, top/bottom floating maps, reserved space, member trimming, one-level partner yielding, ownership, stick distance, flight keyframes and departure behavior have math and simulator coverage. The feed demonstrates reserving section headers. A physical probe combines partner yielding, pinning and keyboard movement. | Navigation during that combined physical scenario. Render-server depth and commit-delay sweeps remain empirical work. |
 
 The timing probes count layout, text measurement and drawing on main separately

@@ -18,6 +18,7 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
     private var followsComposer = true
     private var gestureKeyboardTop = 0.0
     private var rows: [DemoListRow] = []
+    private var swipeProbe: ListSwipeProbe?
     private var nextID = 100
     private var streaming: Task<Void, Never>?
     private let monitor = ListFrameMonitor(name: "chat")
@@ -38,7 +39,7 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
             let tint: UIColor = index % 2 == 0 ? .systemIndigo : .systemTeal
             var row = DemoListRow(identity: "message-\(index)", title: title, body: body, height: height, tint: tint, inverted: true)
             if hostProbe { row.extraAttachments = headers(group: index / 5, sender: title) }
-            return row
+            return withSwipeActions(row)
         }
         composer.accessibilityIdentifier = "composer"; composer.accessibilityLabel = "Message"
         composer.delegate = self; composer.font = .preferredFont(forTextStyle: .body)
@@ -106,6 +107,7 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
             dismiss.heightAnchor.constraint(equalToConstant: 44).isActive = true
             composerBar.addArrangedSubview(dismiss)
         }
+        if UserDefaults.standard.bool(forKey: "listSwipeProbe") { swipeProbe = ListSwipeProbe(owner: view, list: list) }
         monitor.start()
         ListStreamSendProbe.startIfRequested(chat: self)
         ListComposerTimingProbe.startIfRequested(chat: self)
@@ -258,6 +260,25 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
         monitor.recordState(name, values: ["inset": composerInset, "pinHeld": list.holdsPinnedRow, "pinStrict": list.isStrictlyPinnedToBottomEdge, "attachmentCount": rects.count, "attachmentsFinite": rects.allSatisfy { $0.minY.isFinite && $0.maxY.isFinite }])
     }
     override func viewDidDisappear(_ animated: Bool) { super.viewDidDisappear(animated); streaming?.cancel(); monitor.finish(); keyboardProbe?.stop() }
+    /// Reply from the leading edge; Delete, also by a full swipe, from the trailing edge.
+    private func withSwipeActions(_ row: DemoListRow) -> DemoListRow {
+        var row = row
+        let identity = row.identity
+        row.leadingSwipeActions = [ListSwipeAction(title: "Reply", image: UIImage(systemName: "arrowshape.turn.up.left"), color: .systemBlue) { [weak self] in self?.reply(to: identity) }]
+        row.trailingSwipeActions = [ListSwipeAction(title: "Delete", image: UIImage(systemName: "trash"), isDestructive: true) { [weak self] in self?.deleteMessage(identity) }]
+        return row
+    }
+    private func reply(to identity: String) {
+        guard let row = rows.first(where: { $0.identity == identity }) else { return }
+        swipeProbe?.record("reply:\(identity)")
+        composer.text = "Reply to \(row.title): "; updateComposerHeight(animated: true)
+    }
+    private func deleteMessage(_ identity: String) {
+        guard let index = rows.firstIndex(where: { $0.identity == identity }) else { return }
+        swipeProbe?.willRemove(identity, action: "delete")
+        rows.remove(at: index)
+        list.applyChanges(items: rows)
+    }
     @objc private func sendMessage() {
         followsComposer = true
         nextID += 1
@@ -265,7 +286,7 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
         if let pinned = rows.firstIndex(where: \.pinsToBottomEdge) { rows[pinned].pinsToBottomEdge = false }
         var row = DemoListRow(identity: "sent-\(nextID)", title: "You", body: body, height: 100, tint: .systemIndigo, inverted: true)
         if hostProbe { row.extraAttachments = headers(group: -1, sender: "You") }
-        rows.insert(row, at: 0)
+        rows.insert(withSwipeActions(row), at: 0)
         // Keep the old bar height until the asynchronously prepared collection
         // applies, then start its shrink alongside the list's viewport track.
         waitsForSentCollection = true
@@ -281,7 +302,7 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
         let id = "stream-\(nextID)"
         var row = DemoListRow(identity: id, title: "Assistant · streaming", body: "A reply", height: hostProbe ? 420 : 84, tint: .systemTeal, inverted: true, pinsToBottomEdge: hostProbe)
         if hostProbe { row.extraAttachments = headers(group: -1, sender: "Assistant") }
-        rows.insert(row, at: 0)
+        rows.insert(withSwipeActions(row), at: 0)
         let visibleHeight = max(0, list.bounds.height - composerInset)
         let target = hostProbe ? ListScrollTarget(index: 0, resolve: { height, _ in visibleHeight + max(0, height - visibleHeight / 2) - height }) : ListScrollTarget(index: 0)
         list.applyChanges(items: rows, scrollTo: target, transition: .easeInOut(0.3))
