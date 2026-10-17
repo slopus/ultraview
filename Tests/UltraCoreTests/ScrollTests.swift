@@ -63,6 +63,22 @@ import UltraLayout
         #expect(harness.read { rows[40].shadow.isMounted } == false)
     }
 
+    @Test func automaticHostDoesNoUnboundedWorkBeforeItsViewportArrives() {
+        let rows = (0..<100).map { index in text("Row \(index)") }
+        let scroll = UltraScrollNode(children: rows)
+        let harness = Harness(root: scroll, automatic: true, width: nil, height: nil, inWindow: true)
+        harness.renderer.waitUntilIdle()
+        #expect(harness.measurer.count == 0)
+        #expect(harness.rasterizer.count == 0)
+        #expect(harness.commits.isEmpty)
+
+        harness.update { $0.width = 320; $0.height = 400 }
+        harness.renderer.waitUntilIdle()
+        #expect(harness.measurer.count > 0)
+        #expect(harness.rasterizer.count > 0)
+        #expect(harness.read { !rows[99].shadow.isMounted })
+    }
+
     @Test func contentIsLaidOutWithoutALimit() throws {
         let (root, scroll, rows) = feed()
         let harness = Harness(root: root, height: 100)

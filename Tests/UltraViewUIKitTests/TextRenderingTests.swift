@@ -6,6 +6,100 @@ import UltraView
 
 @MainActor
 @Suite struct TextMeasurementTests {
+    @Test func truncatedWidthReusePreservesExactFreshLineBreaks() async {
+        await Task.detached {
+            var content = TextContent()
+            content.spans = [TextSpan("128 · 1023")]
+            content.style = TextStyle(fontSize: 6)
+            content.numberOfLines = 1
+            let text = content.attributedText(fontScale: 1, isDark: false)
+            let measured = CoreTextMeasurer().layout(text, maxWidth: 14, scale: 3)
+            #expect(measured.isTruncated)
+            #expect(measured.fits(width: measured.size.width))
+            #expect(!measured.fits(width: 1))
+            #expect(!measured.fits(width: 20))
+            for step in 1...60 {
+                let width = CGFloat(step) / 3
+                if measured.fits(width: width) {
+                    let fresh = CoreTextMeasurer().layout(text, maxWidth: width, scale: 3)
+                    #expect(measured.size == fresh.size)
+                    #expect(measured.lines == fresh.lines)
+                    #expect(measured.links == fresh.links)
+                    #expect(measured.isTruncated == fresh.isTruncated)
+                }
+            }
+        }.value
+    }
+
+    @Test func widthReuseMatchesFreshLayoutAcrossTypographyAndTruncation() async {
+        await Task.detached {
+            let strings = ["office affinity AVATAR repeated words", "مرحبا بالعالم نص طويل للاختبار",
+                           "👨‍👩‍👧‍👦 café e\u{301} 漢字 👋🏽 repeated", "first line\nsecond paragraph continues"]
+            for string in strings {
+                for alignment: TextAlign in [.left, .center, .right, .auto, .justify] {
+                    for mode: EllipsizeMode in [.head, .middle, .tail, .clip] {
+                        for lineCount in [1, 2] {
+                            var content = TextContent()
+                            content.spans = [TextSpan(string)]
+                            content.style = TextStyle(fontSize: 13, letterSpacing: 0.4, textAlign: alignment)
+                            content.numberOfLines = lineCount
+                            content.ellipsizeMode = mode
+                            let text = content.attributedText(fontScale: 1, isDark: false)
+                            let measured = CoreTextMeasurer().layout(text, maxWidth: 74, scale: 3)
+                            for width: CGFloat in [1, 8, 25, measured.size.width, 73, 73.5, 74, 74.5, 75, 90, 180] {
+                                guard measured.fits(width: width) else { continue }
+                                let fresh = CoreTextMeasurer().layout(text, maxWidth: width, scale: 3)
+                                #expect(measured.size == fresh.size)
+                                #expect(measured.lines == fresh.lines)
+                                #expect(measured.alignment == fresh.alignment)
+                                #expect(measured.links == fresh.links)
+                                #expect(measured.isTruncated == fresh.isTruncated)
+                                #expect(measured.didWrap == fresh.didWrap)
+                                for index in measured.lines.indices {
+                                    #expect(measured.originX(ofLine: index, inWidth: width) == fresh.originX(ofLine: index, inWidth: width))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }.value
+    }
+
+    @Test func changedTextPreparedInParallelMatchesFreshLayoutsAfterResizing() async throws {
+        let texts = (0..<48).map { index in
+            UltraTextNode("initial \(index)", textStyle: TextStyle(fontSize: 14), numberOfLines: index % 3 + 1,
+                          ellipsizeMode: [.head, .middle, .tail][index % 3])
+        }
+        let root = UltraNode(style: styled { $0.alignItems = .flexStart }, children: texts)
+        let hosted = Hosted(root, size: CGSize(width: 180, height: 5000))
+        await hosted.settle()
+        for round in 0..<3 {
+            for (index, node) in texts.enumerated() {
+                node.text = "round \(round) node \(index): wrapping and truncation with changed text"
+                node.textStyle.fontSize = CGFloat(12 + round * 3)
+            }
+            hosted.host.frame.size.width = CGFloat(100 + round * 45)
+            hosted.host.layoutIfNeeded()
+            await hosted.settle()
+            let layouts = Pipeline.layoutQueue.sync { texts.compactMap(\.currentTextLayout) }
+            #expect(layouts.count == texts.count)
+            let scale = hosted.scale
+            let fresh = await Task.detached {
+                layouts.map { CoreTextMeasurer().layout($0.text, maxWidth: $0.maxWidth, scale: scale) }
+            }.value
+            for (index, pair) in zip(layouts, fresh).enumerated() {
+                #expect(pair.0.text.string == texts[index].text)
+                #expect(pair.0.size == pair.1.size)
+                #expect(pair.0.lines == pair.1.lines)
+                #expect(pair.0.isTruncated == pair.1.isTruncated)
+                #expect(pair.0.links == pair.1.links)
+                #expect(texts[index].view?.accessibilityLabel == texts[index].text)
+                #expect(texts[index].view?.layer.contents != nil)
+            }
+        }
+    }
+
     struct Case: Sendable, CustomTestStringConvertible {
         var text: String
         var fontSize: CGFloat

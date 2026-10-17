@@ -42,6 +42,9 @@ final class Shadow {
     var textLayouts: [TextLayout] = []
     /// The layout for the current frame.
     var textLayout: TextLayout?
+    /// The last constraint supplied by the flex layout measure callback.
+    var textMeasureWidth: CGFloat?
+    var hasTextMeasureWidth = false
 
     // MARK: Scrolling
 

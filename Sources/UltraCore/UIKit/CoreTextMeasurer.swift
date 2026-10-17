@@ -15,12 +15,17 @@ public struct CoreTextMeasurer: TextMeasurer {
     public init() {}
 
     public func layout(_ text: AttributedText, maxWidth: CGFloat?, scale: CGFloat) -> TextLayout {
+        layout(text, maxWidth: maxWidth, scale: scale, reusing: nil)
+    }
+
+    func layout(_ text: AttributedText, maxWidth: CGFloat?, scale: CGFloat, reusing previous: TextLayout?) -> TextLayout {
         let length = text.length
         guard length > 0 else {
             return TextLayout(text: text, maxWidth: maxWidth, size: .zero, lines: [], alignment: .left, isTruncated: false, didWrap: false)
         }
-        let attributed = Self.attributedString(for: text)
-        let typesetter = CTTypesetterCreateWithAttributedString(attributed)
+        let source = (previous?.storage as? CoreTextLines)?.source ?? CoreTextSource(text)
+        let attributed = source.attributed
+        let typesetter = source.typesetter
         let units = Array(text.string.utf16)
         let limit = maxWidth ?? 1_000_000
         let paragraph = text.paragraph
@@ -32,7 +37,8 @@ public struct CoreTextMeasurer: TextMeasurer {
         var endsParagraph: [Bool] = []
         var start = 0
         var didWrap = false
-        while start < length, ctLines.count < maxLines {
+        var widthCompatibility: TailWidthCompatibility?
+        while start < length, ranges.count < maxLines {
             var count = CTTypesetterSuggestLineBreak(typesetter, start, Double(limit))
             if count <= 0 {
                 count = length - start
@@ -42,7 +48,11 @@ public struct CoreTextMeasurer: TextMeasurer {
             if !hardBreak {
                 didWrap = true
             }
-            ctLines.append(CTTypesetterCreateLine(typesetter, CFRange(location: start, length: count)))
+            // A truncated last line is built below. Do not shape a wrapped
+            // line only to throw it away immediately afterward.
+            if end == length || ranges.count + 1 < maxLines {
+                ctLines.append(CTTypesetterCreateLine(typesetter, CFRange(location: start, length: count)))
+            }
             ranges.append(start..<end)
             endsParagraph.append(hardBreak)
             start = end
@@ -55,43 +65,56 @@ public struct CoreTextMeasurer: TextMeasurer {
             while paragraphEnd < length, !Self.isLineBreak(units[paragraphEnd]) {
                 paragraphEnd += 1
             }
-            let source = NSMutableAttributedString(
-                attributedString: (attributed as NSAttributedString).attributedSubstring(
-                    from: NSRange(location: lastRange.lowerBound, length: paragraphEnd - lastRange.lowerBound)
-                )
-            )
             let styleIndex = max(lastRange.lowerBound, min(paragraphEnd, length) - 1)
             let style = text.run(at: styleIndex)?.style ?? text.runs[0].style
             if paragraph.ellipsizeMode == .clip {
-                ctLines[ctLines.count - 1] = CTLineCreateWithAttributedString(source)
+                ctLines.append(CTTypesetterCreateLine(typesetter, CFRange(location: lastRange.lowerBound, length: paragraphEnd - lastRange.lowerBound)))
             } else {
-                let ellipsis = NSAttributedString(string: "\u{2026}", attributes: Self.attributes(for: style))
-                let token = CTLineCreateWithAttributedString(ellipsis)
+                let token = TruncationTokens.shared.token(for: style)
+                let full: CTLine
+                var prefixEnd: Int?
                 if paragraph.ellipsizeMode == .tail {
                     // Like a label: the words that fit beside the ellipsis,
                     // broken where a line would break, then the ellipsis.
                     // Only a word too long for the line is cut mid-word.
                     let start = lastRange.lowerBound
-                    let room = limit - CGFloat(CTLineGetTypographicBounds(token, nil, nil, nil))
+                    let room = limit - token.width
                     var end = start + max(0, CTTypesetterSuggestLineBreak(typesetter, start, Double(max(0, room))))
                     end = min(end, paragraphEnd)
                     while end > start, Self.isWhitespace(units[end - 1]) {
                         end -= 1
                     }
                     if end > start {
-                        source.deleteCharacters(in: NSRange(location: end - start, length: source.length - (end - start)))
-                        source.append(ellipsis)
+                        prefixEnd = end
+                        let prefix = (attributed as NSAttributedString).attributedSubstring(from: NSRange(location: start, length: end - start))
+                        let source = NSMutableAttributedString(attributedString: prefix)
+                        source.append(token.attributed)
+                        full = CTLineCreateWithAttributedString(source)
                     } else if paragraphEnd < length {
-                        source.append(ellipsis)
+                        let source = NSMutableAttributedString(attributedString: (attributed as NSAttributedString).attributedSubstring(from: NSRange(location: start, length: paragraphEnd - start)))
+                        source.append(token.attributed)
+                        full = CTLineCreateWithAttributedString(source)
+                    } else {
+                        full = CTTypesetterCreateLine(typesetter, CFRange(location: start, length: paragraphEnd - start))
                     }
+                } else {
+                    full = CTTypesetterCreateLine(typesetter, CFRange(location: lastRange.lowerBound, length: paragraphEnd - lastRange.lowerBound))
                 }
-                let full = CTLineCreateWithAttributedString(source)
                 let type: CTLineTruncationType = switch paragraph.ellipsizeMode {
                 case .head: .start
                 case .middle: .middle
                 default: .end
                 }
-                ctLines[ctLines.count - 1] = CTLineCreateTruncatedLine(full, Double(limit), type, token) ?? full
+                let fullWidth = CGFloat(CTLineGetTypographicBounds(full, nil, nil, nil))
+                if fullWidth <= limit {
+                    ctLines.append(full)
+                    if maxLines == 1, let prefixEnd {
+                        widthCompatibility = TailWidthCompatibility(units: units, originalCount: lastRange.count,
+                            prefixEnd: prefixEnd, paragraphEnd: paragraphEnd, tokenWidth: token.width, drawnWidth: fullWidth)
+                    }
+                } else {
+                    ctLines.append(CTLineCreateTruncatedLine(full, Double(limit), type, token.line) ?? full)
+                }
             }
             endsParagraph[endsParagraph.count - 1] = true
         }
@@ -164,11 +187,11 @@ public struct CoreTextMeasurer: TextMeasurer {
             isTruncated: isTruncated,
             didWrap: didWrap,
             links: links,
-            storage: CoreTextLines(ctLines)
+            storage: CoreTextLines(ctLines, source: source, widthCompatibility: widthCompatibility)
         )
     }
 
-    private static func isWhitespace(_ unit: UInt16) -> Bool {
+    fileprivate static func isWhitespace(_ unit: UInt16) -> Bool {
         unit == 0x20 || unit == 0x09 || unit == 0xA0 || isLineBreak(unit)
     }
 
@@ -222,13 +245,86 @@ public struct CoreTextMeasurer: TextMeasurer {
 }
 
 /// The Core Text lines of one layout.
-final class CoreTextLines: @unchecked Sendable {
+final class CoreTextLines: TextLayoutWidthCompatibility, @unchecked Sendable {
     // @unchecked Sendable: never changed after `init`. Core Text lines are
     // immutable and may be read and drawn from any thread.
     let lines: [CTLine]
+    let source: CoreTextSource
+    private let widthCompatibility: TailWidthCompatibility?
 
-    init(_ lines: [CTLine]) {
+    fileprivate init(_ lines: [CTLine], source: CoreTextSource, widthCompatibility: TailWidthCompatibility?) {
         self.lines = lines
+        self.source = source
+        self.widthCompatibility = widthCompatibility
+    }
+
+    func fits(width: CGFloat) -> Bool {
+        widthCompatibility?.fits(width: width, typesetter: source.typesetter) ?? false
+    }
+}
+
+/// Reusing a truncated line is safe only if both the original line break
+/// and the prefix beside its ellipsis stay exactly the same.
+private struct TailWidthCompatibility {
+    let units: [UInt16]
+    let originalCount: Int
+    let prefixEnd: Int
+    let paragraphEnd: Int
+    let tokenWidth: CGFloat
+    let drawnWidth: CGFloat
+
+    func fits(width: CGFloat, typesetter: CTTypesetter) -> Bool {
+        guard width >= drawnWidth else { return false }
+        let count = CTTypesetterSuggestLineBreak(typesetter, 0, Double(width))
+        guard (count > 0 ? count : units.count) == originalCount else { return false }
+        var end = min(paragraphEnd, max(0, CTTypesetterSuggestLineBreak(typesetter, 0, Double(max(0, width - tokenWidth)))))
+        while end > 0, CoreTextMeasurer.isWhitespace(units[end - 1]) { end -= 1 }
+        return end == prefixEnd
+    }
+}
+
+/// Immutable text preparation shared by measurements at different widths.
+final class CoreTextSource: @unchecked Sendable {
+    // @unchecked Sendable: these immutable Core Text values are created and
+    // measured by one worker; completed lines may subsequently be drawn elsewhere.
+    let attributed: CFAttributedString
+    let typesetter: CTTypesetter
+
+    init(_ text: AttributedText) {
+        attributed = CoreTextMeasurer.attributedString(for: text)
+        typesetter = CTTypesetterCreateWithAttributedString(attributed)
+    }
+}
+
+/// The ellipsis depends on typography, not the paragraph's changing string.
+private final class TruncationTokens: Sendable {
+    static let shared = TruncationTokens()
+
+    final class Token: @unchecked Sendable {
+        // @unchecked Sendable: the attributed string and Core Text line are
+        // immutable after initialization and can be read by multiple workers.
+        let attributed: NSAttributedString
+        let line: CTLine
+        let width: CGFloat
+
+        init(style: ResolvedTextStyle) {
+            attributed = NSAttributedString(string: "\u{2026}", attributes: CoreTextMeasurer.attributes(for: style))
+            line = CTLineCreateWithAttributedString(attributed)
+            width = CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil))
+        }
+    }
+
+    private let values = Mutex<[ResolvedTextStyle: Token]>([:])
+
+    func token(for style: ResolvedTextStyle) -> Token {
+        if let cached = values.withLock({ $0[style] }) { return cached }
+        let token = Token(style: style)
+        return values.withLock { values in
+            if let cached = values[style] { return cached }
+            if values.count >= 128 { values.removeAll(keepingCapacity: true) }
+            values[style] = token
+            return token
+        }
     }
 }
 

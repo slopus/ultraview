@@ -11,7 +11,11 @@ final class NodeView: UIView {
 
     /// The properties last applied, for hit testing and presses.
     var props: ViewProps? {
-        didSet { updatePressedAppearance() }
+        didSet {
+            if oldValue?.opacity != props?.opacity || oldValue?.pressedOpacity != props?.pressedOpacity {
+                updatePressedAppearance()
+            }
+        }
     }
 
     private enum Target: Equatable {

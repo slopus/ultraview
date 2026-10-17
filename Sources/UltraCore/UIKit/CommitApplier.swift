@@ -135,29 +135,27 @@ extension UltraNode {
 @MainActor
 enum ViewPropsApplier {
     static func apply(_ props: ViewProps, previous: ViewProps?, to view: UIView) {
-        func changed<Value: Equatable>(_ keyPath: KeyPath<ViewProps, Value>) -> Bool {
-            previous.map { $0[keyPath: keyPath] != props[keyPath: keyPath] } ?? true
-        }
+        let initial = previous == nil
         let layer = view.layer
 
-        if changed(\.backgroundColor) {
+        if initial || previous?.backgroundColor != props.backgroundColor {
             layer.backgroundColor = props.backgroundColor?.cgColor
         }
-        if changed(\.cornerRadius) || changed(\.maskedCorners) {
+        if initial || previous?.cornerRadius != props.cornerRadius || previous?.maskedCorners != props.maskedCorners {
             layer.cornerRadius = props.cornerRadius
             layer.maskedCorners = props.maskedCorners.layerCorners
         }
-        if changed(\.borderWidth) || changed(\.borderColor) {
+        if initial || previous?.borderWidth != props.borderWidth || previous?.borderColor != props.borderColor {
             layer.borderWidth = props.borderWidth
             layer.borderColor = props.borderColor?.cgColor
         }
-        if changed(\.transform) {
+        if initial || previous?.transform != props.transform {
             layer.transform = props.transform.caTransform
         }
-        if changed(\.clipsToBounds) {
+        if initial || previous?.clipsToBounds != props.clipsToBounds {
             view.clipsToBounds = props.clipsToBounds
         }
-        if changed(\.shadow) {
+        if initial || previous?.shadow != props.shadow {
             if let shadow = props.shadow {
                 layer.shadowColor = shadow.color.cgColor
                 layer.shadowOpacity = Float(shadow.opacity)
@@ -172,15 +170,24 @@ enum ViewPropsApplier {
                 layer.shadowPath = nil
             }
         }
-        if changed(\.isHidden) {
+        if initial || previous?.isHidden != props.isHidden {
             view.isHidden = props.isHidden
         }
-        if changed(\.accessibility) {
-            let accessibility = props.accessibility
+        let accessibility = props.accessibility
+        let oldAccessibility = previous?.accessibility
+        if initial || oldAccessibility?.isElement != accessibility.isElement {
             view.isAccessibilityElement = accessibility.isElement
+        }
+        if initial || oldAccessibility?.label != accessibility.label {
             view.accessibilityLabel = accessibility.label
+        }
+        if initial || oldAccessibility?.hint != accessibility.hint {
             view.accessibilityHint = accessibility.hint
+        }
+        if initial || oldAccessibility?.role != accessibility.role {
             view.accessibilityTraits = accessibility.role?.traits ?? []
+        }
+        if initial || oldAccessibility?.hidden != accessibility.hidden {
             view.accessibilityElementsHidden = accessibility.hidden
         }
 
@@ -190,14 +197,14 @@ enum ViewPropsApplier {
             nodeView.props = props
         case let scrollView as ScrollNodeView:
             scrollView.props = props
-            if changed(\.opacity) {
+            if initial || previous?.opacity != props.opacity {
                 view.alpha = props.opacity
             }
-            if let scroll = props.scroll, changed(\.scroll) {
+            if let scroll = props.scroll, initial || previous?.scroll != props.scroll {
                 scrollView.configure(scroll)
             }
         default:
-            if changed(\.opacity) {
+            if initial || previous?.opacity != props.opacity {
                 view.alpha = props.opacity
             }
         }

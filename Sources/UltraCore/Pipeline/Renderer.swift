@@ -167,6 +167,9 @@ final class Renderer: @unchecked Sendable {
         passCount.add(1, ordering: .relaxed)
 
         let inputs = self.inputs.withLock { $0 }
+        // A host supplies both dimensions before its first useful pass. In
+        // particular, entering a window must not draw an unbounded scroll tree.
+        guard !automatic || (inputs.width != nil && inputs.height != nil) else { return }
         let previous = lastInputs
         lastInputs = inputs
         environment = inputs.environment
@@ -179,6 +182,9 @@ final class Renderer: @unchecked Sendable {
             environmentChanged: environmentChanged,
             config: LayoutConfig.shared(pointScaleFactor: inputs.environment.scale)
         )
+        #if canImport(UIKit)
+        pass.measuresTextInParallel = measurer is CoreTextMeasurer
+        #endif
 
         // 1. Sync.
         if firstPass {
@@ -190,6 +196,7 @@ final class Renderer: @unchecked Sendable {
         }
 
         // 2. Layout.
+        prepareText(pass)
         root.shadow.layout.calculateLayout(
             width: inputs.width,
             height: inputs.height,
@@ -243,7 +250,9 @@ final class Renderer: @unchecked Sendable {
             let previous = shadow.snapshot
             shadow.snapshot = current
             shadow.renderer = self
-            shadow.layout.config = pass.config
+            if forced {
+                shadow.layout.config = pass.config
+            }
             shadow.layout.style = layoutStyle(for: node, state: current, inputs: pass.inputs)
             node.syncContent(previous: previous, current: current, pass: pass)
             if forced || previous == nil || !Self.sameNodes(previous!.children, current.children) {
@@ -470,7 +479,8 @@ final class Renderer: @unchecked Sendable {
         node.updateContentForFrame(pass: pass)
         guard shadow.isMounted else { return }
 
-        let props = makeProps(for: node, state: state, pass: pass)
+        let box = boxStyle(for: node, state: state, pass: pass)
+        let props = makeProps(for: node, state: state, box: box, pass: pass)
         let frame = shadow.frame
         let isMounting = pass.commit.entry(for: node)?.kind == .mount
         if isMounting {
@@ -492,7 +502,7 @@ final class Renderer: @unchecked Sendable {
         shadow.sentFrame = frame
 
         guard shadow.interfaceState.contains(.display) else { return }
-        let input = drawingInput(for: node, state: state, pass: pass)
+        let input = drawingInput(for: node, state: state, box: box, pass: pass)
         if input?.key != shadow.drawnKey {
             if let input {
                 pass.drawJobs.append(DrawJob(
@@ -524,10 +534,9 @@ final class Renderer: @unchecked Sendable {
         )
     }
 
-    private func makeProps(for node: UltraNode, state: NodeState, pass: Pass) -> ViewProps {
+    private func makeProps(for node: UltraNode, state: NodeState, box: BoxStyle, pass: Pass) -> ViewProps {
         let style = state.style
         let size = node.shadow.frame.size
-        let box = boxStyle(for: node, state: state, pass: pass)
         var props = ViewProps()
         if box.isLayerRepresentable {
             props.backgroundColor = box.background
@@ -568,10 +577,9 @@ final class Renderer: @unchecked Sendable {
         return props
     }
 
-    private func drawingInput(for node: UltraNode, state: NodeState, pass: Pass) -> (drawing: any Drawing, key: DrawingKey)? {
+    private func drawingInput(for node: UltraNode, state: NodeState, box: BoxStyle, pass: Pass) -> (drawing: any Drawing, key: DrawingKey)? {
         let size = node.shadow.frame.size
         guard size.width > 0, size.height > 0 else { return nil }
-        let box = boxStyle(for: node, state: state, pass: pass)
         let drawnBox = box.isLayerRepresentable || box.isEmpty ? nil : box
         let content = node.contentDrawing(state: state)
         guard drawnBox != nil || content != nil else { return nil }
@@ -583,8 +591,25 @@ final class Renderer: @unchecked Sendable {
 
     // MARK: 6. Bitmaps
 
-    private final class Results: Sendable {
-        let contents = Mutex<[Int: Contents]>([:])
+    private func prepareText(_ pass: Pass) {
+        #if canImport(UIKit)
+        guard let measurer = measurer as? CoreTextMeasurer, !pass.textPreparations.isEmpty else { return }
+        let scale = pass.environment.scale
+        let layouts = parallelWork(pass.textPreparations) { preparation -> [TextLayout] in
+            Diagnostics.shared.recordMeasurement()
+            let measured = measurer.layout(preparation.text, maxWidth: preparation.width, scale: scale)
+            // Text nodes often shrink to the measured glyph width. Prepare
+            // that drawing width too, using the same attributed text/typesetter.
+            if measured.size.width > 0, !measured.fits(width: measured.size.width) {
+                Diagnostics.shared.recordMeasurement()
+                return [measurer.layout(preparation.text, maxWidth: measured.size.width, scale: scale, reusing: measured), measured]
+            }
+            return [measured]
+        }
+        for (preparation, layouts) in zip(pass.textPreparations, layouts) {
+            preparation.node.shadow.textLayouts = layouts
+        }
+        #endif
     }
 
     /// Draws every job concurrently on the display queue and waits for all
@@ -592,26 +617,17 @@ final class Renderer: @unchecked Sendable {
     /// change already scheduled the pass that redraws it.
     private func draw(_ pass: Pass) {
         guard !pass.drawJobs.isEmpty else { return }
-        let jobs = pass.drawJobs.enumerated().sorted { lhs, rhs in
-            lhs.element.isVisible != rhs.element.isVisible ? lhs.element.isVisible : lhs.offset < rhs.offset
-        }.map(\.element)
-        let results = Results()
-        let group = DispatchGroup()
+        let jobs = pass.drawJobs.filter(\.isVisible) + pass.drawJobs.filter { !$0.isVisible }
         let rasterizer = self.rasterizer
         let scale = pass.environment.scale
-        for (index, job) in jobs.enumerated() {
-            Pipeline.displayQueue.async(group: group) {
-                let isCancelled = { job.node.displaySentinel.load(ordering: .relaxed) != job.sentinel }
-                guard !isCancelled() else { return }
-                Diagnostics.shared.recordDraw()
-                guard let contents = rasterizer.rasterize(job.drawing, size: job.key.size, scale: scale, isCancelled: isCancelled),
-                      !isCancelled() else { return }
-                results.contents.withLock { $0[index] = contents }
-            }
+        let finished = parallelWork(jobs) { job -> Contents? in
+            let isCancelled = { job.node.displaySentinel.load(ordering: .relaxed) != job.sentinel }
+            guard !isCancelled() else { return nil }
+            Diagnostics.shared.recordDraw()
+            guard let contents = rasterizer.rasterize(job.drawing, size: job.key.size, scale: scale, isCancelled: isCancelled),
+                  !isCancelled() else { return nil }
+            return contents
         }
-        group.wait()
-
-        let finished = results.contents.withLock { $0 }
         for (index, job) in jobs.enumerated() {
             let shadow = job.node.shadow
             guard let contents = finished[index],
@@ -633,6 +649,8 @@ final class Pass {
     let environmentChanged: Bool
     let config: LayoutConfig
     var commit: Commit
+    var measuresTextInParallel = false
+    var textPreparations: [TextPreparation] = []
 
     /// Nodes attached in this pass whose parents were already attached.
     var attached: [UltraNode] = []
@@ -681,4 +699,10 @@ struct DrawJob: Sendable {
     /// The node's display sentinel when the job was made.
     let sentinel: UInt64
     let isVisible: Bool
+}
+
+struct TextPreparation: Sendable {
+    let node: UltraTextNode
+    let text: AttributedText
+    let width: CGFloat?
 }

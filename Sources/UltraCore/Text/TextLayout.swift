@@ -100,6 +100,10 @@ public struct TextLayout: Sendable {
         if width == maxWidth {
             return true
         }
+        if isTruncated, let width, let compatibility = storage as? any TextLayoutWidthCompatibility,
+           compatibility.fits(width: width) {
+            return true
+        }
         guard !isTruncated, !lines.contains(where: \.isJustified) else { return false }
         guard let width else {
             return !didWrap
@@ -138,7 +142,13 @@ public struct TextLayout: Sendable {
     }
 }
 
-/// Lays out text. Called on the layout queue only.
+/// A platform measurer can certify an otherwise conservative width-cache miss.
+protocol TextLayoutWidthCompatibility: Sendable {
+    func fits(width: CGFloat) -> Bool
+}
+
+/// Lays out text. Custom measurers are called on the layout queue; the
+/// built-in platform measurer may also prepare independent nodes on workers.
 public protocol TextMeasurer: Sendable {
     func layout(_ text: AttributedText, maxWidth: CGFloat?, scale: CGFloat) -> TextLayout
 }

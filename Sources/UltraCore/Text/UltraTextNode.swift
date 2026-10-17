@@ -137,6 +137,12 @@ public final class UltraTextNode: UltraNode, @unchecked Sendable {
             fontScale: pass.environment.fontScale,
             isDark: pass.environment.isDark
         )
+        #if canImport(UIKit)
+        if pass.measuresTextInParallel, !shadow.textLayouts.isEmpty, let text = shadow.attributedText {
+            let width = shadow.hasTextMeasureWidth ? shadow.textMeasureWidth : shadow.textLayout?.maxWidth
+            pass.textPreparations.append(TextPreparation(node: self, text: text, width: width))
+        }
+        #endif
         shadow.textLayouts = []
         shadow.textLayout = nil
         shadow.layout.markDirty()
@@ -145,6 +151,8 @@ public final class UltraTextNode: UltraNode, @unchecked Sendable {
     /// Yoga's measure function. Runs inside the pass's layout computation.
     private func measure(width: CGFloat, widthMode: MeasureMode, height: CGFloat, heightMode: MeasureMode) -> CGSize {
         let limit: CGFloat? = widthMode == .undefined || width.isNaN ? nil : width
+        shadow.textMeasureWidth = limit
+        shadow.hasTextMeasureWidth = true
         var size = textLayout(fitting: limit).size
         switch widthMode {
         case .exactly: size.width = width
@@ -167,7 +175,16 @@ public final class UltraTextNode: UltraNode, @unchecked Sendable {
         let renderer = shadow.renderer
         let measurer: any TextMeasurer = renderer?.measurer ?? ApproximateTextMeasurer()
         Diagnostics.shared.recordMeasurement()
-        let layout = measurer.layout(text, maxWidth: width, scale: renderer?.environment.scale ?? 1)
+        let layout: TextLayout
+        #if canImport(UIKit)
+        if let measurer = measurer as? CoreTextMeasurer {
+            layout = measurer.layout(text, maxWidth: width, scale: renderer?.environment.scale ?? 1, reusing: shadow.textLayouts.first)
+        } else {
+            layout = measurer.layout(text, maxWidth: width, scale: renderer?.environment.scale ?? 1)
+        }
+        #else
+        layout = measurer.layout(text, maxWidth: width, scale: renderer?.environment.scale ?? 1)
+        #endif
         shadow.textLayouts.insert(layout, at: 0)
         if shadow.textLayouts.count > 4 {
             shadow.textLayouts.removeLast()
