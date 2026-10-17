@@ -604,6 +604,15 @@ timing through a later move pass requires; the Swift does not do this yet
 - `single_layer_opens`: folding the lower row's remaining growth delta into
   the move's one track, while the height keeps its timing, overlaps the rows
   by 12.5 points at 1 s.
+- `follower_exact`: a follower copying a height track's start and transition,
+  from `src - dst` to 0, equals the height's remaining change at every time.
+- `prefix_seam`, `prefix_touch`: rows that follow every height above them
+  and none above the anchor (coefficient `[s < i] - [s < anchor]` for source
+  `s` on row `i`), with their own moves on top, are apart by the upper row's
+  presented height plus the difference of their moves, whatever each
+  height's timing: adjacent rows with equal moves touch at every frame.
+  `prefix_anchor`: the anchor moves only by its own move. `prefix_rest`: at
+  rest every row is at its settled place plus its move.
 
 ## Pending scroll targets and readiness holds
 

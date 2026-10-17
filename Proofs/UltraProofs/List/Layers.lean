@@ -21,6 +21,18 @@ layer animations are.
 * `single_layer_opens`: folding the lower row's remaining growth delta into
   the move's single track, while the height keeps the growth's timing,
   opens a 12.5-point overlap at 1 s that closes when both settle.
+* `follower_exact`: a follower layer that copies a height track's start and
+  transition, from `src - dst` to 0, is the height's remaining change at
+  every time.
+* `prefix_seam`, `prefix_anchor`, `prefix_rest`: rows of a linked window,
+  each following every height above it and none above the anchor (the
+  coefficient of source `s` on row `i` is `[s < i] - [s < anchor]`), with
+  their own move layers on top: the gap between rows `i` and `i + 1` is row
+  `i`'s presented height plus the difference of their moves, whatever each
+  height's timing; the anchor row moves only by its own move; at rest each
+  row is at its settled `y` plus its move. So rows touch at every frame
+  exactly when adjacent moves agree, however many heights animate on
+  however many timings.
 -/
 
 namespace UltraProofs.ListLayers
@@ -112,5 +124,56 @@ and once both settle, but at 1 s the lower row overlaps the upper one by
 theorem single_layer_opens :
     singleGap moveAt = 0 ∧ singleGap 1 = -25 / 2 ∧ singleGap (3 / 2) = 0 := by
   decide +kernel
+
+/-! ## Followers of every height above -/
+
+/-- **A follower copying a height's timing is its remaining change.** -/
+theorem follower_exact (C : Curves) (h : Track) (g : Nat) (time : Rat) :
+    (⟨g, h.src - h.dst, 0, h.start, h.transition⟩ : Track).value C time = h.value C time - h.dst := by
+  rw [lerp C, lerp C h, progress_timing C (a := ⟨g, h.src - h.dst, 0, h.start, h.transition⟩) (b := h) rfl rfl time]
+  grind
+
+/-- `Σ_{s < n} f s`. -/
+def pre (f : Nat → Rat) (n : Nat) : Rat := ((List.range n).map f).sum
+
+theorem pre_succ (f : Nat → Rat) (n : Nat) : pre f (n + 1) = pre f n + f n := by
+  simp [pre, List.range_succ, List.map_append, List.sum_append, Rat.add_zero]
+
+/-- Row `i`'s presented top: its settled `y` in a window linked from `Y`
+with settled heights `dst`, plus the followers of the heights above it less
+those above the anchor `a` (each `h s - dst s`, the height's remaining
+change), plus its own move `m i`. -/
+def top (Y : Rat) (dst h m : Nat → Rat) (a i : Nat) : Rat :=
+  (Y + pre dst i) + (pre (fun s => h s - dst s) i - pre (fun s => h s - dst s) a) + m i
+
+/-- **Row `i + 1` starts where row `i` ends, up to their moves**, whatever
+the presented heights `h` are, so whatever their timings. -/
+theorem prefix_seam (Y : Rat) (dst h m : Nat → Rat) (a i : Nat) :
+    top Y dst h m a (i + 1) - top Y dst h m a i = h i + (m (i + 1) - m i) := by
+  simp only [top, pre_succ]; grind
+
+/-- **The anchor moves only by its own move.** -/
+theorem prefix_anchor (Y : Rat) (dst h m : Nat → Rat) (a : Nat) :
+    top Y dst h m a a = Y + pre dst a + m a := by
+  simp only [top]; grind
+
+/-- **At rest every row is at its settled place plus its move.** -/
+theorem prefix_rest (Y : Rat) (dst m : Nat → Rat) (a i : Nat) :
+    top Y dst dst m a i = Y + pre dst i + m i := by
+  have z : ∀ n, pre (fun s => dst s - dst s) n = 0 := by
+    intro n; induction n with
+    | zero => rfl
+    | succ n ih => rw [pre_succ, ih]; grind
+  simp only [top, z]; grind
+
+/-- **Touching at every frame**: with every height on its own track and its
+followers copying it, adjacent rows with equal moves touch at every time. -/
+theorem prefix_touch (C : Curves) (Y : Rat) (hs : Nat → Track) (m : Nat → Rat → Rat) (a i : Nat)
+    (hm : ∀ t, m (i + 1) t = m i t) (time : Rat) :
+    top Y (fun s => (hs s).dst) (fun s => (hs s).value C time) (fun j => m j time) a (i + 1) =
+      top Y (fun s => (hs s).dst) (fun s => (hs s).value C time) (fun j => m j time) a i +
+        (hs i).value C time := by
+  have := prefix_seam Y (fun s => (hs s).dst) (fun s => (hs s).value C time) (fun j => m j time) a i
+  rw [hm time] at this; grind
 
 end UltraProofs.ListLayers

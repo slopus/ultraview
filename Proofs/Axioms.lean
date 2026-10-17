@@ -209,3 +209,8 @@ open UltraProofs
 #print axioms ListContent.retime_keeps
 #print axioms ListContent.retimes_keep
 #print axioms ListContent.alone_drifts
+#print axioms ListLayers.follower_exact
+#print axioms ListLayers.prefix_seam
+#print axioms ListLayers.prefix_anchor
+#print axioms ListLayers.prefix_rest
+#print axioms ListLayers.prefix_touch
