@@ -14,9 +14,13 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
     private var pendingComposerHeight: CGFloat?
     private var keyboardProbe: ListKeyboardGeometryProbe?
     private var keyboardTransition: ListTransition?
+    private var gestureKeyboardTransition: ListTransition?
     private var keyboardHeight = 0.0
     private var followsComposer = true
     private var gestureKeyboardTop = 0.0
+    private var keyboardGesture = KeyboardInsetGesture()
+    private var keyboardDragHasEnded = false
+    private var isTrackingKeyboard: Bool { keyboardGesture.isTracking || (list.isTracking && !keyboardDragHasEnded) }
     private var rows: [DemoListRow] = []
     private var swipeProbe: ListSwipeProbe?
     private var nextID = 100
@@ -79,18 +83,23 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
         }
         let initialIndex = UserDefaults.standard.integer(forKey: "listInitialRow")
         list.applyChanges(items: rows, scrollTo: initialIndex > 0 ? .init(index: initialIndex) : nil)
+        list.onScrollInput = { [weak self] event in
+            if event.phase == .touchDown { self?.keyboardDragHasEnded = false }
+        }
         list.willBeginDragging = { [weak self] in
             guard let self else { return }
             gestureKeyboardTop = view.keyboardLayoutGuide.layoutFrame.minY
+            keyboardDragBegan(height: view.bounds.maxY - gestureKeyboardTop)
             followsComposer = true
         }
         list.onUserScrollDelta = { [weak self] _, _ in
-            guard let self, list.isTracking else { return }
+            guard let self, isTrackingKeyboard else { return }
             if abs(view.keyboardLayoutGuide.layoutFrame.minY - gestureKeyboardTop) > 1 { followsComposer = false }
         }
         list.didEndDragging = { [weak self] in
             guard let self else { return }
             followsComposer = abs(view.keyboardLayoutGuide.layoutFrame.minY - gestureKeyboardTop) <= 1
+            keyboardDragEnded(height: view.bounds.maxY - view.keyboardLayoutGuide.layoutFrame.minY)
         }
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardWillChange(_:)), name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
         if UserDefaults.standard.bool(forKey: "listKeyboardGeometryProbe") || UserDefaults.standard.bool(forKey: "listComposerMetrics") {
@@ -147,46 +156,117 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
         defer { MainThreadMonitor.shared.note("composer layout \((CACurrentMediaTime() - started) * 1000) ms") }
         super.viewDidLayoutSubviews()
         updateComposerHeight()
-        if list.isTracking, abs(view.keyboardLayoutGuide.layoutFrame.minY - gestureKeyboardTop) > 1 { followsComposer = false }
+        let guideHeight = Double(view.bounds.maxY - view.keyboardLayoutGuide.layoutFrame.minY)
+        if isTrackingKeyboard, abs(view.keyboardLayoutGuide.layoutFrame.minY - gestureKeyboardTop) > 1 { followsComposer = false }
         // The guide can lay out its destination before our keyboard notification.
         // Only tracking reads it directly; notifications own animated targets.
-        let inset = list.isTracking
+        let inset = isTrackingKeyboard
             ? max(0, view.bounds.maxY - composerBar.frame.minY)
             : max(keyboardHeight, view.safeAreaInsets.bottom) + (composerHeight?.constant ?? composerBar.bounds.height) + 8
-        applyComposerInset(inset, transition: list.isTracking ? .none : keyboardTransition ?? .none)
+        if isTrackingKeyboard {
+            keyboardTrackingLayout(inset: inset, height: guideHeight, inputIsTracking: list.isTracking && list.isDragging,
+                                   animationDuration: UIView.inheritedAnimationDuration)
+        } else if keyboardGesture.awaitsOutcome {
+            _ = keyboardGuideChanged(height: guideHeight)
+        } else {
+            applyComposerInset(inset, transition: keyboardTransition ?? .none)
+        }
+    }
+    func keyboardTrackingLayout(inset: Double, height: Double, inputIsTracking: Bool, animationDuration: Double) {
+        // The guide can publish its animation destination after lift but before
+        // didEndDragging. That destination must not replace the last finger sample.
+        if animationDuration > 0 || !inputIsTracking, keyboardGesture.recognizesOutcome(height: height) {
+            if animationDuration > 0 { gestureKeyboardTransition = .keyboard(animationDuration) }
+            _ = keyboardGesture.keyboardOutcome(height: height)
+        }
+        if keyboardGesture.isTracking {
+            guard inputIsTracking else { return }
+            keyboardDragChanged(inset: inset, height: height)
+        } else { applyComposerInset(inset, transition: .none) }
     }
     private func applyComposerInset(_ inset: Double, transition: ListTransition) {
         guard abs(inset - composerInset) > 0.5 else { return }
         composerInset = inset
         let start = CACurrentMediaTime()
-        list.applyChanges(newInsets: .init(top: inset), compensatesInsetChange: !list.isTracking && followsComposer, transition: transition)
+        list.applyChanges(newInsets: .init(top: inset), compensatesInsetChange: !isTrackingKeyboard && followsComposer, transition: transition)
         keyboardProbe?.recordInsetUpdate(milliseconds: (CACurrentMediaTime() - start) * 1000)
     }
     @objc private func keyboardWillChange(_ notification: Notification) {
         let started = CACurrentMediaTime()
         defer { MainThreadMonitor.shared.note("keyboard frame handler \((CACurrentMediaTime() - started) * 1000) ms") }
         guard view.window != nil, let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
-        let local = view.convert(frame, from: nil)
-        let overlap = max(0, view.bounds.maxY - local.minY)
-        if !list.isTracking, overlap > keyboardHeight + 1 { followsComposer = true }
-        keyboardHeight = max(overlap, view.safeAreaInsets.bottom)
-        updateComposerHeight()
-        if list.isTracking {
-            keyboardTransition = ListTransition.none
-            return
-        }
         let duration = (notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double) ?? 0
         let raw = (notification.userInfo?[UIResponder.keyboardAnimationCurveUserInfoKey] as? UInt) ?? 7
+        let local = view.convert(frame, from: nil)
+        keyboardFrameChanged(height: max(0, view.bounds.maxY - local.minY), duration: duration, curve: raw)
+    }
+    func keyboardDragBegan(height: Double) {
+        keyboardDragHasEnded = false
+        gestureKeyboardTransition = nil
+        keyboardGesture.begin(inset: composerInset, height: height, restingHeight: view.safeAreaInsets.bottom)
+    }
+    func keyboardDragChanged(inset: Double, height: Double) {
+        let appliedInset = abs(inset - composerInset) > 0.5 ? inset : composerInset
+        guard keyboardGesture.track(inset: appliedInset, height: height) else { return }
+        if abs(height - keyboardHeight) > 1 { followsComposer = false }
+        applyComposerInset(inset, transition: .none)
+    }
+    func keyboardDragEnded(height: Double) {
+        keyboardDragHasEnded = true
+        if let resolution = keyboardGesture.end(height: height) {
+            resolveKeyboardGesture(resolution, transition: keyboardReturnTransition())
+        }
+    }
+    @discardableResult func keyboardGuideChanged(height: Double) -> Bool {
+        if keyboardGesture.isTracking, !keyboardGesture.recognizesOutcome(height: height) { return false }
+        if UIView.inheritedAnimationDuration > 0 { gestureKeyboardTransition = .keyboard(UIView.inheritedAnimationDuration) }
+        guard let resolution = keyboardGesture.keyboardOutcome(height: height) else { return false }
+        resolveKeyboardGesture(resolution, transition: keyboardReturnTransition())
+        return true
+    }
+    private func keyboardReturnTransition() -> ListTransition {
+        let duration = UIView.inheritedAnimationDuration
+        if duration > 0 { return .keyboard(duration) }
+        if let gestureKeyboardTransition { return gestureKeyboardTransition }
+        if let keyboardTransition, keyboardTransition.duration > 0 { return keyboardTransition }
+        return .keyboard(0.25)
+    }
+    private func resolveKeyboardGesture(_ resolution: KeyboardInsetGesture.Resolution, transition: ListTransition) {
+        gestureKeyboardTransition = nil; keyboardTransition = transition
+        switch resolution {
+        case let .returned(inset, height, _):
+            keyboardHeight = height
+            followsComposer = true
+            applyComposerInset(inset, transition: transition)
+        case let .dismissed(height):
+            keyboardHeight = height
+            followsComposer = false
+            applyComposerInset(max(keyboardHeight, view.safeAreaInsets.bottom) + (composerHeight?.constant ?? composerBar.bounds.height) + 8, transition: transition)
+        }
+    }
+    func keyboardFrameChanged(height: Double, duration: Double, curve raw: UInt) {
+        if !isTrackingKeyboard, height > keyboardHeight + 1 { followsComposer = true }
+        keyboardHeight = max(height, view.safeAreaInsets.bottom)
         let transition: ListTransition = duration > 0 ? .keyboard(duration) : .none
         keyboardTransition = transition
+        if duration > 0, keyboardGesture.isTracking { gestureKeyboardTransition = transition }
+        // A duration identifies the release animation. Tracking notifications
+        // with a zero duration do not decide whether the keyboard stays open.
+        let resolution = duration > 0 || !isTrackingKeyboard
+            ? keyboardGesture.keyboardOutcome(height: keyboardHeight) : nil
+        updateComposerHeight()
+        guard !isTrackingKeyboard else { return }
         UIView.animate(withDuration: duration, delay: 0, options: [.init(rawValue: raw << 16), .beginFromCurrentState, .allowUserInteraction]) {
+            if let resolution { self.resolveKeyboardGesture(resolution, transition: duration > 0 ? transition : self.keyboardReturnTransition()) }
             self.view.layoutIfNeeded()
-            self.applyComposerInset(self.keyboardHeight + (self.composerHeight?.constant ?? self.composerBar.bounds.height) + 8, transition: transition)
+            if !self.keyboardGesture.awaitsOutcome {
+                self.applyComposerInset(self.keyboardHeight + (self.composerHeight?.constant ?? self.composerBar.bounds.height) + 8, transition: transition)
+            }
         }
     }
     func textViewDidChange(_ textView: UITextView) {
         waitsForSentCollection = false; pendingComposerHeight = nil
-        if !list.isTracking { followsComposer = true }
+        if !isTrackingKeyboard { followsComposer = true }
         keyboardTransition = ListTransition.none
         updateComposerHeight()
         view.layoutIfNeeded()

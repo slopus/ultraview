@@ -22,6 +22,7 @@ final class ListKeyboardGeometryProbe: NSObject {
     private var releaseVelocity = 0.0, coast = 0.0
     private var insetDurations: [Double] = []
     private var keyboardSpringSamples = 0
+    private var trackingViewportAnimations = 0
     private let followsComposerMotion: () -> Bool
     private weak var handoffRow: ListRowView?
     private var handoffRowPositions: [String: Double] = [:]
@@ -53,7 +54,8 @@ final class ListKeyboardGeometryProbe: NSObject {
         report.text = " "; report.accessibilityLabel = "Keyboard geometry probe"
         report.accessibilityIdentifier = "keyboardGeometry"; report.isAccessibilityElement = true
         owner.addSubview(report)
-        list.onScrollInput = { [weak self] event in self?.input(event) }
+        let previousInput = list.onScrollInput
+        list.onScrollInput = { [weak self] event in previousInput?(event); self?.input(event) }
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardHidden), name: UIResponder.keyboardDidHideNotification, object: nil)
         MainThreadMonitor.shared.onTurn = { [weak self] turn in
             guard let self, handoffUntil > CACurrentMediaTime() - 0.05 else { return }
@@ -177,6 +179,7 @@ final class ListKeyboardGeometryProbe: NSObject {
         maximumComposerGap = max(maximumComposerGap, abs(bar.maxY + 8 - keyboardY))
         if list.isTracking {
             dragSamples += 1; dragMinimum = min(dragMinimum, keyboardY); dragMaximum = max(dragMaximum, keyboardY)
+            if list.contentView.layer.animation(forKey: "ultraview.list.viewportOffset") != nil { trackingViewportAnimations += 1 }
             if list.loadedItemViews.contains(where: { $0.layer.animation(forKey: "ultraview.list.positionY") != nil }) { rowAnimationSamples += 1 }
         } else if !list.isScrollFlightActive, let frame = list.settledFrame(at: 0), abs(frame.minY - list.viewportInsets.top) < 0.5,
                   let row = list.loadedItemView(at: 0) {
@@ -205,6 +208,15 @@ final class ListKeyboardGeometryProbe: NSObject {
             return record
         }
         let observedSeconds = handoffSamples.first.flatMap { first in handoffSamples.last.map { ($0["time"] ?? 0) - (first["time"] ?? 0) } } ?? 0
+        var rowBottoms: [String: Double] = [:]
+        var firstVisibleRow: String?
+        for (entry, row) in zip(list.settledWindow.rows, list.loadedItemViews) {
+            let layer = row.layer.presentation() ?? row.layer
+            let rect = layer.convert(layer.bounds, to: destination)
+            let identity = list.items[entry.index].identity
+            rowBottoms[identity] = rect.maxY
+            if firstVisibleRow == nil, rect.maxY > 0, rect.minY < bar.minY { firstVisibleRow = identity }
+        }
         let document: [String: Any] = [
             "samples": samples, "movingSamples": movingSamples, "dragSamples": dragSamples,
             "composerGap": maximumComposerGap, "rowGap": maximumRestingRowGap,
@@ -212,6 +224,8 @@ final class ListKeyboardGeometryProbe: NSObject {
             "rowAnimationSamples": rowAnimationSamples, "ended": ended, "cancelled": cancelled,
             "releaseVelocity": releaseVelocity, "coast": coast, "keyboardY": keyboardY,
             "flightActive": list.isScrollFlightActive,
+            "composerTop": bar.minY, "rowBottoms": rowBottoms, "firstVisibleRow": firstVisibleRow ?? "",
+            "trackingViewportAnimations": trackingViewportAnimations,
             "keyboardPasses": keyboardPasses, "viewportHeightChange": maximumViewportHeight - minimumViewportHeight,
             "stoppedReleases": 0, "keyboardSpringSamples": keyboardSpringSamples, "keyboardSpringCorrect": keyboardSpringCorrect,
             "newestSnaps": 0, "newestGap": newestGap, "followsComposer": followsComposerMotion(),

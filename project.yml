@@ -85,6 +85,13 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         PRODUCT_BUNDLE_IDENTIFIER: dev.ultraview.tests.UltraListInteractionTests
         TEST_TARGET_NAME: UltraViewDemoApp
+  UltraViewDemoTests:
+    templates: [PackageTests]
+    sources:
+      - path: Tests/UltraViewDemoTests
+    dependencies:
+      - package: UltraView
+        product: UltraViewDemo
   UltraViewPerformanceTests:
     type: bundle.ui-testing
     platform: iOS
@@ -108,6 +115,7 @@ schemes:
         UltraListTests: [test]
         UltraViewUIKitTests: [test]
         UltraListInteractionTests: [test]
+        UltraViewDemoTests: [test]
         UltraViewPerformanceTests: [test]
     run:
       config: Debug
@@ -120,6 +128,7 @@ schemes:
         - name: UltraListTests
         - name: UltraViewUIKitTests
         - name: UltraListInteractionTests
+        - name: UltraViewDemoTests
         - name: UltraViewPerformanceTests
           skipped: true
   UltraViewPerformance:
