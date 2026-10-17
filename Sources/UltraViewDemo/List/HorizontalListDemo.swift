@@ -6,10 +6,14 @@ import UltraView
 @MainActor
 func demoCardRow(identity: String, revision: UInt64 = 0, title: String, subtitle: String, tint: UIColor, selectable: Bool = false) -> NodeRow {
     let tint = Color(tint)
-    return NodeRow(identity: identity, revision: revision) {
+    // A resize stretches the rounded box with the row and crossfades the text.
+    return NodeRow(identity: identity, revision: revision, animatesContent: true) {
         let heading = UltraTextNode(title, textStyle: .init(color: .white, fontSize: 17, fontWeight: .bold), numberOfLines: 1)
+        heading.transitionKey = "title"
         let detail = UltraTextNode(subtitle, textStyle: .init(color: .white, fontSize: 13), numberOfLines: 3)
+        detail.transitionKey = "detail"
         let card = UltraNode(style: styled { $0.flex = 1; $0.padding = 12; $0.borderRadius = 16; $0.backgroundColor = tint; $0.justifyContent = .spaceBetween; $0.overflow = .hidden }, children: [heading, detail])
+        card.transitionKey = "card"
         if selectable { card.onPress = { DemoSelections.events.append(identity) } }
         return UltraNode(style: styled { $0.paddingHorizontal = 4 }, children: [card])
     }

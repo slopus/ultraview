@@ -102,14 +102,19 @@ struct DemoListRow: ListRow {
         if let row = storage.rows[revision] { return row }
         let title = title, body = body, height = height, tint = Color(tint)
         let cardColor = Palette.card, labelColor = Palette.label, secondaryColor = Palette.secondaryLabel
-        let row = NodeRow(identity: identity, revision: revision) {
+        // A resize stretches the rounded card with the row and crossfades the text.
+        let row = NodeRow(identity: identity, revision: revision, animatesContent: true) {
             let text = UltraTextNode(body, textStyle: .init(color: secondaryColor, fontSize: 14))
             text.style.flex = 1
+            text.transitionKey = "body"
+            let label = UltraTextNode(title, textStyle: .init(color: labelColor, fontSize: 15, fontWeight: .semibold), numberOfLines: 1)
+            label.transitionKey = "title"
             let heading = UltraNode(style: styled { $0.flexDirection = .row; $0.alignItems = .center; $0.gap = 8 }, children: [
                 UltraNode(style: styled { $0.width = 8; $0.height = 8; $0.borderRadius = 4; $0.backgroundColor = tint }),
-                UltraTextNode(title, textStyle: .init(color: labelColor, fontSize: 15, fontWeight: .semibold), numberOfLines: 1),
+                label,
             ])
             let card = UltraNode(style: styled { $0.flex = 1; $0.padding = 14; $0.gap = 6; $0.borderRadius = 16; $0.backgroundColor = cardColor; $0.overflow = .hidden }, children: [heading, text])
+            card.transitionKey = "card"
             return UltraNode(style: styled { $0.height = .points(height); $0.paddingHorizontal = 12; $0.paddingVertical = 4 }, children: [card])
         }
         storage.rows[revision] = row
