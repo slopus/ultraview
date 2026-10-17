@@ -225,6 +225,8 @@ open UltraProofs
 #print axioms ListContent.retime_unstarted
 #print axioms ListContent.retime_same
 #print axioms ListContent.alone_drifts
+#print axioms ListContent.axes_keep
+#print axioms ListContent.last_wins_drifts
 #print axioms ListLayers.follower_exact
 #print axioms ListLayers.prefix_seam
 #print axioms ListLayers.prefix_anchor

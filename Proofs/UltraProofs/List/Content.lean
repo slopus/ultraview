@@ -22,6 +22,9 @@ retimings.
 * `retime_unstarted`, `retime_same`: an animation added in the same
   transaction restarts from its start value, and one already on the new
   timing is unchanged, so the Swift's two special cases are this `retime`.
+* `axes_keep`: x key paths on the row's width animation and y key paths on
+  its height animation keep both insets through any interleaving.
+  `last_wins_drifts`: moving everything onto the last one added does not.
 * `alone_drifts`: retiming the row alone (an inner animation left on the
   old timing) changes the difference mid-flight.
 -/
@@ -96,6 +99,41 @@ theorem alone_drifts :
     (retime linear (1 / 2) (1 / 2) oneSecond rowH).value linear 1 -
         (retime linear (1 / 2) (1 / 2) oneSecond bubble).value linear 1 = 10 ∧
       (retime linear (1 / 2) (1 / 2) oneSecond rowH).value linear 1 - bubble.value linear 1 = 10 - 25 / 2 := by
+  decide +kernel
+
+/-! ## Width and height on their own timings
+
+A row whose width and height animate on different timings reports both.
+Moving all content onto whichever came last puts one axis off its row's
+timing; moving each axis's key paths onto its own row animation keeps both
+insets. -/
+
+inductive Axis
+  | x
+  | y
+deriving DecidableEq
+
+/-- The retimings that reach an axis: those of its own row animation. -/
+def onAxis (ax : Axis) (rs : List (Axis × Rat × Rat × Transition)) : List (Rat × Rat × Transition) :=
+  (rs.filter (·.1 = ax)).map (·.2)
+
+/-- **Each axis on its own row animation keeps both insets**, through any
+interleaving of width and height retimings. -/
+theorem axes_keep (C : Curves) (rs : List (Axis × Rat × Rat × Transition)) {ax ay bx byy : Track} {dx dy : Rat}
+    (hx : Keeps ax bx dx) (hy : Keeps ay byy dy) (time : Rat) :
+    (retimes C (onAxis .x rs) ax).value C time - (retimes C (onAxis .x rs) bx).value C time = dx ∧
+      (retimes C (onAxis .y rs) ay).value C time - (retimes C (onAxis .y rs) byy).value C time = dy :=
+  ⟨retimes_keep C _ hx time, retimes_keep C _ hy time⟩
+
+def twoSeconds : Transition := ⟨2, 0, 1⟩
+
+/-- The row's height grows 100 → 150 over a second while its width animates
+over two, both added at 0. Content moved onto the last one added (the
+width's) leaves the bubble's bottom 35 points above the row's edge at 1 s,
+not 10; on the height's timing it stays at 10. -/
+theorem last_wins_drifts :
+    rowH.value linear 1 - (retime linear 0 0 twoSeconds bubble).value linear 1 = 35 ∧
+      rowH.value linear 1 - (retime linear 0 0 oneSecond bubble).value linear 1 = 10 := by
   decide +kernel
 
 end UltraProofs.ListContent

@@ -966,7 +966,11 @@ assumes that is the value at `t0`. Not covered:
   the inset moves by that change until a pass lays the content out again;
 - a height and a width animation on different timings: each `rowDidAnimate`
   moves all content onto its own, so the last one added wins and the other
-  axis is off its row's timing;
+  axis is off its row's timing (`last_wins_drifts`: 35 points instead of 10
+  at 1 s in the sample). `axes_keep` proves the planned fix, x key paths on
+  the width animation and y key paths on the height animation, keeps both
+  insets through any interleaving. A horizontal row reports only its
+  height key, mirrored onto its width, so the cards across are unaffected;
 - springs and curves past their duration: `Track.progress` is 1 from the
   deadline on, the model's reading of `CASpringAnimation.duration`.
 
