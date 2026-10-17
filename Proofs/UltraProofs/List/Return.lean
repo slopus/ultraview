@@ -31,7 +31,9 @@ notifications and layouts do nothing.
   keyboard mid-way at release, the first layout that sees it open returns.
 * `at_most_once`: a run never shifts more often than it begins gestures
   (plus one for a gesture already running), so duplicates never return
-  twice. `begin_fresh`: a new drag replaces the whole snapshot.
+  twice. `begin_fresh`: a new drag with the keyboard shown replaces the
+  whole snapshot; `begin_closed_never`: one with it closed records none
+  and never returns.
 * `notify_keeps_latest`: notifications, layouts and the release never change
   the recorded inset, so the shift is the finger's, not the animation's.
 
@@ -65,7 +67,7 @@ def G.isClosed (g : G) (h : Rat) : Bool := decide (h ≤ g.resting + 1 / 2)
 
 inductive Ev
   /-- A drag begins with the composer inset, keyboard height and resting
-  height. -/
+  height. It records a gesture only when the keyboard is shown. -/
   | begin (start height resting : Rat)
   /-- A tracked sample: the inset and keyboard height the finger set. -/
   | track (inset height : Rat)
@@ -87,7 +89,7 @@ def matchesTarget (g : G) (h : Rat) : Bool := match g.pending with
   | none => false
 
 def step (c : C) : Ev → C
-  | .begin s h r => ⟨some ⟨s, h, r, s, none, false⟩, c.shifts⟩
+  | .begin s h r => ⟨if r + 1 / 2 < h then some ⟨s, h, r, s, none, false⟩ else none, c.shifts⟩
   | .track i h => match c.gesture with
     | some g => if g.released || matchesTarget g h then c else ⟨some { g with latest := i }, c.shifts⟩
     | none => c
@@ -290,7 +292,7 @@ theorem resolve_Q (c : C) (g : G) (h : Rat) (hg : c.gesture = some g) : Q (resol
 
 theorem step_Q (c : C) (e : Ev) : Q (step c e) ≤ Q c + (if e.isBegin then 1 else 0) := by
   cases e with
-  | begin s h r => simp only [Q, step, Ev.isBegin, Option.isSome_some, ite_true]; split <;> omega
+  | begin s h r => simp only [Q, step, Ev.isBegin, ite_true]; split <;> split <;> simp_all <;> omega
   | track i h =>
     simp only [step, Ev.isBegin, Bool.false_eq_true, ite_false, Nat.add_zero]
     cases hg : c.gesture with
@@ -341,9 +343,15 @@ theorem at_most_once : ∀ (evs : List Ev) (c : C),
     split <;> simp_all <;> omega
 
 /-- **A new drag replaces the whole snapshot.** -/
-theorem begin_fresh (c : C) (s h r : Rat) :
-    (step c (.begin s h r)).gesture = some ⟨s, h, r, s, none, false⟩ ∧ (step c (.begin s h r)).shifts = c.shifts :=
-  ⟨rfl, rfl⟩
+theorem begin_fresh (c : C) (s h r : Rat) (hs : r + 1 / 2 < h) :
+    (step c (.begin s h r)).gesture = some ⟨s, h, r, s, none, false⟩ ∧ (step c (.begin s h r)).shifts = c.shifts := by
+  simp [step, hs]
+
+/-- **A drag that begins with the keyboard closed never returns**: it records
+no gesture, so nothing that follows it shifts the content. -/
+theorem begin_closed_never (c : C) (s h r : Rat) (hs : ¬ r + 1 / 2 < h) (evs : List Ev)
+    (hb : ∀ e ∈ evs, e.isBegin = false) : (run (step c (.begin s h r)) evs).shifts = c.shifts := by
+  rw [cleared_quiet evs _ (by simp [step, hs]) hb]; rfl
 
 /-- **Only a tracked sample records an inset**: notifications, layouts and
 the release never change the recorded inset of a gesture that remains. -/

@@ -282,4 +282,5 @@ open UltraProofs
 #print axioms ListReturn.step_Q
 #print axioms ListReturn.at_most_once
 #print axioms ListReturn.begin_fresh
+#print axioms ListReturn.begin_closed_never
 #print axioms ListReturn.notify_keeps_latest

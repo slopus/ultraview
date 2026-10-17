@@ -1001,12 +1001,19 @@ settlement scheduling (`settleIfNeeded`, added in `1768f72`) is not modeled.
 
 `Proofs/UltraProofs/List/Return.lean` models the resolver the chat screen's
 next change adds (`KeyboardInsetGesture`), as its author described it; it is
-not yet mapped to Swift. A drag snapshots the starting inset and keyboard
-height. While the finger is down a tracked sample records the inset unless
+not yet mapped to Swift. A drag that begins with the keyboard shown (more
+than half a point above its resting height) snapshots the starting inset and
+keyboard height; one that begins with it closed records nothing and never
+returns (`begin_closed_never`). While the finger is down a tracked sample
+records the inset unless
 its height matches the recorded target within half a point; a keyboard
 animation with a duration records its target height, the last one winning;
 zero-duration notifications record nothing; no notification records an
-inset. The release resolves with the recorded target, or the guide's height
+inset. An animated layout while the finger is down (a positive inherited
+animation duration) is a target too (`outcome` with the guide's height),
+which covers a will-change notification that never arrives before the
+release; an ordinary layout while down is a tracked sample, and a guide
+change after the release is a `layout`. The release resolves with the recorded target, or the guide's height
 without one. A height within half a point of the starting one returns the
 content by `start - latest`; one at most half a point above the resting
 height is a dismissal; anything else waits for a later notification or
