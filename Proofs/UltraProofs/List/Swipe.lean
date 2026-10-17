@@ -26,6 +26,11 @@ the gesture recognizers' delivery of samples are outside the model.
   a nonzero reveal is the active row or one animating closed, after any
   sequence of begins, settles, finished closings and removals; so at most
   one row is revealed and not closing.
+* `guarded_inv`: with the pan acting only while its row is the active one,
+  every sequence of pan, close, finish and removal events keeps that, with
+  no further hypothesis. `unguarded_breaks`: without the guard, a close
+  during a pan followed by an opening release leaves a row open that no one
+  tracks; `guarded_drops`: the guard drops that release.
 -/
 
 namespace UltraProofs.ListSwipe
@@ -218,6 +223,9 @@ theorem threshold_above_half (w rowWidth : Rat) (hw : 0 ≤ w) :
 
 variable {I : Type} [DecidableEq I]
 
+theorem if_t {α : Type} {p : Prop} [Decidable p] (h : p) (a b : α) : (if p then a else b) = a := by simp [h]
+theorem if_f {α : Type} {p : Prop} [Decidable p] (h : ¬p) (a b : α) : (if p then a else b) = b := by simp [h]
+
 /-- `SwipeRegistry.begin`: the row to close, and the new active row. -/
 def begin (a : Option I) (x : I) : Option I × Option I :=
   (if a = some x then none else a, some x)
@@ -363,5 +371,119 @@ theorem one_open {c : C I} (h : Inv c) {x y : I} (hx : c.revealed x = true) (hcx
     · rw [ax] at ay; exact Option.some.inj ay
     · rw [hcy] at cy; cases cy
   · rw [hcx] at cx; cases cx
+
+/-! ## The pan's own state
+
+The controller keeps the row a pan tracks apart from the registry. Anything
+that settles that row closed mid-pan (`close()`, a performed action, a
+removal in `reconcile`) changes the registry, not the pan, so the release
+that follows used to settle a row open that was no longer active. With
+`guarded` the pan's `changed` and `ended` act only while the registry's
+active row is the tracked one, and drop the gesture otherwise. -/
+
+/-- The controller with the row its pan tracks. -/
+structure T (I : Type) where
+  c : C I
+  tracking : Option I
+
+inductive GEv (I : Type)
+  /-- The pan begins on `x`. -/
+  | panBegin (x : I)
+  /-- A pan sample on `x`. -/
+  | panChange (x : I)
+  /-- The pan on `x` ends or is cancelled; the release decides `o`. -/
+  | panEnd (x : I) (o : Outcome)
+  /-- `x` settles closed: `close()`, a tap, a performed action. -/
+  | close (x : I)
+  /-- A closing animation on `x` finished. -/
+  | finish (x : I)
+  /-- `x` left the list, lost its view or its actions (`reconcile`). -/
+  | remove (x : I)
+
+/-- Whether the pan acts on `x`: it tracks `x`, and with `guarded` the
+registry's active row is `x`. -/
+def T.acts (guarded : Bool) (t : T I) (x : I) : Bool :=
+  t.tracking = some x && (!guarded || t.c.active = some x)
+
+def tstep (guarded : Bool) (t : T I) : GEv I → T I
+  | .panBegin x => ⟨cstep t.c (.begin x), some x⟩
+  | .panChange x =>
+    if t.tracking = some x then (if t.acts guarded x then t else ⟨t.c, none⟩) else t
+  | .panEnd x o =>
+    if t.tracking = some x then
+      (if t.acts guarded x then ⟨cstep t.c (.settle x o), none⟩ else ⟨t.c, none⟩)
+    else t
+  | .close x => ⟨cstep t.c (.settle x .closed), t.tracking⟩
+  | .finish x => ⟨cstep t.c (.finish x), t.tracking⟩
+  | .remove x => ⟨cstep t.c (.remove x), t.tracking⟩
+
+def trun (guarded : Bool) (t : T I) (evs : List (GEv I)) : T I := evs.foldl (tstep guarded) t
+
+/-- The registry events a pan event issues. -/
+def issued (guarded : Bool) (t : T I) : GEv I → List (Ev I)
+  | .panBegin x => [.begin x]
+  | .panChange _ => []
+  | .panEnd x o => if t.tracking = some x && t.acts guarded x then [.settle x o] else []
+  | .close x => [.settle x .closed]
+  | .finish x => [.finish x]
+  | .remove x => [.remove x]
+
+theorem tstep_c (guarded : Bool) (t : T I) (e : GEv I) :
+    (tstep guarded t e).c = crun t.c (issued guarded t e) := by
+  cases e with
+  | panBegin x => rfl
+  | panChange x => simp only [tstep, issued, crun, List.foldl]; split <;> (try split) <;> rfl
+  | panEnd x o =>
+    simp only [tstep, issued]
+    by_cases h1 : t.tracking = some x
+    · by_cases h2 : t.acts guarded x = true <;> simp [h1, h2, crun]
+    · simp [h1, crun]
+  | close x => rfl
+  | finish x => rfl
+  | remove x => rfl
+
+/-- **With the guard, the pan settles open only the active row**: every
+registry event it issues meets `Ev.Ok`. -/
+theorem guarded_issues_ok (t : T I) (e : GEv I) : RunOk t.c (issued true t e) := by
+  cases e with
+  | panBegin x => exact ⟨trivial, trivial⟩
+  | panChange x => trivial
+  | panEnd x o =>
+    simp only [issued]
+    by_cases h : (t.tracking = some x && t.acts true x) = true
+    · rw [if_t h]
+      simp only [T.acts, Bool.and_eq_true, decide_eq_true_eq, Bool.not_true, Bool.false_or] at h
+      exact ⟨fun _ => h.2.2, trivial⟩
+    · rw [if_f h]; trivial
+  | close x => exact ⟨fun h => absurd rfl h, trivial⟩
+  | finish x => exact ⟨trivial, trivial⟩
+  | remove x => exact ⟨trivial, trivial⟩
+
+/-- **Over any sequence of pan, close, finish and removal events**, with the
+guard, every revealed row is the active one or animating closed: `RunOk`
+holds by construction. -/
+theorem guarded_inv : ∀ (evs : List (GEv I)) (t : T I), Inv t.c → Inv (trun true t evs).c
+  | [], _, h => h
+  | e :: evs, t, h => by
+    apply guarded_inv evs
+    rw [tstep_c]
+    exact inv_run _ h (guarded_issues_ok t e)
+
+/-- **Without the guard a closed row can settle open**: a pan begins on row
+0, `close()` settles it closed mid-pan, and the pan's release opens it. Row
+0 is then revealed and not closing while no row is active. -/
+theorem unguarded_breaks :
+    let t := trun false ⟨⟨none, fun _ => false, fun _ => false⟩, none⟩
+      [.panBegin (0 : Nat), .close 0, .panEnd 0 .opened]
+    t.c.revealed 0 = true ∧ t.c.closing 0 = false ∧ t.c.active = none := by
+  decide
+
+/-- The same events with the guard: the release is dropped, and row 0 goes
+on closing. -/
+theorem guarded_drops :
+    let t := trun true ⟨⟨none, fun _ => false, fun _ => false⟩, none⟩
+      [.panBegin (0 : Nat), .close 0, .panEnd 0 .opened]
+    t.c.closing 0 = true ∧ t.c.active = none ∧ t.tracking = none := by
+  decide
 
 end UltraProofs.ListSwipe

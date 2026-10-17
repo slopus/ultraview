@@ -213,6 +213,11 @@ open UltraProofs
 #print axioms ListSwipe.remove_keeps_other
 #print axioms ListSwipe.inv_run
 #print axioms ListSwipe.one_open
+#print axioms ListSwipe.tstep_c
+#print axioms ListSwipe.guarded_issues_ok
+#print axioms ListSwipe.guarded_inv
+#print axioms ListSwipe.unguarded_breaks
+#print axioms ListSwipe.guarded_drops
 #print axioms ListContent.edge_lerp
 #print axioms ListContent.edge_constant
 #print axioms ListContent.retime_keeps

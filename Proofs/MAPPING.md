@@ -887,11 +887,28 @@ rationals.
   or one animating closed, after any sequence of begins, settles, finished
   closings and removals in which the caller closes what `begin` returns and
   settles open only the active row (`RunOk`); so at most one row is revealed
-  and not closing.
+  and not closing. `guarded_inv`: with the pan guarded by the active row,
+  that holds for every sequence of pan events, closes and removals.
 
-`RunOk` is the controller's: `release` settles the pan's candidate, which
-its `.began` made active, and a removal in between makes `release` return
-early. Gesture delivery, the reveal's rubber band and spring
+**Gap at `a489e36` (through `2a3e2d3`), found by the swipe agent's chaos
+soak.** `RunOk` was read as the controller's: `release` settles the pan's
+candidate, which its `.began` made active. But the pan keeps `tracking`
+apart from the registry, and `close()` (a list pan, a tap, a performed
+action or a VoiceOver action settling the row closed) or `reconcile`
+dropping the row's actions clears the registry's active row while the pan
+still tracks it; only a deleted row clears `tracking` (:397), and
+`release`'s early return needs `reveals[x]` gone, which a close keeps. The
+next `.ended` then settles a row open with no active row (chaos seeds 101
+and 303). `unguarded_breaks` is that sequence. The swipe agent's fix makes
+the pan's `changed` and `ended` act only while `registry.active` is the
+tracked row and drop the gesture otherwise: `T.acts` with `guarded`, and
+`guarded_inv` proves the invariant over any sequence of pan, close, finish
+and removal events with no `RunOk` hypothesis (`guarded_issues_ok`
+discharges it). The rows for the guard (`tracked(_:)`) are mapped when it
+lands. `GEv.close` stands for every closed settle (`close()`, :60-61;
+`perform`, :212; `begin`'s returned row, :110, :492), `GEv.remove` for the
+registry removals in `reconcile` (:393-409) and `settle`'s missing reveal
+(:215). Gesture delivery, the reveal's rubber band and spring
 (`displayed`, `SwipeMotion`) and the buttons' spans are outside the model.
 At `a489e36` the controller refuses a touch while the list moves
 (`shouldReceive`) and counts size position layers as neighbour motion in a
@@ -1189,7 +1206,7 @@ radius, and its text keeps its padding and crossfades. The demo opts in
 | `slice`, `slice_bands`, `slice_seams` | any other box: drawn once at its final size with `ContentsPlacement.stretch` (Drawing.swift:49-66), bands as wide as the widest corner or border, applied as `contentsCenter` (CommitApplier.swift:290-292, :297) |
 | `corners_fit`'s `2 * r` | Core Animation clamps a corner radius above half the shorter side, and shrinks nine-slice bands that don't fit; `stretching` leaves at least one pixel in the middle (Drawing.swift:59-61), so `2 * b < w1` holds at the final size |
 | `textFrame`, `text_inset` | the text node's layer, with the same four animations, and `.top(alignment)` (Drawing.swift:48; CommitApplier.swift:283-289): contents unscaled against the top edge |
-| `layered` | `fadeOut` (NodeTransitionAnimator.swift:436-464): the old bitmap as a ghost at sublayer index 0, over the view's own contents and under its children, `opacity` 1 → 0, at the new view's size; `reveal` (:406-431): the new bitmap through a mask, stable bands at 1 and new regions from `fromOpacity` to 1, all on the row's timing |
+| `layered` | `fadeOut` (NodeTransitionAnimator.swift:436-462): the old bitmap as a ghost at sublayer index 0, over the view's own contents and under its children, `opacity` 1 → 0, at the new view's size; `reveal` (:406-431): the new bitmap through a mask, stable bands at 1 and new regions from `fromOpacity` to 1, all on the row's timing |
 
 - `bounds_round`, `bounds_rigid`: resizing the bounds keeps every corner a
   quarter circle of radius `r` at any size, each moving as a rigid piece.
