@@ -106,11 +106,13 @@ final class StressScreenController: NodeScreenController {
         let baseline = Diagnostics.shared.counts
         statistics.reset()
 
-        // Two queues change tiles at different rates.
+        // Two queues change tiles at different rates. The handlers are
+        // `@Sendable` so they don't take on this controller's main-actor
+        // isolation: they run on their own queues.
         for (rate, label) in [(8.0, "tiles.a"), (5.0, "tiles.b")] {
             let timer = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "dev.ultraview.demo.\(label)"))
             timer.schedule(deadline: .now(), repeating: 1 / rate)
-            timer.setEventHandler {
+            timer.setEventHandler { @Sendable in
                 var random = SystemRandomNumberGenerator()
                 for _ in 0..<6 {
                     let index = Int.random(in: 0..<tiles.count, using: &random)
@@ -133,7 +135,7 @@ final class StressScreenController: NodeScreenController {
         let words = ["layout", "measure", "draw", "commit", "apply", "coalesce", "cancel", "mount"]
         let textTimer = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "dev.ultraview.demo.text"))
         textTimer.schedule(deadline: .now(), repeating: 1 / 6.0)
-        textTimer.setEventHandler {
+        textTimer.setEventHandler { @Sendable in
             var random = SystemRandomNumberGenerator()
             ticker.spans = (0..<12).map { _ in
                 let word = words.randomElement(using: &random)!
@@ -148,9 +150,11 @@ final class StressScreenController: NodeScreenController {
         timers.append(textTimer)
 
         // The statistics are a node too, updated from a background queue.
+        // Launch with `-logStats YES` to also print them, for measuring.
+        let logsStats = UserDefaults.standard.bool(forKey: "logStats")
         let statsTimer = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "dev.ultraview.demo.stats"))
         statsTimer.schedule(deadline: .now() + 0.5, repeating: 0.5)
-        statsTimer.setEventHandler {
+        statsTimer.setEventHandler { @Sendable in
             let values = statistics.current
             let work = Diagnostics.shared.counts - baseline
             stats.text = """
@@ -159,6 +163,10 @@ final class StressScreenController: NodeScreenController {
                 passes \(work.passes)  text layouts \(work.measurements)  draws \(work.draws)
                 on main: passes \(work.passesOnMain)  text \(work.measurementsOnMain)  draws \(work.drawsOnMain)
                 """
+            if logsStats {
+                let line = stats.text.replacingOccurrences(of: "\n", with: " | ") + "\n"
+                FileHandle.standardOutput.write(Data(line.utf8))
+            }
         }
         timers.append(statsTimer)
 
