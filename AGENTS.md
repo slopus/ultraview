@@ -6,12 +6,19 @@ its own scroller. README.md explains what it is and how to use it.
 
 ## Rules
 
-1. **References are not sources.** The projects listed under *Inspired by* in
-   README.md are references only. Study how they work, then write our own
-   design in our own words. Never copy or translate their code line by line,
-   and never bring in their code, comments, file layout, license or notice
-   text. Name them only in that README section: not in code, comments, docs,
-   tests or commit messages.
+1. **Clean-room reimplementation.** UltraView reimplements ideas from three
+   projects, listed in README.md under *Clean-room reimplementation*: Texture
+   (formerly AsyncDisplayKit) for off-main-thread nodes, Telegram-iOS's core
+   list for the virtualized list and its scroller, and React Native for
+   flexbox layout and the View, Text and ScrollView model.
+   - Never copy or translate their code, and don't reproduce their comments
+     or file structure. Implement from design descriptions, documentation and
+     observed behavior, in our own design and words.
+   - Bring in no license or notice text from them.
+   - Their names, their `AS*`/`RCT*` prefixes and their module names appear
+     only in that README section and in this rule: never in code, comments,
+     identifiers, test names, docs or commit messages. Public types don't use
+     their prefixes (see rule 3).
 2. **Dependencies come through SwiftPM only.** Nothing is vendored. Yoga is
    pinned to an exact release in Package.swift; bump it on purpose and update
    Package.resolved with it. The repo has no LICENSE yet; don't add one.

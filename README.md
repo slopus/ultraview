@@ -3,8 +3,9 @@
 A Swift library for fast UI on iOS. Views are described as a tree of nodes
 that are measured, laid out and rendered off the main thread; the main thread
 only applies finished results. Layout is flexbox, computed by
-[Yoga](https://github.com/facebook/yoga). On top of nodes sits a virtualized
-list with its own scroller instead of `UIScrollView`.
+[Yoga](https://github.com/facebook/yoga), and the components follow React
+Native's View, Text and ScrollView model. A virtualized list with its own
+scroller instead of `UIScrollView` is planned on top of nodes.
 
 This is the bootstrap: the package, build setup, tests and a demo app work,
 but the modules hold placeholders.
@@ -71,12 +72,21 @@ xcodebuild test -project UltraView.xcodeproj -scheme UltraViewDemo \
     -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
 ```
 
-## Inspired by
+## Clean-room reimplementation
 
-- [Texture](https://github.com/TextureGroup/Texture) (formerly
-  AsyncDisplayKit): node-based UI with measurement, layout and rendering off
-  the main thread.
-- The `ListView` in [Telegram-iOS](https://github.com/TelegramMessenger/Telegram-iOS)'s
-  Display module: a virtualized list that positions its item nodes itself.
+UltraView is a clean-room reimplementation of ideas from three projects:
 
-UltraView contains no code from either project.
+- [Texture](https://github.com/TextureGroup/Texture), formerly
+  AsyncDisplayKit: a node tree whose measurement, layout, text layout and
+  rendering run off the main thread, with the main thread only applying
+  precomputed results.
+- Telegram-iOS's core list,
+  [`submodules/TelegramUI/Components/CoreList`](https://github.com/TelegramMessenger/Telegram-iOS/tree/master/submodules/TelegramUI/Components/CoreList):
+  a virtualized list with its own scroll physics instead of `UIScrollView`.
+- [React Native](https://github.com/facebook/react-native)'s layout and
+  components: flexbox through Yoga, and the View, Text and ScrollView
+  component and style model.
+
+No code from these projects is copied or translated. UltraView is written
+independently from their published designs and observed behavior, and
+contains no code from any of them.
