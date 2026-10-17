@@ -496,6 +496,57 @@ private struct Tree {
         let next = try #require(harness.pass())
         #expect(next.entry(for: label)?.kind == .unmount)
     }
+    @Test func aDetachedRendererRunsNoMorePasses() {
+        let leaf = box { $0.height = 10 }
+        let harness = Harness(root: box(children: [leaf]), automatic: true)
+        harness.renderer.waitUntilIdle()
+        let commits = harness.commits.count
+
+        harness.renderer.detach()
+        leaf.updateStyle { $0.height = 40 }
+        harness.renderer.waitUntilIdle()
+        #expect(harness.commits.count == commits)
+        #expect(harness.read { leaf.shadow.frame.height } == 10)
+    }
+
+    @Test func aTreeCanBeHostedAgain() throws {
+        let tree = Tree()
+        let first = Harness(root: tree.root)
+        first.pass()
+        first.renderer.detach()
+        tree.a.updateStyle { $0.height = 70 }
+
+        let second = Harness(root: tree.root)
+        let commit = try #require(second.pass())
+        for node in [tree.root, tree.a, tree.b, tree.c, tree.d] {
+            #expect(commit.entry(for: node)?.kind == .mount)
+        }
+        #expect(commit.entry(for: tree.a)?.frame?.height == 70)
+        #expect(commit.entry(for: tree.b)?.frame?.minY == 90)
+        #expect(same(commit.entry(for: tree.root)?.children, [tree.a, tree.b]))
+    }
+
+    @Test func aChangeDuringDrawingIsPickedUpByTheNextPass() throws {
+        // A change made while a pass is drawing isn't lost: it marks the
+        // tree again, and an automatic renderer runs another pass.
+        let label = text("first")
+        let harness = Harness(root: box(children: [label]), automatic: true)
+        harness.renderer.waitUntilIdle()
+        harness.rasterizer.gate.withLock { $0 = RecordingRasterizer.Gate(text: "second") }
+        let gate = try #require(harness.rasterizer.gate.withLock { $0 })
+
+        label.text = "second"
+        gate.started.wait()
+        label.text = "third"
+        gate.release.signal()
+        harness.renderer.waitUntilIdle()
+
+        #expect(harness.rasterizer.cancelled.withLock { $0 } == ["second"])
+        #expect(harness.read { label.currentTextLayout?.text.string } == "third")
+        #expect(harness.rasterizer.drawnTexts.last == "third")
+        let merged = try #require(harness.mailbox.take())
+        #expect(merged.entry(for: label)?.contents?.contents != nil)
+    }
 }
 
 @Suite struct CommitMergeTests {
