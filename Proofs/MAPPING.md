@@ -179,6 +179,33 @@ scroll physics are not modeled. `lockstep_iff` states when content and an
 animated input stay together; that the host passes the keyboard's curve and
 duration is a hypothesis.
 
+## List integration review at `ddf8cb5`
+
+The call sites for the two gaps above are now integrated. Displacing full
+passes move detached rows and departure geometry by `coordinateMap`, restart
+rigid carries, and retime kept geometry after creating the pass's tracks.
+`ListSyncTests` checks the carried row's start and midpoint and that touching
+rows remain touching during a second resize. These are ordinary assertions.
+Retiming excludes existing viewport motion, which is common to all rows and
+must keep the input's timing, and opacity, whose completion deadline must not
+be extended by ongoing geometry changes. Two further simulator tests pin
+preservation of an existing viewport spring and opacity deadline. The generic
+retiming model remains broader than this selection policy; it does not prove
+the controller's filtering or callbacks correct.
+
+The `Window.dropFront` / `dropBack` / `rebalance` mapping was rechecked.
+`ListWindow.rebalance` now accepts a temporal coverage interval and an optional
+budget for added rows. It still removes only end rows and adds linked rows
+only through prepend/append, preserving the structural hypotheses of
+`rebalance_keeps`. The budget can stop before filling the requested extent.
+The theorem does not guarantee coverage of a future viewport, content
+readiness, finite-edge playback or a frame/CPU budget. Exact-value Swift tests
+check the interval envelope, row budget and missing-measurement frontier;
+simulator tests check release-turn mounting and finite-edge discovery.
+
+All 98 theorems pass at this review. The scroll driver, opacity lifetime,
+render-server playback and keyboard integration remain outside the model.
+
 ## Theorems
 
 **Correctness**

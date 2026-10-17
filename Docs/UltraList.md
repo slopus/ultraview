@@ -293,6 +293,24 @@ removal. They check retained preparations and live roots rather than claiming
 a fixed byte budget. This checkpoint passed 213 Linux and 308 simulator tests.
 The 49 integration and ownership tests also passed with each sanitizer.
 
+On release, the list now extends its loaded band over the next 300 ms of
+predicted travel, including an interior bounce peak. One rebalance adds at
+most 64 rows. Keyframe mode uses its actual piecewise-linear flight; stepped
+and native scrolling use predictions. Missing preparation stops extension at
+that frontier. The same release turn updates a keyframe flight when mounting
+discovers a previously unknown finite edge. These limits bound work; they do
+not guarantee coverage at every velocity or row height, or ready rendering
+before a stall that starts immediately after release.
+
+The simulator regression captures a ready, contiguous row band on release and
+checks that it covers the trajectory through a 252 ms main-thread block in
+both directions. This is a geometry/readiness check, not a recording of pixels
+during the blocked interval. The combined checkpoint passed 217 Linux and 323
+simulator tests, with 60 focused tests under each sanitizer and 98 checked Lean
+theorems. It also fixes detached carry jumps and mismatched row timelines during
+animated resizes. Row retiming preserves existing viewport springs and opacity
+deadlines. Immediate mutations during an existing slide remain under review.
+
 A focused simulator fling started with loaded index 38 and injected a 252.1 ms
 main-thread block. The flight remained active at the next sample, continued from
 loaded index 14 to 0, and finished with all 60 geometry samples finite. Node
