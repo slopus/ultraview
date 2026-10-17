@@ -428,19 +428,21 @@ now inserts with the pass alone (ListChatController.swift:243).
 root between row views (NodeRow.swift), the host a preparation draws ahead
 (`staged`), and the two cleanups that must not touch a hosted root: the
 renderer's queued purge and the list's preparation sweep. (First mapped at
-`0592bc8`, before `staged`.)
+`0592bc8`, before `staged`. NodeRow.swift lines are as of the commit after
+`4f3d0fa` that stages every live node row, not only animated ones; the
+model's `stage` already allows any fresh root, so no theorem changes.)
 
 | Model (`Proofs/UltraProofs/List/Hosts.lean`) | Swift at `44f8a0c` |
 | --- | --- |
-| `S.displayed`, `S.pending` | `NodeRowView.displayedHost`, `pendingHost` (NodeRow.swift:118-119) |
+| `S.displayed`, `S.pending` | `NodeRowView.displayedHost`, `pendingHost` (NodeRow.swift:121-122) |
 | `S.hostOf`, `S.weak` | `PreparedNodeContent.host` (weak) and `hasLiveHost` (NodeRow.swift:23, :27) |
 | `S.owner` | `PreparedNodeContent.owner` (weak, NodeRow.swift:24) |
 | `S.staged`, `S.Staged` | `PreparedNodeContent.staged` (strong, NodeRow.swift:26) |
 | `S.renderer` | the root's `state.renderer` (Renderer.swift:92-96) |
-| `S.stage` | `NodeRow.prepare` (NodeRow.swift:85-103): for an animated row whose appearance is still to show, or whose identity is live (:95), a `NodeHostView` for the root the same call made (:98-99), so the root has no renderer |
-| `S.start` | `NodeRowView.start` with `checkout(owner:)` (NodeRow.swift:210, :29-40): the live host, else `staged`, else a new `NodeHostView` (:35), and `staged = nil` (:37). Under `accept`'s and the queued candidate's guard: nothing pending, a different root shown (:247-256, :205-207) |
-| `S.release` | `NodeRowView.release(_:)` (NodeRow.swift:146): the old owner lets the host go and keeps a snapshot |
-| `S.reveal` | `showPreparedHost(_:)` (NodeRow.swift:157): the pending host replaces the shown one |
+| `S.stage` | `NodeRow.prepare` (NodeRow.swift:87-105): for a row whose identity is live, or an animated row whose appearance is still to show (:97), a `NodeHostView` for the root the same call made (:100-101), so the root has no renderer |
+| `S.start` | `NodeRowView.start` with `checkout(owner:)` (NodeRow.swift:227, :29-40): the live host, else `staged`, else a new `NodeHostView` (:35), and `staged = nil` (:37). Under `accept`'s and the queued candidate's guard: nothing pending, a different root shown (:264-273, :222-225) |
+| `S.release` | `NodeRowView.release(_:)` (NodeRow.swift:155): the old owner lets the host go and keeps a snapshot |
+| `S.reveal` | `showPreparedHost(_:)` (NodeRow.swift:166): the pending host replaces the shown one; a shorter one ready inside an animated pass waits for the pass's end first |
 | `S.free` | a row view deallocated: its hosts go, weak `owner`s read `nil` |
 | `S.drop` | the last reference to a preparation goes after the store drops it with `hasLiveHost` false (UltraListView.swift:888, :951 in `sweepPreparations` :945), taking `staged` with it |
 | `S.collect` | `NodeHostView.deinit` (NodeHostView.swift:109-110) calling `Renderer.detach()` (Renderer.swift:101), which clears the renderer if it is still this host's |

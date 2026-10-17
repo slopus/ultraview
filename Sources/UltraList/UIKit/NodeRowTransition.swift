@@ -31,8 +31,8 @@ final class NodeRowLayer: CALayer {
     }
 }
 
-/// Identities whose animated node rows are in a window, so a new revision
-/// of one is drawn before its pass applies.
+/// Identities whose node rows are in a window, so a new revision of one is
+/// drawn before its pass applies.
 @MainActor
 enum NodeRowLiveness {
     private struct Entry {
@@ -53,6 +53,12 @@ enum NodeRowLiveness {
         entries.removeAll { $0.view == nil || $0.view === view }
         entries.append(Entry(view: view))
         views[identity] = entries
+    }
+
+    static func remove(_ view: UIView, identity: String) {
+        guard var entries = views[identity] else { return }
+        entries.removeAll { $0.view == nil || $0.view === view }
+        views[identity] = entries.isEmpty ? nil : entries
     }
 }
 

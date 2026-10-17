@@ -50,9 +50,11 @@ public final class NodeRow: ListRow {
     public var measuresAsynchronously: Bool { true }
     public let measurementEnvironment: UInt64
     /// Whether a new revision's nodes animate from where the shown
-    /// revision's were, on the row's own timing (see `transitionKey`). Such a
-    /// row draws a revision before its pass applies when the identity is on
-    /// screen, so the change shows in the pass's own transaction.
+    /// revision's were, on the row's own timing (see `transitionKey`).
+    ///
+    /// Any node row draws a new revision before its pass applies when the
+    /// identity is on screen, so the new content shows in the transaction
+    /// that gives the row its new size.
     public let animatesContent: Bool
     /// How content animates in the first time this row is shown. A row with
     /// an appearance is drawn before its pass applies.
@@ -92,9 +94,9 @@ public final class NodeRow: ListRow {
         }.value
         guard result.1.height.isFinite, result.1.height >= 0 else { return nil }
         let content = PreparedNodeContent(root: result.0, size: result.1)
-        if animatesContent, appearance != nil && !appearanceShown || NodeRowLiveness.isLive(identity) {
+        if animatesContent && appearance != nil && !appearanceShown || NodeRowLiveness.isLive(identity) {
             // Drawn now, so the pass that shows it can swap in the same
-            // transaction as its own animations.
+            // transaction as its own geometry and animations.
             let host = NodeHostView(rootNode: result.0)
             content.staged = host
             await host.prepareContent(size: .init(width: width, height: result.1.height), environment: resolved)
@@ -105,6 +107,7 @@ public final class NodeRow: ListRow {
     public func apply(to view: ListRowView, transition: ListTransition) {
         guard let view = view as? NodeRowView else { return }
         view.row = self
+        view.passTransition = transition
         if animatesContent { view.motion.passWillApply(transition) }
     }
     fileprivate func preparedContent(width: Double, environment: RenderEnvironment) -> PreparedNodeContent? {
@@ -128,6 +131,11 @@ fileprivate final class NodeRowView: ListRowView {
     private var preparing: (row: NodeRow, width: Double, environment: UInt64)?
     /// What a host this view gave away showed, until this view shows a host again.
     private var releasedSnapshot: UIView?
+    /// The transition of the list pass applying this row, until it ends.
+    var passTransition: ListTransition?
+    /// A shorter revision, ready inside a pass, waits for the pass's end:
+    /// only then is the row's shrinking clip there to keep the old content for.
+    private var awaitsPassEnd = false
     override var isDisplayReady: Bool { displayedHost != nil }
     let motion = NodeRowMotion()
     override class var layerClass: AnyClass { NodeRowLayer.self }
@@ -141,7 +149,8 @@ fileprivate final class NodeRowView: ListRowView {
     }
     override func didMoveToWindow() {
         super.didMoveToWindow()
-        if window != nil, row.animatesContent { NodeRowLiveness.add(self, identity: row.identity) }
+        if window != nil { NodeRowLiveness.add(self, identity: row.identity) }
+        else { NodeRowLiveness.remove(self, identity: row.identity) }
     }
     fileprivate func release(_ host: NodeHostView) {
         guard displayedHost === host || pendingHost === host else { return }
@@ -176,6 +185,14 @@ fileprivate final class NodeRowView: ListRowView {
             if let next = queuedCandidate {
                 queuedCandidate = nil
                 if next.content.root !== host.rootNode { start(next) }
+            }
+            return
+        }
+        if revealDeadline == nil, let transition = passTransition, !transition.isImmediate, displayedHost != nil,
+           (pendingCandidate?.size.height ?? host.bounds.height) < displayedSize.height {
+            if !awaitsPassEnd {
+                awaitsPassEnd = true
+                DispatchQueue.main.async { [weak self] in self?.passDidEnd() }
             }
             return
         }
@@ -257,6 +274,13 @@ fileprivate final class NodeRowView: ListRowView {
     }
     override func visibleRectUpdated(_ rect: CGRect?) {
         if row.animatesContent { motion.passDidComplete() }
+        passDidEnd()
+    }
+    private func passDidEnd() {
+        passTransition = nil
+        guard awaitsPassEnd else { return }
+        awaitsPassEnd = false
+        if let pendingHost { showPreparedHost(pendingHost) }
     }
     override func layoutSubviews() {
         super.layoutSubviews()

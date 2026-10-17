@@ -572,8 +572,12 @@ private actor MeasurementGate: NodeRowMeasuring {
                 return UltraNode(style: style, children: [UltraTextNode("Revision \(revision)")])
             }
         }
-        let environment = RenderEnvironment(), original = row(0)
+        let environment = RenderEnvironment(), original = row(0), replacement = row(1), newest = row(2)
         _ = await original.measure(width: 320, environment: environment)
+        // Measured before the row is on screen, so their content isn't drawn
+        // ahead: this is the path where a revision arrives after its pass.
+        _ = await replacement.measure(width: 320, environment: environment)
+        _ = await newest.measure(width: 320, environment: environment)
         let view = original.makeView()
         view.frame = .init(x: 0, y: 0, width: 320, height: 60)
         let window = makeWindow(); window.addSubview(view); window.isHidden = false
@@ -590,9 +594,6 @@ private actor MeasurementGate: NodeRowMeasuring {
             if let host = view.subviews.compactMap({ $0 as? NodeHostView }).first(where: { !$0.isHidden }),
                let text = host.rootNode.children.first as? UltraTextNode { displayed.append(text.text) }
         }
-        let replacement = row(1), newest = row(2)
-        _ = await replacement.measure(width: 320, environment: environment)
-        _ = await newest.measure(width: 320, environment: environment)
         replacement.apply(to: view, transition: .easeInOut(0.3))
         view.applyMeasurement(width: 320, height: 80, environment: environment)
         let inFlight = try #require(view.subviews.last as? NodeHostView)
@@ -615,6 +616,46 @@ private actor MeasurementGate: NodeRowMeasuring {
         let candidate = try #require(view.subviews.first as? NodeHostView)
         #expect(view.subviews.count == 1)
         #expect(!candidate.isHidden && candidate.hasContent)
+    }
+    @Test(arguments: [(88.0, 240.0), (240.0, 88.0)]) func aRowOnScreenShowsItsNewRevisionWithItsNewSizeAtOnce(from: Double, to: Double) async throws {
+        func row(_ revision: UInt64, height: Double) -> NodeRow {
+            NodeRow(identity: "resizing", revision: revision) {
+                var style = Style(); style.height = .points(height); style.backgroundColor = .white
+                let label = UltraTextNode("Revision \(revision)")
+                label.transitionKey = "label"
+                return UltraNode(style: style, children: [label])
+            }
+        }
+        let list = list(count: 0)
+        let window = makeWindow(); window.frame = .init(x: 0, y: 0, width: 320, height: 400)
+        window.addSubview(list); window.isHidden = false
+        defer { window.isHidden = true }
+        list.applyChanges(items: [row(0, height: from)], transition: .none)
+        for _ in 0..<100 where list.loadedItemViews.first?.isDisplayReady != true { try await Task.sleep(for: .milliseconds(10)) }
+        let view = try #require(list.loadedItemViews.first)
+        let old = try #require(view.subviews.compactMap { $0 as? NodeHostView }.first { !$0.isHidden })
+
+        // At the end of the pass that gives the row its new size, in the
+        // turn that commits that geometry, the row shows the new revision,
+        // drawn: never the new size with the old content or none.
+        struct Shown { var text: String?; var height: Double; var drawn: Bool; var hosts: Int }
+        var atResize: Shown?
+        list.onVisibleWindowChanged = {
+            guard atResize == nil, list.settledFrame(at: 0).map({ Double($0.height) }) == to else { return }
+            let hosts = view.subviews.compactMap { $0 as? NodeHostView }.filter { !$0.isHidden }
+            let host = hosts.first
+            atResize = Shown(
+                text: (host?.rootNode.children.first as? UltraTextNode)?.text,
+                height: host.map { Double($0.bounds.height) } ?? 0,
+                drawn: host?.view(forTransitionKey: "label")?.layer.contents != nil,
+                hosts: hosts.count
+            )
+        }
+        list.applyChanges(items: [row(1, height: to)], transition: .none)
+        for _ in 0..<200 where atResize == nil { try await Task.sleep(for: .milliseconds(5)) }
+        let shown = try #require(atResize)
+        #expect(shown.text == "Revision 1" && shown.height == to && shown.drawn && shown.hosts == 1, "\(shown)")
+        #expect(old.superview == nil)
     }
     @Test func nodeRowShrinkKeepsTallReadyContentUntilTheClipFinishes() async throws {
         func row(_ revision: UInt64, height: Double) -> NodeRow {
