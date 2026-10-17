@@ -33,6 +33,15 @@ layer animations are.
   row is at its settled `y` plus its move. So rows touch at every frame
   exactly when adjacent moves agree, however many heights animate on
   however many timings.
+* `common_seam`, `position_top`, `anchor_common`: the seam holds with any
+  term every row shares. A coefficient of `common s + [s < i] + own·[s = i]`
+  on source `s`'s follower, less `own` times the row's presented height,
+  is the shared-term form; `common s = -[s < anchor]` is the prefix form.
+* `pinned_ends`, `pinned_left`, `pinned_right`, `pinned_kink`,
+  `kink_bound`: a pinned anchor's common coefficient is the chord of the
+  boundary `max 0 (h - half) - h` between the old and new heights. Both ends
+  are exact; on one side of `half` every height is; across it the chord is
+  above the boundary by at most `(half - lo)(hi - half) / (hi - lo)`.
 -/
 
 namespace UltraProofs.ListLayers
@@ -175,5 +184,207 @@ theorem prefix_touch (C : Curves) (Y : Rat) (hs : Nat → Track) (m : Nat → Ra
         (hs i).value C time := by
   have := prefix_seam Y (fun s => (hs s).dst) (fun s => (hs s).value C time) (fun j => m j time) a i
   rw [hm time] at this; grind
+
+/-! ## A term every row shares, and the coefficient form -/
+
+/-- Row `i`'s presented top with the followers of the heights above it and a
+term `common` every row shares: the anchor's compensation, or the pinned
+boundary's secant. -/
+def topWith (Y : Rat) (dst h m : Nat → Rat) (common : Rat) (i : Nat) : Rat :=
+  (Y + pre dst i) + pre (fun s => h s - dst s) i + common + m i
+
+theorem top_eq_topWith (Y : Rat) (dst h m : Nat → Rat) (a i : Nat) :
+    top Y dst h m a i = topWith Y dst h m (-pre (fun s => h s - dst s) a) i := by
+  simp only [top, topWith]; grind
+
+/-- **The seam holds whatever the common term**: a term shared by every row
+cancels between adjacent rows. -/
+theorem common_seam (Y : Rat) (dst h m : Nat → Rat) (common : Rat) (i : Nat) :
+    topWith Y dst h m common (i + 1) - topWith Y dst h m common i = h i + (m (i + 1) - m i) := by
+  simp only [topWith, pre_succ]; grind
+
+theorem pre_add (f g : Nat → Rat) (n : Nat) : pre (fun s => f s + g s) n = pre f n + pre g n := by
+  induction n with
+  | zero => simp [pre, Rat.add_zero]
+  | succ n ih => rw [pre_succ, pre_succ, pre_succ, ih]; grind
+
+theorem pre_below (x : Nat → Rat) (i : Nat) :
+    ∀ n, pre (fun s => (if s < i then 1 else 0) * x s) n = pre x (min n i)
+  | 0 => by simp [pre]
+  | n + 1 => by
+    rw [pre_succ, pre_below x i n]
+    by_cases h : n < i
+    · rw [Nat.min_eq_left (by omega), Nat.min_eq_left (by omega), pre_succ]; simp [h, Rat.one_mul]
+    · rw [Nat.min_eq_right (by omega), Nat.min_eq_right (by omega)]; simp [h, Rat.add_zero]
+
+theorem pre_at (x : Nat → Rat) (own : Rat) (i : Nat) :
+    ∀ n, pre (fun s => (if s = i then own else 0) * x s) n = if i < n then own * x i else 0
+  | 0 => by simp [pre]
+  | n + 1 => by
+    rw [pre_succ, pre_at x own i n]
+    by_cases h : i < n
+    · have : n ≠ i := by omega
+      simp [h, this, show i < n + 1 by omega, Rat.add_zero]
+    · by_cases e : n = i
+      · subst e; simp [Rat.zero_add]
+      · simp [h, e, show ¬i < n + 1 by omega, Rat.add_zero]
+
+/-- Source `s`'s coefficient on row `i`: the shared `common s`, one for every
+height above the row, and `own` for its own height (1 for a row placed by
+its bottom edge, as an inverted list's rows are). -/
+def coef (common : Nat → Rat) (own : Rat) (s i : Nat) : Rat :=
+  common s + (if s < i then 1 else 0) + (if s = i then own else 0)
+
+/-- Row `i`'s presented position among `n` rows: its settled place (its top,
+plus `own` times its height), plus every source's follower `h s - dst s`
+times its coefficient, plus its own move. -/
+def position (Y : Rat) (dst h m common : Nat → Rat) (own : Rat) (n i : Nat) : Rat :=
+  Y + pre dst i + own * dst i + pre (fun s => coef common own s i * (h s - dst s)) n + m i
+
+/-- **The coefficient form is the shared-term form.** Less `own` times its
+presented height, row `i`'s position is its top with the common term
+`Σ common s · (h s - dst s)`, so `common_seam` covers it: rows touch at
+every frame whatever `common` is, and each source's share of it is on that
+source's height timing. -/
+theorem position_top (Y : Rat) (dst h m common : Nat → Rat) (own : Rat) {n i : Nat} (hi : i < n) :
+    position Y dst h m common own n i - own * h i =
+      topWith Y dst h m (pre (fun s => common s * (h s - dst s)) n) i := by
+  have split : (fun s => coef common own s i * (h s - dst s)) =
+      fun s => (common s * (h s - dst s) + (if s < i then 1 else 0) * (h s - dst s)) +
+        (if s = i then own else 0) * (h s - dst s) := by
+    funext s; simp only [coef, Rat.add_mul]
+  simp only [position, topWith, split, pre_add, pre_below, pre_at, hi, ite_true,
+    Nat.min_eq_right (Nat.le_of_lt hi)]
+  grind
+
+/-- **The anchor's common term is the prefix form.** `common s = -[s < a]`
+gives `top`. -/
+theorem anchor_common (Y : Rat) (dst h m : Nat → Rat) {n a : Nat} (ha : a ≤ n) (i : Nat) :
+    topWith Y dst h m (pre (fun s => -(if s < a then 1 else 0) * (h s - dst s)) n) i =
+      top Y dst h m a i := by
+  have neg : (fun s => -(if s < a then 1 else 0) * (h s - dst s)) =
+      fun s => -1 * ((if s < a then 1 else 0) * (h s - dst s)) := by
+    funext s; grind
+  have scale : ∀ (c : Rat) (f : Nat → Rat) k, pre (fun s => c * f s) k = c * pre f k := by
+    intro c f k; induction k with
+    | zero => simp [pre]
+    | succ k ih => rw [pre_succ, pre_succ, ih]; grind
+  rw [top_eq_topWith, neg, scale, pre_below, Nat.min_eq_right ha]
+  grind
+
+/-! ## The pinned boundary's secant -/
+
+/-- How far the rows shift for a pinned anchor of height `x`, in a viewport
+of height `2 * half`. -/
+def boundary (half x : Rat) : Rat := max 0 (x - half) - x
+
+/-- The common coefficient on the pinned anchor's follower, its height going
+from `a` to `b`. -/
+def secant (half a b : Rat) : Rat :=
+  if a = b then (if b > half then 0 else -1) else (boundary half b - boundary half a) / (b - a)
+
+/-- The common term at the anchor's presented height `x`: the settled
+boundary plus the coefficient times the follower `x - b`. -/
+def pinned (half a b x : Rat) : Rat := boundary half b + secant half a b * (x - b)
+
+/-- **The endpoints are exact**: at the start the term is the old boundary,
+at rest the new one. -/
+theorem pinned_ends (half a b : Rat) (hab : a ≠ b) :
+    pinned half a b a = boundary half a ∧ pinned half a b b = boundary half b := by
+  have hd : b - a ≠ 0 := fun h => hab (by grind)
+  refine ⟨?_, by simp [pinned, Rat.sub_self, Rat.mul_zero, Rat.add_zero]⟩
+  simp only [pinned, secant, hab, ite_false]
+  have : (boundary half b - boundary half a) / (b - a) * (a - b) = -(boundary half b - boundary half a) := by
+    rw [show a - b = -(b - a) by grind, Rat.mul_neg, Rat.div_mul_cancel hd]
+  rw [this]; grind
+
+theorem boundary_left {half x : Rat} (h : x ≤ half) : boundary half x = -x := by
+  simp only [boundary]; rw [Rat.max_def]; split <;> grind
+
+theorem boundary_right {half x : Rat} (h : half ≤ x) : boundary half x = -half := by
+  simp only [boundary]; rw [Rat.max_def]; split <;> grind
+
+/-- **On one side of the kink the secant is the boundary at every height**:
+heights all at most `half`, or all at least `half`. -/
+theorem pinned_left {half a b x : Rat} (ha : a ≤ half) (hb : b ≤ half) (hx : x ≤ half) :
+    pinned half a b x = boundary half x := by
+  have hs : secant half a b = -1 := by
+    unfold secant
+    by_cases e : a = b
+    · simp only [e, ite_true, gt_iff_lt, Rat.not_lt.mpr hb, ite_false]
+    · simp only [e, ite_false, boundary_left ha, boundary_left hb]
+      have hd : b - a ≠ 0 := fun h => e (by grind)
+      rw [show -b - -a = -1 * (b - a) by grind, Rat.div_def, Rat.mul_assoc, Rat.mul_inv_cancel _ hd,
+        Rat.mul_one]
+  simp only [pinned, hs, boundary_left hb, boundary_left hx]; grind
+
+theorem pinned_right {half a b x : Rat} (hab : a ≠ b) (ha : half ≤ a) (hb : half ≤ b) (hx : half ≤ x) :
+    pinned half a b x = boundary half x := by
+  have hs : secant half a b = 0 := by
+    simp only [secant, hab, ite_false, boundary_right ha, boundary_right hb, Rat.sub_self, Rat.div_def,
+      Rat.zero_mul]
+  simp only [pinned, hs, boundary_right hb, boundary_right hx]; grind
+
+/-- **Across the kink it is not**: an anchor growing from 50 to 150 in a
+200-point viewport puts the common term 25 points off the boundary at 100,
+though both ends are exact. Rows still touch (`common_seam`); the path the
+window takes is the chord, not the pinned rule. -/
+theorem pinned_kink :
+    pinned 100 50 150 50 = boundary 100 50 ∧ pinned 100 50 150 150 = boundary 100 150 ∧
+      pinned 100 50 150 100 - boundary 100 100 = 25 := by
+  decide +kernel
+
+theorem secant_mul {half a b : Rat} (hab : a ≠ b) :
+    secant half a b * (b - a) = boundary half b - boundary half a := by
+  have hd : b - a ≠ 0 := fun h => hab (by grind)
+  simp only [secant, hab, ite_false]; exact Rat.div_mul_cancel hd
+
+theorem secant_symm {half a b : Rat} (hab : a ≠ b) : secant half a b = secant half b a := by
+  have h1 := secant_mul (half := half) hab
+  have h2 := secant_mul (half := half) (Ne.symm hab)
+  have z : (secant half a b - secant half b a) * (b - a) = 0 := by grind
+  rcases Rat.mul_eq_zero.mp z with h | h
+  · grind
+  · exact absurd (by grind) hab
+
+/-- A growth and the matching shrink take the same chord. -/
+theorem pinned_symm {half a b : Rat} (hab : a ≠ b) (x : Rat) :
+    pinned half a b x = pinned half b a x := by
+  have h2 := secant_mul (half := half) (Ne.symm hab)
+  simp only [pinned, secant_symm hab]; grind
+
+theorem kink_secant {half lo hi : Rat} (hl : lo ≤ half) (hh : half ≤ hi) (hne : lo ≠ hi) :
+    (hi - lo) * secant half lo hi = lo - half := by
+  rw [Rat.mul_comm, secant_mul hne, boundary_left hl, boundary_right hh]; grind
+
+/-- **How far the chord leaves the boundary across the kink**: for heights
+between `lo ≤ half ≤ hi`, growing or shrinking, the common term is above the
+boundary by `(x - lo)(hi - half) / (hi - lo)` below the kink and
+`(half - lo)(hi - x) / (hi - lo)` above it, so by at most
+`(half - lo)(hi - half) / (hi - lo)`, reached at the kink. -/
+theorem kink_bound {half lo hi a b x : Rat} (hl : lo ≤ half) (hh : half ≤ hi) (hlt : lo < hi)
+    (hab : (a = lo ∧ b = hi) ∨ (a = hi ∧ b = lo)) (hx : lo ≤ x) (hxh : x ≤ hi) :
+    0 ≤ (hi - lo) * (pinned half a b x - boundary half x) ∧
+      (hi - lo) * (pinned half a b x - boundary half x) ≤ (half - lo) * (hi - half) := by
+  have hne : lo ≠ hi := fun e => by grind
+  have hp : pinned half a b x = pinned half lo hi x := by
+    rcases hab with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩
+    · rfl
+    · exact pinned_symm (Ne.symm hne) x
+  have hs : (hi - lo) * (secant half lo hi * (x - hi)) = (lo - half) * (x - hi) := by
+    rw [← Rat.mul_assoc, kink_secant hl hh hne]
+  rw [hp]
+  by_cases hk : x ≤ half
+  · have e : (hi - lo) * (pinned half lo hi x - boundary half x) = (x - lo) * (hi - half) := by
+      simp only [pinned, boundary_left hk, boundary_right hh]; grind
+    rw [e]
+    exact ⟨Rat.mul_nonneg (by grind) (by grind),
+      Rat.mul_le_mul_of_nonneg_right (by grind) (by grind)⟩
+  · have hk' : half ≤ x := Rat.le_of_lt (Rat.not_le.mp hk)
+    have e : (hi - lo) * (pinned half lo hi x - boundary half x) = (half - lo) * (hi - x) := by
+      simp only [pinned, boundary_right hk', boundary_right hh]; grind
+    rw [e]
+    exact ⟨Rat.mul_nonneg (by grind) (by grind),
+      Rat.mul_le_mul_of_nonneg_left (by grind) (by grind)⟩
 
 end UltraProofs.ListLayers

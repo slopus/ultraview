@@ -214,3 +214,12 @@ open UltraProofs
 #print axioms ListLayers.prefix_anchor
 #print axioms ListLayers.prefix_rest
 #print axioms ListLayers.prefix_touch
+#print axioms ListLayers.common_seam
+#print axioms ListLayers.position_top
+#print axioms ListLayers.anchor_common
+#print axioms ListLayers.pinned_ends
+#print axioms ListLayers.pinned_left
+#print axioms ListLayers.pinned_right
+#print axioms ListLayers.pinned_kink
+#print axioms ListLayers.pinned_symm
+#print axioms ListLayers.kink_bound

@@ -613,6 +613,23 @@ timing through a later move pass requires; the Swift does not do this yet
   height's timing: adjacent rows with equal moves touch at every frame.
   `prefix_anchor`: the anchor moves only by its own move. `prefix_rest`: at
   rest every row is at its settled place plus its move.
+- `common_seam`: the seam holds with any term every row shares, so the
+  anchor's compensation and a pinned anchor's term are free to differ from
+  the prefix form. `position_top`: with source `s`'s coefficient on row `i`
+  `common s + [s < i] + own·[s = i]` (`own` is 1 for rows placed by their
+  bottom edge), the row's position less `own` times its presented height is
+  its top with the common term `Σ common s · (h s - dst s)`; each source's
+  share of that term is on the source's height timing, not the move's.
+  `anchor_common`: `common s = -[s < anchor]` is `prefix_seam`'s form.
+- `pinned_ends`, `pinned_left`, `pinned_right`: a pinned anchor's common
+  coefficient is the chord of `max 0 (h - half) - h` from the old height to
+  the new (or `0`/`-1` when they are equal). Both ends are exact, and on one
+  side of `half` the term is the boundary at every presented height.
+  `pinned_kink`, `kink_bound`: across `half` it is not. Between
+  `lo ≤ half ≤ hi`, growing or shrinking, it is above the boundary by at
+  most `(half - lo)(hi - half) / (hi - lo)`, at the kink: 25 points for 50 →
+  150 in a 200-point viewport. Rows still touch; this is the path the
+  window takes, not a gap.
 
 ## Pending scroll targets and readiness holds
 
