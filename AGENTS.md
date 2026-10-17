@@ -52,20 +52,22 @@ its own scroller. README.md explains what it is and how to use it.
 ```
 Sources/
   UltraLayout/    Yoga behind a Swift API. Foundation (+ CoreGraphics) only.
-  UltraNode/      Node: the unit of measurement, layout and rendering.
+  UltraCore/      The node pipeline (measure, lay out and draw off the main
+                  thread, apply commits on it) and the UltraNode,
+                  UltraTextNode and UltraScrollNode components.
   UltraList/      The list and its scroller (gestures, deceleration, bounce,
                   indicators), placing item nodes directly. No UIScrollView.
   UltraView/      Umbrella module; only `@_exported import`s.
   UltraViewDemo/  The demo app (an xtool library product; the XcodeGen app
                   target compiles the same directory).
 Tests/
-  UltraLayoutTests, UltraNodeTests, UltraListTests   run on Linux and in the
+  UltraLayoutTests, UltraCoreTests, UltraListTests   run on Linux and in the
                                                      simulator
   UltraViewUIKitTests                                simulator only
 App/Info.plist    the demo's Info.plist (xtool and Xcode)
 ```
 
-Dependencies only point down: UltraLayout ← UltraNode ← UltraList ←
+Dependencies only point down: UltraLayout ← UltraCore ← UltraList ←
 UltraView ← UltraViewDemo. A new test directory needs a `.testTarget` in
 Package.swift and a target in project.yml (template `PackageTests`, plus the
 `UltraViewDemo` scheme's test list).
