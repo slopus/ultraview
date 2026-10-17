@@ -1189,7 +1189,7 @@ on the frame lengths; and the settling frame (`|v| < 0.01`, then a snap of
 at most half a point, :121-122) depends on them too. The engine's
 settlement scheduling (`settleIfNeeded`, added in `1768f72`) is not modeled.
 
-## A cancelled keyboard dismissal at `f683c2f`
+## A cancelled keyboard dismissal at `f683c2f`, followed up at `44e5d85`
 
 `Proofs/UltraProofs/List/Return.lean` models the chat screen's
 `KeyboardInsetGesture` (Sources/UltraViewDemo/List/KeyboardInsetGesture.swift)
@@ -1264,61 +1264,94 @@ drag in the waiting state replaces the gesture (`begin_fresh`), which drops
 the waiting return as well; the new snapshot starts from the displaced
 inset.
 
-**The follow-up (agfv's, hash to come).** As described: a resolution
-applies even with a new touch down (the resolver resolves before the
-tracking guard, with compensation on), and a partial guide during such a
-touch keeps the gesture waiting instead of being discarded, so the run is
-plain `step` and `touch_loses` no longer applies. A drag that begins while
-the outcome is awaited calls `resumeTracking(inset:)`, modeled as
-`Ev.resume`: it keeps the first drag's start inset, starting height and
-resting height, records the current inset as the latest and clears the
-recorded target. `resume_resolution`: the gesture then resolves as one that
-never lifted, against the first start, so an open return restores the
-original inset. `resume_sample`: beginning afresh from the displaced inset
-(the behaviour at `f683c2f`) takes the partial height as the new starting
-one, and the keyboard opening back up never matches it, so the displacement
-stays for good. The whole drag begin is `dragBegin`: a waiting gesture whose
-outcome the guide already shows at the drag's start is resolved and its
-return applied first, then the drag begins afresh from the inset that
-leaves (`dragBegin_open`: one return, a fresh snapshot; `dragBegin_closed`:
-the dismissal, no return, no gesture since the keyboard is at rest);
-otherwise it resumes from `composerInset`, which nothing changes while the
-gesture waits (`dragBegin_partial`). `dragBegin_Q`: a drag begin adds at
-most one return. A resolution that comes with no keyboard timing waits one
-main-queue turn for one in a single slot, applied by a notification with a
-duration, that turn, or the next drag's begin: `slot_once` (every
-resolution applied exactly once, in order) and `begin_flushes` (none waits
-past the next drag). The rows map to the Swift when it lands.
+**The follow-up at `44e5d85`.** The rows below replace the `f683c2f` table's for
+the files it changed.
 
-Momentum rows at `f683c2f` (the section at `b896af1` maps the earlier
-controller): the model's tracking is `isTrackingKeyboard` (:23), which adds
-the gesture's own tracking and excludes the moment after `didEndDragging`
-reports. `Ev.dragBegin` is `willBeginDragging` (:89-94), `Ev.drag` the
-`onUserScrollDelta` guard (:95-98) and the layout check (:160),
-`Ev.release` `didEndDragging` (:99-103), `Ev.keyboard` `keyboardFrameChanged`
-(:247-266) and `applyComposerInset`'s `compensatesInsetChange:
-!isTrackingKeyboard && followsComposer` (:191), and `Ev.explicit` the hide
-button (:113), `textViewDidChange` (:267-269), `sendMessage` (:362-363) and
-a resolved return (:239). A resolved dismissal (:243) turns compensation
-off, as the release does. Resolutions apply only with `isTrackingKeyboard`
-false, and while it is true every inset goes in uncompensated, so
-`tracking_never_writes` holds for the new paths.
+| Model (`Proofs/UltraProofs/List/Return.lean`) | Swift at `44e5d85` |
+| --- | --- |
+| `G` | `KeyboardInsetGesture.Gesture` (KeyboardInsetGesture.swift:8-14); `released` is `awaitsOutcome` (:17) |
+| `Ev.begin` | `begin` (:20-25) |
+| `Ev.resume` | `resumeTracking(inset:)` (:26-32): only while `awaitsOutcome`; keeps the snapshot, sets the latest inset, clears the target |
+| `Ev.track`, `matchesTarget` | `track` (:33-38), from `keyboardDragChanged` (ListChatController.swift:304-309), reached from `keyboardTrackingLayout` (:193-209) only while `keyboardInputIsTracking` (:186-192: the native pan began or changed with a touch on it, else the list tracking and dragging) |
+| `Ev.release` | `end` (KeyboardInsetGesture.swift:39-43) from `keyboardDragEnded` (ListChatController.swift:310-315) |
+| `Ev.outcome` | `keyboardOutcome` (KeyboardInsetGesture.swift:44-49) with the finger down: a notification with a duration (ListChatController.swift:379-380), or an animated or input-inactive layout with a conclusive guide (:196-201) |
+| `Ev.layout` | after the release: the `awaitsOutcome` branch of `viewDidLayoutSubviews` (:177-178) into `keyboardGuideChanged` (:316-322), and a notification with the finger up |
+| `dragBegin` | `keyboardDragBegan` (:288-303): the waiting slot applied first (:289-292), a waiting gesture resolved at the drag's height when conclusive (:293-295), then `resumeTracking(inset: composerInset)`, else `begin` (:299-302) |
+| `resolve`'s shift | `resolveKeyboardGesture` (:344-365): `.returned` applies the start inset with `compensatesInsetChange: true` on `easeInOut(duration * remaining / full height)` (:349-358) |
+| `Slot`, `SEv.defer`, `SEv.flush` | `finishKeyboardGesture` (:323-336): with no timing, `pendingKeyboardResolution` and a main-queue turn applying it on `.keyboard(0.25)`; a notification with a duration takes it (:381-384), a drag's begin applies it (:289-292); layouts apply no inset while it waits (:179, :206) |
 
-**Finishing the viewport track (agfv's, hash to come).** As described:
-`UltraListView.finishViewportTransition()` replaces a running viewport
-track with one from 0 to 0 at once (`transition: .none`), re-renders
-attachments and reports visibility, and makes no engine call; with no track
-it does nothing. The chat calls it, with the composer bar's clock ended in
-the same turn, when a keyboard notification reports the keyboard already
-hidden (begin and end frames equal, off screen) or on `didHide`.
-`Ev.finishViewport` steps to the same state: `finish_keeps_engine` (the
-offset, the flight and its velocity, and every flag unchanged), and
-`run_keeps_velocity` and `dismissed_never_moved` include it.
-`ListPass.finish_together`: landing the viewport track and the bar in one
-turn keeps their distance; `finish_alone`: landing one leaves the gap off
-by `Δ (1 - q)`, what is left of the other's move (the 90 points the bar's
-clock left before, with the same-inset guard). The rows map to the Swift
-when it lands.
+- `touch_loses` was the gap at `f683c2f`. At `44e5d85` a resolution while a
+  touch is down applies: `keyboardFrameChanged` applies it before returning
+  (:386-389), and `keyboardTrackingLayout` passes it to
+  `finishKeyboardGesture` (:198-201); while the gesture waits no layout
+  applies the bar's inset (:206). The run is plain `step`, so `resolution`,
+  `at_most_once` and `resume_resolution` describe it.
+- Momentum: the model's `tracking` is a drag in progress. A return applied
+  under a touch that has not become a drag compensates (forced, :358); the
+  engine's `shift` moves the axis' offset, anchor and proposed offset
+  together (ScrollMath.swift:84), so a drag that then begins starts where
+  the content is. Resolutions never apply during a drag: the gesture is
+  tracking then, and `keyboardOutcome` only records a target.
+- Finishing: `finishViewportTransition()` (UltraListView.swift:225-229) is
+  `Ev.finishViewport` (`finish_keeps_engine`). `applyComposerInset`'s
+  `finishesAnimation` (ListChatController.swift:210-216) removes the bar's
+  animations and finishes the viewport track in one transaction, as an
+  immediate inset change does (`list.applyChanges(..., .none)` with
+  `removeComposerAnimations`, :233-243): `finish_together`. It runs for a
+  notification whose begin and end frames are already off screen (:272-283)
+  and on `didHide` (:285-287).
+- Lockstep: `applyComposerInset` copies the viewport animation onto the
+  bar's position and height (:234-241, `animateComposerProperty`
+  :259-270), the same begin, duration, speed and curve, so
+  `ListPass.lockstep_iff` applies; the bar's start includes the residual of
+  its running animation (`composerAnimationResidual`, :251-258), read from
+  the same curve.
+
+What the follow-up's models say: `Ev.resume` keeps the first drag's start
+inset, starting height and resting height, records the current inset as
+the latest and clears the recorded target; `resume_resolution`: the gesture
+then resolves as one that never lifted, against the first start, so an open
+return restores the original inset; `resume_sample`: beginning afresh from
+the displaced inset (the behaviour at `f683c2f`) never returns. `dragBegin`:
+a waiting gesture the guide already decides at the drag's start is resolved
+first (`dragBegin_open`: one return, then a fresh snapshot;
+`dragBegin_closed`: the dismissal, no gesture), otherwise the drag resumes
+from `composerInset`, which nothing changes while the gesture waits
+(`dragBegin_partial`); `dragBegin_Q`: a drag begin adds at most one return.
+`slot_once`: every resolution waiting a turn for its timing is applied
+exactly once, in order; `begin_flushes`: none waits past the next drag.
+
+Momentum rows at `44e5d85` (the section at `b896af1` maps the earlier
+controller; `f683c2f`'s rows are superseded): `Ev.dragBegin` is
+`willBeginDragging` (ListChatController.swift:97-102), `Ev.drag` the
+`onUserScrollDelta` guard (:103-106), the layout check (:169) and a tracked
+sample's (:307), `Ev.release` `didEndDragging` (:107-111), `Ev.keyboard`
+`keyboardFrameChanged` (:366-398, a growing overlap with the finger up at
+:371) and `applyComposerInset`'s `compensatesInsetChange` (:232: the
+caller's, else `!isTrackingKeyboard && followsComposer`), and `Ev.explicit`
+the hide button (:122), `textViewDidChange` (:401), `sendMessage` (:495)
+and a resolved return (:352, applied with compensation forced on, :358). A
+resolved dismissal (:362) turns compensation off and applies uncompensated
+(:363), as the release does. `isTrackingKeyboard` (:30) is the gesture's
+own tracking or the list's touch before `didEndDragging`. While a drag runs
+every inset goes in uncompensated, so `tracking_never_writes` holds; a
+return applied under a touch that has not become a drag is the one
+compensated write with the finger down (above).
+
+**Finishing the viewport track at `44e5d85`.**
+`UltraListView.finishViewportTransition()` (UltraListView.swift:225-229)
+replaces a running viewport track with one from 0 to 0 at once, re-renders
+attachments and reports visibility, and makes no engine call; with no
+track it does nothing. It is `Ev.finishViewport`: `finish_keeps_engine`
+(the offset, the flight and its velocity, and every flag unchanged), and
+`run_keeps_velocity` and `dismissed_never_moved` include it. The chat
+calls it from `applyComposerInset`'s `finishesAnimation` (ListChatController.swift:210-216)
+in the same transaction that removes the bar's animations, for a
+notification whose begin and end frames are already off screen
+(:272-283) and on `didHide` (:285-287): `ListPass.finish_together`
+(landing both in one turn keeps their distance). `finish_alone`: landing
+one leaves the gap off by `Δ (1 - q)`, the 90 points the bar's clock left
+before, with the same-inset guard.
 
 ## Elastic resize at `44f8a0c`
 
@@ -1372,7 +1405,7 @@ padding, radius 16 with no bitmap, one revision shown.
 ## The keyboard's viewport profile (for the chat's next change)
 
 `Proofs/UltraProofs/List/Profile.lean` covers agfv's coming change, as
-reviewed in its frozen prototype on `2edf931`: the composer's inset follows
+reviewed in its prototype on `44e5d85`: the composer's inset follows
 the keyboard's overlap clamped to the resting edge, `max(resting, height)`
 (`KeyboardViewportMotion.height(at:)`), and the viewport correction follows
 the same clamped height through a sampled progress profile
@@ -1407,8 +1440,9 @@ Appearances of node rows revealed by an inset-only pass are skipped
 (their timing needs a basic animation). Assumed, not proved: the
 keyboard's sampled progress (from the reported duration and the fitted
 keyboard spring) stays in `[0, 1]` and moves forward, as a critically
-damped spring from rest does; the forced first and last samples equal the
-computed ones when the keyboard's progress starts at 0 and ends at 1.
+damped spring from rest does. The helper requires the physical progress
+to start at 0 and end at 1 (at the notification's deadline) rather than
+overwriting the end samples, so the profile's ends are the computed ones.
 
 ## Theorems
 
