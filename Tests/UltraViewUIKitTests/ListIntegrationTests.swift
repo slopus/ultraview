@@ -316,12 +316,42 @@ private actor MeasurementGate: NodeRowMeasuring {
         let scroll = ObservedScrollView(frame: .init(x: 0, y: 0, width: 320, height: 400))
         let engine = PlatformEngine(scroll: scroll), edges = ScrollEdges(minimum: 0, maximum: 10_000)
         engine.setEdges(edges); engine.setOffset(100)
-        scroll.explicitStops = 0
         engine.beginMomentum(velocity: 3500)
+        scroll.explicitStops = 0
         engine.shift(by: 0); engine.setEdges(edges); engine.shift(by: 50)
         #expect(scroll.explicitStops == 0)
         engine.halt()
         #expect(scroll.explicitStops == 1)
+    }
+    @Test(arguments: [-9000.0, 9000.0]) func transferredPlatformMomentumReturnsInsideItsEdgesAfterAStall(velocity: Double) async throws {
+        let engine = PlatformEngine(scroll: UIScrollView(frame: .init(x: 0, y: 0, width: 320, height: 157)))
+        engine.setEdges(.init(minimum: 0, maximum: 300)); engine.setOffset(150)
+        engine.beginMomentum(velocity: velocity)
+        #expect(engine.decelerating)
+        _ = try #require(engine.coveredOffsets(horizon: 0.3))
+        let deadline = CACurrentMediaTime() + 0.1
+        while CACurrentMediaTime() < deadline {}
+        for _ in 0..<100 where engine.decelerating { try await Task.sleep(for: .milliseconds(50)) }
+        #expect(!engine.decelerating)
+        #expect(abs(engine.offset - (velocity < 0 ? 0 : 300)) <= 0.5)
+        #expect(engine.coveredOffsets(horizon: 0.3) == nil)
+        engine.teardown()
+    }
+    @Test func transferredPlatformMomentumKeepsCoastingAndYieldsToNativeInput() async throws {
+        let engine = PlatformEngine(scroll: UIScrollView(frame: .init(x: 0, y: 0, width: 320, height: 400)))
+        engine.setEdges(.init(minimum: 0, maximum: 100_000)); engine.setOffset(10_000)
+        engine.beginMomentum(velocity: 6000)
+        try await Task.sleep(for: .milliseconds(500))
+        #expect(engine.decelerating)
+        let first = engine.offset
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(engine.offset > first + 100)
+        engine.scrollViewWillBeginDragging(engine.scroll)
+        let stopped = engine.offset
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(!engine.decelerating)
+        #expect(engine.offset == stopped)
+        engine.teardown()
     }
     @Test(arguments: ScrollEngineMode.allCases) func sharedReleaseKeepsMovingAcrossReparks(mode: ScrollEngineMode) async throws {
         let list = list(mode)

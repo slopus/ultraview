@@ -30,8 +30,8 @@ private final class HeaderView: ListAttachmentView {
 
 @MainActor
 @Suite(.serialized) struct ListAttachmentIntegrationTests {
-    private func list(_ rows: [HeaderRow]) -> UltraListView {
-        let list = UltraListView()
+    private func list(_ rows: [HeaderRow], mode: ScrollEngineMode = .keyframe) -> UltraListView {
+        let list = UltraListView(engineMode: mode)
         list.frame = .init(x: 0, y: 0, width: 320, height: 400); list.layoutIfNeeded()
         list.applyChanges(items: rows)
         return list
@@ -76,6 +76,31 @@ private final class HeaderView: ListAttachmentView {
         autoreleasepool { list.applyChanges(items: []) }
         #expect(attachment.value == nil)
         #expect(list.loadedAttachmentViews.isEmpty)
+    }
+    @Test(arguments: ScrollEngineMode.allCases, [false, true])
+    func clearingDuringAFlightReleasesTheOldAttachmentWindow(mode: ScrollEngineMode, zeroViewport: Bool) throws {
+        let rows = (0..<80).map { HeaderRow(identity: String($0), header: "same") }
+        let list = list(rows, mode: mode)
+        list.scrollTo(.init(index: 40), transition: .immediate)
+        #expect(list.loadedIndexRange.lowerBound > 0)
+        #expect(!list.loadedAttachmentViews.isEmpty)
+        list.beginMomentum(velocity: -4688)
+        #expect(list.isDecelerating)
+        _ = try #require(list.engine.coveredOffsets(horizon: 0.3))
+        if zeroViewport {
+            list.applyChanges(newSize: .zero)
+        } else {
+            list.applyChanges(items: [])
+        }
+        #expect(list.loadedAttachmentViews.isEmpty)
+        #expect(list.loadedItemViews.isEmpty)
+        #expect(list.settledWindow.rows.isEmpty)
+        #expect(!list.isDecelerating)
+        #expect(list.currentScrollOffset == 0)
+        list.applyChanges(items: rows, newSize: .init(width: 320, height: 400))
+        #expect(!list.loadedAttachmentViews.isEmpty)
+        #expect(list.loadedIndexRange.contains(0))
+        list.haltScrolling()
     }
 }
 #endif

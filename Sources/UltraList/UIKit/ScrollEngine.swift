@@ -375,12 +375,17 @@ final class PlatformEngine: NSObject, ScrollEngine, UIScrollViewDelegate {
         scroll.clipsToBounds = false; scroll.scrollsToTop = false
         touchObserver.cancelsTouchesInView = false
         touchObserver.down = { [weak self] in
-            self?.didTouchDown?(); self?.onInput?(.init(time: CACurrentMediaTime(), phase: .touchDown))
+            guard let self else { return }
+            stopReplay()
+            didTouchDown?(); onInput?(.init(time: CACurrentMediaTime(), phase: .touchDown))
         }
         scroll.addGestureRecognizer(touchObserver)
         scroll.panGestureRecognizer.addTarget(self, action: #selector(panned))
     }
-    func setOffset(_ value: Double) { coveragePrediction = nil; writing = true; scroll.setContentOffset(.init(x: 0, y: value), animated: false); writing = false }
+    func setOffset(_ value: Double) {
+        stopReplay(); nativeDecelerating = false; coveragePrediction = nil
+        writing = true; scroll.setContentOffset(.init(x: 0, y: value), animated: false); writing = false
+    }
     func shift(by delta: Double) {
         guard abs(delta) > 1e-9 else { return }
         // Reparking changes coordinates, not the gesture's velocity. Calling
@@ -404,18 +409,13 @@ final class PlatformEngine: NSObject, ScrollEngine, UIScrollViewDelegate {
         if scroll.contentSize != size { scroll.contentSize = size }
         writing = false
     }
-    func halt() { nativeDecelerating = false; replay?.teardown(); replay = nil; setOffset(offset) }
+    func halt() { setOffset(offset) }
     func sync() {}
     func reanchorDrag() {}
     func teardown() { halt() }
     func beginMomentum(velocity: Double) {
-        let time = scroll.layer.convertTime(CACurrentMediaTime(), from: nil)
-        coveragePrediction = .init(trajectory: .init(samples: [
-            .init(time: 0, offset: offset, velocity: velocity),
-            .init(time: 0.35, offset: offset + velocity * 0.35, velocity: 0),
-        ]), beginTime: time, coordinateShift: 0)
-        onFlightChanged?(coveragePrediction)
-        scroll.setContentOffset(.init(x: 0, y: offset + velocity * 0.35), animated: true)
+        halt()
+        replayDriver().beginMomentum(velocity: velocity)
     }
     func attachInput(to view: UIView) {
         view.addGestureRecognizer(scroll.panGestureRecognizer)
@@ -438,26 +438,34 @@ final class PlatformEngine: NSObject, ScrollEngine, UIScrollViewDelegate {
         // UIKit has no public API for synthesizing touches into its recognizer.
         // External streams use the measured stepped driver; real touches retain
         // UIScrollView's own deceleration and bounce.
-        if replay == nil {
-            let driver = PhysicsEngine(mode: .stepped)
-            driver.host.frame = scroll.bounds; driver.setOffset(offset)
-            driver.setEdges(edges ?? .init())
-            driver.onScroll = { [weak self] offset in
-                guard let self else { return }
-                writing = true; scroll.bounds.origin.y = offset; writing = false
-                onScroll?(offset)
-            }
-            driver.willBeginDragging = { [weak self] in self?.willBeginDragging?() }
-            driver.didEndDragging = { [weak self] in self?.didEndDragging?() }
-            driver.didEndScrolling = { [weak self] in self?.didEndScrolling?() }
-            driver.onFlightChanged = { [weak self] flight in self?.onFlightChanged?(flight) }
-            replay = driver
+        replayDriver().receive(event)
+    }
+    private func stopReplay() {
+        let driver = replay; replay = nil
+        driver?.teardown()
+    }
+    private func replayDriver() -> PhysicsEngine {
+        if let replay { return replay }
+        let driver = PhysicsEngine(mode: .stepped)
+        driver.host.frame = scroll.bounds; driver.setOffset(offset)
+        driver.setEdges(edges ?? .init())
+        driver.onScroll = { [weak self] offset in
+            guard let self else { return }
+            writing = true; scroll.bounds.origin.y = offset; writing = false
+            onScroll?(offset)
         }
-        replay?.receive(event)
+        driver.didTouchDown = { [weak self] in self?.didTouchDown?() }
+        driver.willBeginDragging = { [weak self] in self?.willBeginDragging?() }
+        driver.didEndDragging = { [weak self] in self?.didEndDragging?() }
+        driver.didEndScrolling = { [weak self] in self?.didEndScrolling?() }
+        driver.shouldStopOnRelease = { [weak self] velocity in self?.shouldStopOnRelease?(velocity) ?? false }
+        driver.onFlightChanged = { [weak self] flight in self?.onFlightChanged?(flight) }
+        replay = driver
+        return driver
     }
     func containerOrigin(height: Double, top: Bool, bottom: Bool) -> Double { top ? 0 : bottom ? 10_000_000 - height : 5_000_000 - height / 2 }
     func scrollViewDidScroll(_ scrollView: UIScrollView) { if !writing { onScroll?(offset) } }
-    func scrollViewWillBeginDragging(_ scrollView: UIScrollView) { nativeDecelerating = false; coveragePrediction = nil; willBeginDragging?() }
+    func scrollViewWillBeginDragging(_ scrollView: UIScrollView) { stopReplay(); nativeDecelerating = false; coveragePrediction = nil; willBeginDragging?() }
     func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate: Bool) {
         nativeDecelerating = willDecelerate
         if !willDecelerate { coveragePrediction = nil }

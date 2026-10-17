@@ -127,6 +127,12 @@ so virtualization does not repeatedly reset the platform offset or its momentum.
 A delayed custom-engine sample catches up to the analytic flight without
 clamping the travelled distance or stopping that flight.
 
+The native engine uses the stepped driver for transferred programmatic momentum
+and recorded input. Both obey the same finite edges and bounce rules as the
+custom engines. A native touch or an explicit offset write stops that replay;
+window reparking shifts its coordinates while preserving velocity. Real native
+gestures continue through the scroll view's own recognizer and deceleration.
+
 The Compare demo attaches the native pane's pan recognizer to the shared
 container and sends the observed input stream to both custom engines. A drag
 in any pane drives all three; UIKit retains its native deceleration. The shared
@@ -403,6 +409,16 @@ The inset and Send fixes passed 221 Linux tests, 336 simulator unit tests,
 113 checked proofs. Inset regressions cover animated row retention, a viewport
 filled with one-point rows, pin slack, clamping at the content end, and
 preserving the offset when compensation is disabled.
+
+A subsequent chaos run found an attachment crash when a collection was emptied
+during a flight: halting the engine synchronously rendered old attachment runs
+against the new item array. Flight callbacks now wait until the pass's rows and
+runs agree. Regressions clear the collection or zero the viewport during an
+active flight in every engine. The same follow-up replaces the native engine's
+unbounded programmatic offset animation with bounded stepped momentum, checking
+settling after a main-thread stall, continued coasting and handoff to native input.
+All 339 simulator unit tests and 76 focused tests under each sanitizer passed;
+the updated proof package checked 124 theorems.
 
 Add `-listHostProbe YES` to the keyboard probe to combine a streaming pin with
 reserving date headers and partner-yielding sender headers. Its exported states

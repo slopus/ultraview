@@ -320,6 +320,17 @@ shows offset 352.
 
 ## Preparation queue and sent rows at `b5667e5`
 
+Integration review after `e12559b`: engine flight callbacks during
+`UltraListView.applyChanges`, `updateViewportInsets` or `handleScroll` defer
+attachment rendering until row and run state is consistent. The attachment
+owner lookup also checks its item index. These callback and UIKit lifetime
+boundaries are outside the rational geometry model; simulator regressions
+exercise empty collections and zero viewports during active flights in all
+three engines. The mapped pass geometry, inset destinations and preparation
+queue algorithms are unchanged. Programmatic momentum in the native engine
+now uses its existing stepped replay driver; native delegate behavior and
+display-link scheduling remain outside the proofs.
+
 `Proofs/UltraProofs/List/Preparation.lean` models `PreparationQueue`
 (PreparationQueue.swift) and how `UltraListView` drives it.
 

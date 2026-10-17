@@ -96,6 +96,7 @@ public final class UltraListView: UltraScrollView {
     private var viewportRequest: UInt64 = 0
     private var applyingPreparedMutation = false
     private var drainingPreparations = false
+    private var deferredAttachmentRender = false
     private var pendingBlockAnimations: [InsertedBlock] = []
     private var serial: UInt64 = 0
     private var runs: [AttachmentRun] = []
@@ -128,6 +129,9 @@ public final class UltraListView: UltraScrollView {
         animations.mirrorViewport(on: carousel.layer)
         engine.onFlightChanged = { [weak self] flight in
             guard let self else { return }
+            // Engine calls can synchronously report a flight while the pass
+            // still holds rows and attachment runs from the old collection.
+            guard !passing else { deferredAttachmentRender = true; return }
             renderAttachments()
             if flight != nil { handleScroll(engine.offset) }
         }
@@ -242,6 +246,10 @@ public final class UltraListView: UltraScrollView {
         defer {
             CATransaction.commit()
             animations.clearPositions(); passing = false
+            if deferredAttachmentRender {
+                deferredAttachmentRender = false
+                renderAttachments()
+            }
             if engine.coveredOffsets(horizon: 0.3) != nil { handleScroll(engine.offset) }
             reportVisibility()
             if pendingItems == nil, !pendingBlockAnimations.isEmpty {
@@ -1164,7 +1172,7 @@ public final class UltraListView: UltraScrollView {
             attachmentsHost.bringSubviewToFront(view)
             view.stickDistanceUpdated(map.stickDistance(offset: engine.offset))
             let candidates = settledWindow.rows.filter { run.members.contains($0.index) }
-            if let owner = candidates.max(by: { min($0.maxY, y + map.height) - max($0.y, y) < min($1.maxY, y + map.height) - max($1.y, y) }), min(owner.maxY, y + map.height) > max(owner.y, y) {
+            if let owner = candidates.max(by: { min($0.maxY, y + map.height) - max($0.y, y) < min($1.maxY, y + map.height) - max($1.y, y) }), items.indices.contains(owner.index), min(owner.maxY, y + map.height) > max(owner.y, y) {
                 ownership[items[owner.index].identity, default: []].append(view)
             }
             if let flight, attachmentFlightSignatures[run.serial] != flight {
