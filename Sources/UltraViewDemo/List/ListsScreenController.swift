@@ -7,6 +7,7 @@ final class ListsScreenController: UIViewController {
     private let tabs = UISegmentedControl(items: ["Chat", "10k feed", "Compare", "Record"])
     private let engines = UISegmentedControl(items: ["UIKit", "Stepped", "Keyframe"])
     private let blocker = UISegmentedControl(items: ["Main off", "50 ms", "100 ms", "250 ms"])
+    private let controls = UIStackView()
     private var blocking: Task<Void, Never>?
     private var child: UIViewController?
     override func viewDidLoad() {
@@ -20,18 +21,29 @@ final class ListsScreenController: UIViewController {
         engines.addTarget(self, action: #selector(showScreen), for: .valueChanged)
         blocker.accessibilityIdentifier = "listMainBlocker"; blocker.selectedSegmentIndex = 0
         blocker.addTarget(self, action: #selector(updateBlocker), for: .valueChanged)
-        for control in [tabs, engines, blocker] { control.translatesAutoresizingMaskIntoConstraints = false; view.addSubview(control) }
+        controls.translatesAutoresizingMaskIntoConstraints = false; controls.distribution = .fillEqually
+        for control in [tabs, engines, blocker] { controls.addArrangedSubview(control) }
+        view.addSubview(controls)
         NSLayoutConstraint.activate([
-            tabs.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8),
-            tabs.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16), tabs.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
-            engines.topAnchor.constraint(equalTo: tabs.bottomAnchor, constant: 8), engines.leadingAnchor.constraint(equalTo: tabs.leadingAnchor), engines.trailingAnchor.constraint(equalTo: tabs.trailingAnchor),
-            blocker.topAnchor.constraint(equalTo: engines.bottomAnchor, constant: 8), blocker.leadingAnchor.constraint(equalTo: tabs.leadingAnchor), blocker.trailingAnchor.constraint(equalTo: tabs.trailingAnchor),
+            controls.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8),
+            controls.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 16),
+            controls.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -16),
         ])
+        updateControlLayout()
+        registerForTraitChanges([UITraitVerticalSizeClass.self]) { (controller: ListsScreenController, _: UITraitCollection) in controller.updateControlLayout() }
         showScreen()
         ListChaosDriver.startIfRequested(lists: self)
     }
     override func viewDidAppear(_ animated: Bool) { super.viewDidAppear(animated); updateBlocker() }
     override func viewDidDisappear(_ animated: Bool) { super.viewDidDisappear(animated); blocking?.cancel(); blocking = nil }
+    private func updateControlLayout() {
+        let compact = traitCollection.verticalSizeClass == .compact
+        controls.axis = compact ? .horizontal : .vertical
+        controls.spacing = compact ? 6 : 8
+        for control in [tabs, engines, blocker] {
+            control.setTitleTextAttributes(compact ? [.font: UIFont.systemFont(ofSize: 12)] : [:], for: .normal)
+        }
+    }
     @objc private func updateBlocker() {
         blocking?.cancel(); blocking = nil
         let milliseconds = [0, 50, 100, 250][max(0, blocker.selectedSegmentIndex)]
@@ -57,7 +69,7 @@ final class ListsScreenController: UIViewController {
         }
         addChild(next); next.view.translatesAutoresizingMaskIntoConstraints = false; view.addSubview(next.view)
         NSLayoutConstraint.activate([
-            next.view.topAnchor.constraint(equalTo: blocker.bottomAnchor, constant: 8), next.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            next.view.topAnchor.constraint(equalTo: controls.bottomAnchor, constant: 8), next.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             next.view.trailingAnchor.constraint(equalTo: view.trailingAnchor), next.view.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
         ])
         next.didMove(toParent: self); child = next
@@ -179,7 +191,9 @@ final class LargeListController: UIViewController, ListChaosRowHost {
             list.topAnchor.constraint(equalTo: status.bottomAnchor), list.leadingAnchor.constraint(equalTo: view.leadingAnchor), list.trailingAnchor.constraint(equalTo: view.trailingAnchor), list.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
         list.onVisibleWindowChanged = { [weak self] in
-            guard let self else { return }; status.text = "\(rows.count.formatted()) rows · \(list.loadedIndexRange.count) loaded · \(list.engineMode.rawValue)"
+            guard let self else { return }
+            let text = "\(rows.count.formatted()) rows · \(list.loadedIndexRange.count) loaded · \(list.engineMode.rawValue)"
+            if status.text != text { status.text = text }
         }
         list.applyChanges(items: rows)
         monitor.start()

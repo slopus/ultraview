@@ -12,6 +12,15 @@ final class ListInteractionTests: XCTestCase {
     @MainActor private func settle(_ seconds: Double = 0.4) {
         RunLoop.current.run(until: Date().addingTimeInterval(seconds))
     }
+    @MainActor private func chatPoint(_ app: XCUIApplication, composer: XCUIElement, above: CGFloat) -> XCUICoordinate {
+        let list = app.otherElements["chatList"].frame.intersection(app.frame)
+        let top = list.minY, bottom = min(list.maxY, composer.frame.minY - 4)
+        let height = bottom - top
+        XCTAssertGreaterThan(height, 24, "the keyboard leaves no usable chat gesture area")
+        let scale = min(1, max(0, height - 16) / 240)
+        let y = min(bottom - 8, max(top + 8, composer.frame.minY - above * scale))
+        return app.coordinate(withNormalizedOffset: .zero).withOffset(.init(dx: list.midX - app.frame.minX, dy: y - app.frame.minY))
+    }
     private func logGeometry(_ label: String, _ state: [String: Any]) throws {
         let data = try JSONSerialization.data(withJSONObject: state, options: [.sortedKeys])
         print("\(label): \(String(decoding: data, as: UTF8.self))")
@@ -41,13 +50,13 @@ final class ListInteractionTests: XCTestCase {
             let composerTop = composer.frame.minY
             let x = app.frame.midX
             let origin = app.coordinate(withNormalizedOffset: .zero)
-            let partialStart = origin.withOffset(.init(dx: x, dy: composerTop - 40))
+            let partialStart = chatPoint(app, composer: composer, above: 40)
             let partialEnd = origin.withOffset(.init(dx: x, dy: composerTop + 20))
             partialStart.press(forDuration: 0.05, thenDragTo: partialEnd, withVelocity: .slow, thenHoldForDuration: 0.2)
             settle()
             XCTAssertTrue(app.keyboards.firstMatch.exists, "\(mode): a drag ending above the keyboard should keep it open")
             XCTAssertEqual(try keyboardGeometry(app)["stoppedReleases"] as? Int, 0, "\(mode): an undismissed keyboard must not veto the release")
-            let start = origin.withOffset(.init(dx: x, dy: composerTop - 90))
+            let start = chatPoint(app, composer: composer, above: 90)
             let end = origin.withOffset(.init(dx: x, dy: app.frame.maxY - 70))
             start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .fast, thenHoldForDuration: 0)
             let hidden = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: app.keyboards.firstMatch)
@@ -72,8 +81,8 @@ final class ListInteractionTests: XCTestCase {
             XCTAssertEqual(state["newestSnaps"] as? Int, 0, "\(mode): a fling must not snap to newest: \(state)")
             XCTAssertEqual((state["handoffSamples"] as? [[String: Double]])?.count, 4, "\(mode): \(state)")
             XCTAssertLessThanOrEqual(state["detachedAnimationAmplitude"] as? Double ?? 1000, 1, "\(mode): dismissal added content motion: \(state)")
-            let afterStart = origin.withOffset(.init(dx: x, dy: composer.frame.minY - 40))
-            let afterEnd = origin.withOffset(.init(dx: x, dy: composer.frame.minY - 220))
+            let afterStart = chatPoint(app, composer: composer, above: 40)
+            let afterEnd = chatPoint(app, composer: composer, above: 220)
             afterStart.press(forDuration: 0.03, thenDragTo: afterEnd, withVelocity: .fast, thenHoldForDuration: 0)
             settle()
             let after = try keyboardGeometry(app)
@@ -89,9 +98,8 @@ final class ListInteractionTests: XCTestCase {
             let composer = app.textViews["composer"]
             XCTAssertTrue(composer.waitForExistence(timeout: 10))
             composer.tap(); XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5)); settle()
-            let origin = app.coordinate(withNormalizedOffset: .zero), x = app.frame.midX
-            let high = origin.withOffset(.init(dx: x, dy: composer.frame.minY - 210))
-            let low = origin.withOffset(.init(dx: x, dy: composer.frame.minY - 35))
+            let high = chatPoint(app, composer: composer, above: 210)
+            let low = chatPoint(app, composer: composer, above: 35)
             for (start, end) in [(high, low), (low, high)] {
                 start.press(forDuration: 0.03, thenDragTo: end, withVelocity: .fast, thenHoldForDuration: 0)
                 settle()
@@ -113,6 +121,11 @@ final class ListInteractionTests: XCTestCase {
     @MainActor func testStationaryKeyboardDismissalPreservesTheReleasePosition() throws {
         try checkKeyboardDismissal(stationaryRelease: true)
     }
+    @MainActor func testKeyboardDismissalInLandscapeKeepsMomentum() throws {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        defer { XCUIDevice.shared.orientation = .portrait }
+        try checkKeyboardDismissal(stationaryRelease: false, initialRow: 25)
+    }
     @MainActor private func checkKeyboardDismissal(stationaryRelease: Bool, initialRow: Int = 0) throws {
         let app = XCUIApplication()
         for mode in ["uiKit", "stepped", "keyframe"] {
@@ -127,14 +140,17 @@ final class ListInteractionTests: XCTestCase {
             }
             composer.tap(); XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5)); settle()
             let origin = app.coordinate(withNormalizedOffset: .zero), x = app.frame.midX
-            let start = origin.withOffset(.init(dx: x, dy: composer.frame.minY - 90))
-            let end = origin.withOffset(.init(dx: x, dy: app.frame.maxY - (stationaryRelease ? 70 : 180)))
+            let start = chatPoint(app, composer: composer, above: 90)
+            let bottomMargin = stationaryRelease ? 70 : min(180, app.frame.height * 0.21)
+            let end = origin.withOffset(.init(dx: x, dy: app.frame.maxY - bottomMargin))
             start.press(forDuration: 0.05, thenDragTo: end, withVelocity: stationaryRelease ? .slow : .fast, thenHoldForDuration: stationaryRelease ? 0.5 : 0)
             let hidden = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: app.keyboards.firstMatch)
             XCTAssertEqual(XCTWaiter.wait(for: [hidden], timeout: 5), .completed, mode)
             settle(0.7)
             let state = try keyboardGeometry(app)
             try logGeometry("Keyboard release \(mode) stationary=\(stationaryRelease)", state)
+            XCTAssertGreaterThan(state["dragSamples"] as? Int ?? 0, 0, "\(mode): the drag missed the list")
+            XCTAssertGreaterThan(state["ended"] as? Int ?? 0, 0, "\(mode): no drag release was observed")
             XCTAssertEqual(state["stoppedReleases"] as? Int, 0, "\(mode): \(state)")
             XCTAssertEqual(state["keyboardSpringCorrect"] as? Bool, true, "\(mode): \(state)")
             XCTAssertEqual((state["handoffSamples"] as? [[String: Double]])?.count, 4, "\(mode): \(state)")
@@ -177,8 +193,8 @@ final class ListInteractionTests: XCTestCase {
             let composer = app.textViews["composer"]
             XCTAssertTrue(composer.waitForExistence(timeout: 10))
             composer.tap(); XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5)); settle()
-            let origin = app.coordinate(withNormalizedOffset: .zero), x = app.frame.midX, y = composer.frame.minY - 90
-            let high = origin.withOffset(.init(dx: x, dy: y)), low = origin.withOffset(.init(dx: x, dy: y + 35))
+            let high = chatPoint(app, composer: composer, above: 90)
+            let low = chatPoint(app, composer: composer, above: 55)
             high.press(forDuration: 0.05, thenDragTo: low, withVelocity: .slow, thenHoldForDuration: 0.2)
             low.press(forDuration: 0.05, thenDragTo: high, withVelocity: .slow, thenHoldForDuration: 0.2)
             settle()
