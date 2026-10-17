@@ -164,3 +164,10 @@ open UltraProofs
 #print axioms ListLayers.layered_touches
 #print axioms ListLayers.touches_before
 #print axioms ListLayers.single_layer_opens
+#print axioms ListReadiness.applies_latest
+#print axioms ListReadiness.run_applies_latest
+#print axioms ListReadiness.zero_reverts
+#print axioms ListReadiness.zero_fixed
+#print axioms ListReadiness.stale_noop
+#print axioms ListReadiness.later_gen_lt
+#print axioms ListReadiness.resume_applies
