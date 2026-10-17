@@ -943,9 +943,9 @@ row's edge at every frame. A `Track` is one scalar of a frame (a
 with one progress); an edge in row coordinates is a sum of such scalars on
 one timing, which is again a track on it. (First mapped at `44f8a0c`; the
 per-axis retiming and the moved content are `163e3f0`'s, the late join is
-the commit after `cecd483`'s, and line numbers are as of that commit.)
+`4f3d0fa`'s, and line numbers are as of `4f3d0fa`.)
 
-| Model (`Proofs/UltraProofs/List/Content.lean`) | Swift after `cecd483` |
+| Model (`Proofs/UltraProofs/List/Content.lean`) | Swift at `4f3d0fa` |
 | --- | --- |
 | a `Track`'s `start`, `transition` | a `CABasicAnimation`'s begin time, duration, speed and curve or spring, held by `NodeAnimationTiming` (NodeTransitionAnimator.swift:11) and copied by `animation(_:from:to:)` (:104) |
 | `Shared` | `NodeAnimationTiming.isTiming(of:)` (NodeTransitionAnimator.swift:81): same begin (within 1e-6), duration, speed, offset, and curve or spring |
@@ -960,6 +960,11 @@ the commit after `cecd483`'s, and line numbers are as of that commit.)
 | `shift` | `TransitionShift.start(from:to:target:)` (LayoutTransition.swift:254-259), `from + (target - to)`, applied by `NodeTransitionAnimator.shift(root:from:)` (NodeTransitionAnimator.swift:373-396): a copy of the old view's running animation (same begin, duration, speed and curve) on the matching new view, from that start to the new model value |
 | content replaced with no timing | `NodeRowMotion.show`'s `else` branch (NodeRowTransition.swift:116-122): `replacementTiming()` is `nil` (an immediate pass, or one whose time is up), so `NodeHostView.continueTransitions(from:)` (NodeHostView.swift:317-322) calls `shift` |
 | the row's moved track | `ListAnimationModel.transition`'s immediate branch (ListAnimation.swift:212-219): `from + new - to`, same start and transition, which is `shift` of the row's height |
+| `joinStart` | `TransitionJoin.start(shown:to:progress:)` (LayoutTransition.swift:264-271), applied to every numeric `from`/`to` pair a joined timing builds (`animation(_:from:to:)`, NodeTransitionAnimator.swift:109-111; `joinProgress` :14-16, set by `joined(at:)` :51-56, which clamps it to `[0, 0.999]`) |
+| the join's `p` (`valueProgress_eq`) | `NodeRowMotion.progress(of:on:)` (NodeRowTransition.swift:187-192): `(shown - from) / (to - from)` of the row's running height animation on its own key path, read from the presentation; `nil` when the row moves less than half a point or has no presentation |
+| `join_remap`, `join_within` with `Curves.Bounded` and forward progress | `replacementTiming`'s join (NodeRowTransition.swift:169-175): the row's own timing joined at `p` when `staysWithinItsEnds` (NodeTransitionAnimator.swift:59-79) and `p < 0.98` |
+| `bezier_mono`, `bezier_bounded`, `solved_mono` | `staysWithinItsEnds` for a basic animation: control points 1 and 2 with `y` in `[0, 1]` (no timing function is linear) |
+| `catchup_ends` | otherwise (:176): a 0.15 s ease-out of its own, from the content as shown (`s`) to its layout (`T`) |
 
 - `edge_lerp`, `edge_constant`: on one timing, a child edge minus the row
   edge is `(1 - p) * d0 + p * d1`; equal end differences make it constant.
@@ -991,38 +996,45 @@ assumes that is the value at `t0`. Not covered:
 
 - content that arrives after its pass (`replacementTiming`,
   NodeRowTransition.swift:160-184) joins the running height animation at its
-  phase, from the old tree's snapshot: `edge_lerp` holds (one progress), but
+  phase. Before `4f3d0fa` it started from the old tree's snapshot:
+  `edge_lerp` holds (one progress), but
   its start inset is the snapshot's, not the row's at the animation's begin,
   so `edge_constant` does not apply; with no running height animation it
   animates over the pass's remaining duration while the row's height is
   still. `join_jump`: at the join the content shows `s + (T - s) p`, a jump
   of `(T - s) p` from the snapshot `s`; `join_exact`: a start of
   `(s - T p) / (1 - p)` would show `s` there. Only the late path (pre-render
-  timeout, a row not live) takes this branch. On the planned fix:
-  `joinStart_beyond` and `joinStart_inside_iff` show that start always lies
-  beyond `s`, away from `T`, and inside `[s, T]` only when `p = 0` or
-  `s = T`; so clamping it to `[s, T]` always gives `s`
-  (`clamped_is_snapshot`) and the same jump as today (`clamped_jump`).
-  Unclamped, it shows the row's remaining progress rescaled
-  (`join_remap`), which stays within `[s, T]` from the join on for any
-  curve that moves forward without overshooting (`join_within`); a spring's
-  overshoot past its end is magnified by `1 / (1 - p)` (`clamp_sample`: 25
-  points past at `p = 0.9` where the row is 2.5 past). The fix, in the commit
-  after `cecd483` (`NodeAnimationTiming.joined(at:)` and
-  `staysWithinItsEnds`, NodeTransitionAnimator.swift:51-79, applied in
-  `animation(_:from:to:)` :109-111; `TransitionJoin.start(shown:to:progress:)`,
-  LayoutTransition.swift:264-271; chosen in `replacementTiming` :169-177 with
-  `progress(of:on:)` :187-192), not yet mapped row by row: unclamped on the row's timing
-  when it can't overshoot, `p` read from the row's value progress, which is
-  its curve progress (`valueProgress_eq`); a basic curve with control
-  points in `[0, 1]` never moves backward and stays in `[0, 1]`
-  (`bezier_mono`, `bezier_bounded`, `solved_mono`: Simpson's rule on the
-  cubic, and the slope's Bernstein form), so `join_within` holds for it. A
-  critically or overdamped spring from rest not overshooting is an
-  assumption (it needs the exponential). Otherwise (`dampedSpring`, a row
-  moving less than half a point, `p >= 0.98`) a 0.15 s ease-out of its own
-  from `s` to `T`: no jump and lands on `T` (`catchup_ends`), off the row's
-  clock until then. Colors and transforms keep the jump;
+  timeout, a row not live) takes this branch. At `4f3d0fa` (rows above) the
+  content joins with that start when the row's timing can't overshoot, so
+  it shows `s` at the join and the row's remaining progress rescaled after
+  (`join_remap`), within `[s, T]` (`join_within`); otherwise it catches up
+  over 0.15 s (`catchup_ends`), off the row's clock until then. A clamp of
+  the start to `[s, T]` would have changed nothing: the start lies beyond
+  `s`, away from `T`, and inside only when `p = 0` or `s = T`
+  (`joinStart_beyond`, `joinStart_inside_iff`, `clamped_is_snapshot`,
+  `clamped_jump`). Assumptions and what stays outside:
+  - a spring with `initialVelocity == 0` and damping at least `0.99` of
+    critical is taken not to overshoot. A ratio of 1 or more from rest
+    doesn't (that needs the exponential, so it is an assumption); at 0.99
+    it overshoots by about `e^-22`, times `1 / (1 - p) <= 50` since
+    `p < 0.98`, under `1e-8` of the move. The list's springs are critical
+    (`smoothDeceleration`) or within `1e-5` of it (`keyboardSpring`,
+    555.027 / 47.118);
+  - `solved_mono` needs the control points' `x` in `[0, 1]`, which Core
+    Animation requires of a timing function;
+  - `p` and `s` are read in the main-thread turn, the content's animation
+    shows from the next frame on, at that frame's progress: continuous by
+    `join_remap`, since it holds at every time;
+  - every key path joins at the height animation's `p`. A vertical row
+    whose width runs on another timing gives its content's x the height's
+    phase, as `last_wins_drifts` describes for retiming;
+  - colors and transforms are not remapped and keep the jump; they set no
+    edge;
+  - tests: `joiningPartwayShowsTheCurrentValueAndCoversTheRestInStep`
+    (Linux, `clamp_sample`'s 90 to 140 at `p = 0.5`),
+    `contentJoiningARunningTimingStartsWhereItIsShown` (simulator: 88 at the
+    join, 118 at three quarters, 148 at the end) and
+    `overshootingSpringsAreTold`;
 - in `shift`, a child whose parent is unmatched: positions carry only
   within a matched parent (NodeTransitionAnimator.swift:379-384), so its
   position lands at the new value while the row still moves, outside
