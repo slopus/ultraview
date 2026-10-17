@@ -188,3 +188,18 @@ application and require no UI automation settings.
 The Xcode app target is `UltraViewDemoApp`, distinct from the SwiftPM demo library.
 The shared scheme is `UltraViewDemo`. `DEMO_BUNDLE_ID` overrides only the app's
 bundle identifier so independent test runners retain their own identities.
+
+## Scope and remaining validation
+
+| Area | Implemented | Deferred or not yet validated |
+|---|---|---|
+| Keyboard | Chat composer follows the keyboard layout guide; beginning a drag dismisses it. Scripted show, fill, send and dismiss actions export separate timings and public signpost intervals. | Continuous interactive dismissal and host-specific inset animation policy. Device cold-entry and keyboard turns currently exceed 16.7 ms; attribution and final measurement remain pending. |
+| Accessibility | Hosted nodes apply their accessibility properties; text nodes publish text labels and static-text traits. Demo rows expose stable identifiers and labels. | List-specific accessibility scroll actions, focus restoration across virtualization, and physical VoiceOver interaction coverage. |
+| Trackpad | Continuous indirect pan input has its own drag baseline and rubber-band coefficient. The physics model supports indirect replay. | Physical trackpad parity, indirect recording fixtures and discrete wheel input. The committed public gesture fixtures use direct touch. |
+| Paging | Hosts can supply measured row targets and append new data through `applyChanges`. | Built-in page snapping and network loading policy. |
+| Attachments | Run serial continuity, top/bottom floating maps, reserved space, member trimming, one-level partner yielding, ownership, stick distance, flight keyframes and departure behavior have math and simulator coverage. The feed demonstrates reserving section headers. | A physical-device scenario combining partner yielding, pinning, keyboard movement and navigation. Render-server depth and commit-delay sweeps remain empirical work. |
+
+The timing probes count layout, text measurement and drawing on main separately
+from busy turns. Zero such operations does not imply that all UIKit input or
+view-application work meets a frame budget. Report the measured maximum and p99
+turns alongside the action timings when evaluating the keyboard scenario.

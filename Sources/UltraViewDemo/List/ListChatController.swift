@@ -1,6 +1,7 @@
 #if canImport(UIKit)
 import UIKit
 import UltraView
+import os
 
 @MainActor
 final class ListChatController: UIViewController {
@@ -41,10 +42,13 @@ final class ListChatController: UIViewController {
                 try? await Task.sleep(for: .seconds(delay > 0 ? delay : 2)); self?.beginStreaming()
                 try? await Task.sleep(for: .seconds(1)); self?.list.beginMomentum(velocity: 3500)
                 if UserDefaults.standard.bool(forKey: "listKeyboardProbe") {
-                    try? await Task.sleep(for: .seconds(2)); self?.composer.becomeFirstResponder()
+                    try? await Task.sleep(for: .seconds(2))
+                    self?.monitor.measureAction("keyboard-show") { self?.composer.becomeFirstResponder() }
                     try? await Task.sleep(for: .seconds(1))
-                    self?.composer.text = "A reply during streaming"; self?.sendMessage()
-                    try? await Task.sleep(for: .seconds(1)); self?.composer.resignFirstResponder()
+                    self?.monitor.measureAction("keyboard-fill-composer") { self?.composer.text = "A reply during streaming" }
+                    self?.sendMessage()
+                    try? await Task.sleep(for: .seconds(1))
+                    self?.monitor.measureAction("keyboard-dismiss") { self?.composer.resignFirstResponder() }
                     try? await Task.sleep(for: .seconds(3))
                 } else { try? await Task.sleep(for: .seconds(7)) }
                 self?.monitor.finish()
@@ -54,10 +58,11 @@ final class ListChatController: UIViewController {
     override func viewDidDisappear(_ animated: Bool) { super.viewDidDisappear(animated); streaming?.cancel(); monitor.finish() }
     @objc private func sendMessage() {
         nextID += 1
-        rows.insert(.init(identity: "sent-\(nextID)", title: "You", body: composer.text?.isEmpty == false ? composer.text! : "A new message", height: 100, tint: .systemIndigo, inverted: true), at: 0)
-        composer.text = ""
-        list.applyChanges(items: rows, scrollTo: .init(index: 0), animatesInsertions: false, transition: .easeInOut(0.3))
-        list.animateInsertedBlock(identities: [rows[0].identity], from: .top)
+        let body = monitor.measureAction("send-read-composer") { composer.text?.isEmpty == false ? composer.text! : "A new message" }
+        rows.insert(.init(identity: "sent-\(nextID)", title: "You", body: body, height: 100, tint: .systemIndigo, inverted: true), at: 0)
+        monitor.measureAction("send-clear-composer") { composer.text = "" }
+        monitor.measureAction("send-apply-list") { list.applyChanges(items: rows, scrollTo: .init(index: 0), animatesInsertions: false, transition: .easeInOut(0.3)) }
+        monitor.measureAction("send-insert-animation") { list.animateInsertedBlock(identities: [rows[0].identity], from: .top) }
     }
     @objc private func beginStreaming() {
         streaming?.cancel()
@@ -87,11 +92,26 @@ final class ListFrameMonitor: NSObject {
     private var initialMainWork = 0
     private var hitches = 0
     private var framePeriod = 1000.0 / 60
+    private var startedAt = 0.0
+    private var actions: [[String: Any]] = []
+    private let signposter = OSSignposter(subsystem: "dev.ultraview.listdemo", category: "PointsOfInterest")
     private let name: String
     init(name: String) { self.name = name }
     static func stallForProbe() { Thread.sleep(forTimeInterval: 0.12) }
+    @discardableResult
+    func measureAction<Result>(_ name: StaticString, _ action: () -> Result) -> Result {
+        guard UserDefaults.standard.bool(forKey: "listProbe") else { return action() }
+        let start = CACurrentMediaTime()
+        let interval = signposter.beginInterval(name, id: signposter.makeSignpostID())
+        defer {
+            signposter.endInterval(name, interval)
+            actions.append(["name": name.description, "at": start - startedAt, "milliseconds": (CACurrentMediaTime() - start) * 1000])
+        }
+        return action()
+    }
     func start() {
         link?.invalidate(); gaps.removeAll(); previous = nil; hitches = 0
+        startedAt = CACurrentMediaTime(); actions.removeAll()
         initialMainWork = Diagnostics.shared.counts.mainThreadWork
         if !MainThreadMonitor.shared.isRunning {
             MainThreadMonitor.shared.start(phase: "list-\(name)"); ownsMainMonitor = true
@@ -117,6 +137,7 @@ final class ListFrameMonitor: NSObject {
         var document: [String: Any] = ["screen": name, "samples": gaps.count, "maximumMainGapMilliseconds": gaps.max() ?? 0, "gapsAbove16_7": gaps.filter { $0 > 16.7 }.count, "missedFramesAbove25": gaps.filter { $0 > 25 }.count, "injectedStall": UserDefaults.standard.bool(forKey: "listStall"), "mainThreadLayoutTextDrawOperations": Diagnostics.shared.counts.mainThreadWork - initialMainWork]
         document["callbackHitches"] = hitches; document["targetFrameMilliseconds"] = framePeriod
         document["keyboardProbe"] = UserDefaults.standard.bool(forKey: "listKeyboardProbe")
+        document["actions"] = actions
         if let summary = MainThreadMonitor.shared.summaries.first(where: { $0.phase == "list-\(name)" }) {
             document["maximumBusyTurnMilliseconds"] = summary.maxTurnMilliseconds
             document["p99BusyTurnMilliseconds"] = summary.p99TurnMilliseconds
