@@ -175,8 +175,25 @@ public final class UltraTextNode: UltraNode, @unchecked Sendable {
         return layout
     }
 
+    /// Padding plus border: where the text sits inside the node's box.
+    private var contentInset: Insets {
+        let padding = shadow.layout.resolvedPadding
+        let border = shadow.layout.resolvedBorder
+        return Insets(
+            top: padding.top + border.top,
+            left: padding.left + border.left,
+            bottom: padding.bottom + border.bottom,
+            right: padding.right + border.right
+        )
+    }
+
+    private var contentWidth: CGFloat {
+        let inset = contentInset
+        return shadow.frame.width - inset.left - inset.right
+    }
+
     override func updateContentForFrame(pass: Pass) {
-        let width = shadow.frame.width
+        let width = contentWidth
         guard width > 0 else { return }
         if let current = shadow.textLayout, current.fits(width: width) {
             return
@@ -186,7 +203,10 @@ public final class UltraTextNode: UltraNode, @unchecked Sendable {
 
     override func contributeProps(_ props: inout ViewProps, state: NodeState, pass: Pass) {
         guard let content = state.text else { return }
-        let links = shadow.textLayout?.linkRegions(inWidth: shadow.frame.width) ?? []
+        let inset = contentInset
+        let links = (shadow.textLayout?.linkRegions(inWidth: contentWidth) ?? []).map { region in
+            TextLinkRegion(index: region.index, rects: region.rects.map { $0.offsetBy(dx: inset.left, dy: inset.top) })
+        }
         props.text = TextViewProps(version: content.version, links: links, highlightsPress: !content.suppressHighlighting)
         if state.accessibility.label == nil {
             props.accessibility.label = shadow.attributedText?.string
@@ -201,7 +221,8 @@ public final class UltraTextNode: UltraNode, @unchecked Sendable {
 
     override func contentDrawing(state: NodeState) -> (drawing: any Drawing, key: DrawingKey.Content)? {
         guard let layout = shadow.textLayout, !layout.lines.isEmpty else { return nil }
-        return (TextDrawing(layout: layout), .text(layout.id))
+        let inset = contentInset
+        return (TextDrawing(layout: layout, inset: inset), .text(layout.id, inset: inset))
     }
 
     /// The layout the node is drawn from, as of the last pass. Layout queue
@@ -212,4 +233,6 @@ public final class UltraTextNode: UltraNode, @unchecked Sendable {
 /// Draws a text layout. The drawing code lives with the Core Text measurer.
 struct TextDrawing: Drawing {
     var layout: TextLayout
+    /// Padding plus border, around the text.
+    var inset = Insets.zero
 }

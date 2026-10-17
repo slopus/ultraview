@@ -212,6 +212,23 @@ import UltraLayout
         #expect(harness.measurer.count == 1, "the stretched width is the measured width")
     }
 
+    @Test func paddingAndBorderInsetTheText() throws {
+        let label = UltraTextNode(spans: [
+            TextSpan("aaaa "),
+            TextSpan("bbbb", onPress: {}),
+        ], style: { var style = Style(); style.padding = 10; style.borderWidth = 2; return style }(),
+           textStyle: TextStyle(fontSize: 20))
+        let harness = Harness(root: box({ $0.alignItems = .flexStart }, children: [label]))
+
+        let commit = try #require(harness.pass())
+
+        // 90 points of text inside 12 points on each side.
+        #expect(commit.entry(for: label)?.frame == CGRect(x: 0, y: 0, width: 114, height: 48))
+        #expect(harness.measurer.count == 1, "laid out at the content width, not the box width")
+        let link = try #require(commit.entry(for: label)?.props?.text?.links.first?.rects.first)
+        #expect(link == CGRect(x: 62, y: 12, width: 40, height: 24))
+    }
+
     @Test func styleChangesDontRemeasureOrRedraw() throws {
         let label = text("Hello")
         let harness = Harness(root: box({ $0.alignItems = .flexStart }, children: [label]))

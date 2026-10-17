@@ -161,7 +161,7 @@ struct DrawingKey: Sendable, Equatable {
         /// A custom drawing, by the node's drawing version.
         case custom(UInt64)
         /// Text, by layout.
-        case text(UInt64)
+        case text(UInt64, inset: Insets)
     }
 
     var size: CGSize

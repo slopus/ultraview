@@ -66,12 +66,26 @@ public struct CoreTextMeasurer: TextMeasurer {
                 ctLines[ctLines.count - 1] = CTLineCreateWithAttributedString(source)
             } else {
                 let ellipsis = NSAttributedString(string: "\u{2026}", attributes: Self.attributes(for: style))
-                if paragraphEnd < length, paragraph.ellipsizeMode == .tail {
-                    // The cut is in a later paragraph: this line ends early.
-                    source.append(ellipsis)
+                let token = CTLineCreateWithAttributedString(ellipsis)
+                if paragraph.ellipsizeMode == .tail {
+                    // Like a label: the words that fit beside the ellipsis,
+                    // broken where a line would break, then the ellipsis.
+                    // Only a word too long for the line is cut mid-word.
+                    let start = lastRange.lowerBound
+                    let room = limit - CGFloat(CTLineGetTypographicBounds(token, nil, nil, nil))
+                    var end = start + max(0, CTTypesetterSuggestLineBreak(typesetter, start, Double(max(0, room))))
+                    end = min(end, paragraphEnd)
+                    while end > start, Self.isWhitespace(units[end - 1]) {
+                        end -= 1
+                    }
+                    if end > start {
+                        source.deleteCharacters(in: NSRange(location: end - start, length: source.length - (end - start)))
+                        source.append(ellipsis)
+                    } else if paragraphEnd < length {
+                        source.append(ellipsis)
+                    }
                 }
                 let full = CTLineCreateWithAttributedString(source)
-                let token = CTLineCreateWithAttributedString(ellipsis)
                 let type: CTLineTruncationType = switch paragraph.ellipsizeMode {
                 case .head: .start
                 case .middle: .middle
@@ -110,6 +124,9 @@ public struct CoreTextMeasurer: TextMeasurer {
             let typographicWidth = CGFloat(CTLineGetTypographicBounds(line, &ascent, &descent, &leading))
             let justified = paragraph.alignment == .justify && maxWidth != nil && !endsParagraph[index]
             let width = justified ? limit : max(0, typographicWidth - CGFloat(CTLineGetTrailingWhitespaceWidth(line)))
+            // A wrapped line's box keeps the space it broke at, as a label
+            // measures it; alignment uses the width without it.
+            let boxWidth = endsParagraph[index] ? width : min(typographicWidth, limit)
             let height: CGFloat
             let baseline: CGFloat
             if let lineHeight = paragraph.lineHeight {
@@ -120,13 +137,12 @@ public struct CoreTextMeasurer: TextMeasurer {
                 baseline = top + ascent
             }
             lines.append(.init(range: ranges[index], top: top, height: height, baseline: baseline, width: width, isJustified: justified))
-            widest = max(widest, width)
+            widest = max(widest, boxWidth)
             top += height
 
             if text.linkCount > 0 {
                 for run in CTLineGetGlyphRuns(line) as! [CTRun] {
-                    let range = CTRunGetStringRange(run)
-                    guard range.location >= 0, let link = text.run(at: range.location)?.link else { continue }
+                    guard let link = Self.textRun(of: run, in: text)?.link else { continue }
                     var position = CGPoint.zero
                     CTRunGetPositions(run, CFRange(location: 0, length: 1), &position)
                     let runWidth = CGFloat(CTRunGetTypographicBounds(run, CFRange(location: 0, length: 0), nil, nil, nil))
@@ -152,6 +168,10 @@ public struct CoreTextMeasurer: TextMeasurer {
         )
     }
 
+    private static func isWhitespace(_ unit: UInt16) -> Bool {
+        unit == 0x20 || unit == 0x09 || unit == 0xA0 || isLineBreak(unit)
+    }
+
     private static func isLineBreak(_ unit: UInt16) -> Bool {
         unit == 0x0A || unit == 0x0D || unit == 0x2028 || unit == 0x2029
     }
@@ -164,15 +184,29 @@ public struct CoreTextMeasurer: TextMeasurer {
         return CTRunGetStatus(first).contains(.rightToLeft)
     }
 
+    /// Marks each character with the index of its run in `AttributedText`.
+    /// Core Text groups glyphs into runs by font and color only; the mark
+    /// keeps spans that differ in other ways (backgrounds, decorations,
+    /// links) in separate glyph runs, and lets truncated lines, whose string
+    /// indices start over, find their spans.
+    static let runIndexKey = NSAttributedString.Key("UltraTextRunIndex")
+
     static func attributedString(for text: AttributedText) -> CFAttributedString {
         let result = NSMutableAttributedString(string: text.string)
-        for run in text.runs {
-            result.addAttributes(
-                attributes(for: run.style),
-                range: NSRange(location: run.range.lowerBound, length: run.range.count)
-            )
+        for (index, run) in text.runs.enumerated() {
+            var attributes = attributes(for: run.style)
+            attributes[runIndexKey] = index
+            result.addAttributes(attributes, range: NSRange(location: run.range.lowerBound, length: run.range.count))
         }
         return result
+    }
+
+    /// The `AttributedText` run a glyph run was laid out from; `nil` for an
+    /// ellipsis.
+    static func textRun(of run: CTRun, in text: AttributedText) -> AttributedText.Run? {
+        let attributes = CTRunGetAttributes(run) as NSDictionary
+        guard let index = attributes[runIndexKey.rawValue] as? Int, text.runs.indices.contains(index) else { return nil }
+        return text.runs[index]
     }
 
     static func attributes(for style: ResolvedTextStyle) -> [NSAttributedString.Key: Any] {
@@ -276,8 +310,14 @@ extension Color.Components {
 }
 
 extension TextDrawing {
-    func draw(in context: CGContext, bounds: CGRect) {
+    func draw(in context: CGContext, bounds box: CGRect) {
         guard let storage = layout.storage as? CoreTextLines else { return }
+        let bounds = CGRect(
+            x: box.minX + inset.left,
+            y: box.minY + inset.top,
+            width: max(0, box.width - inset.left - inset.right),
+            height: max(0, box.height - inset.top - inset.bottom)
+        )
         let text = layout.text
         context.clip(to: bounds)
         context.textMatrix = CGAffineTransform(scaleX: 1, y: -1)
@@ -289,8 +329,7 @@ extension TextDrawing {
 
             // Span backgrounds go under the glyphs.
             for run in runs {
-                let range = CTRunGetStringRange(run)
-                guard range.location >= 0, let color = text.run(at: range.location)?.style.backgroundColor else { continue }
+                guard let color = CoreTextMeasurer.textRun(of: run, in: text)?.style.backgroundColor else { continue }
                 let (runX, runWidth) = Self.extent(of: run)
                 context.setFillColor(color.cgColor)
                 context.fill(CGRect(x: x + runX, y: bounds.minY + line.top, width: runWidth, height: line.height))
@@ -300,8 +339,7 @@ extension TextDrawing {
             CTLineDraw(ctLine, context)
 
             for run in runs {
-                let range = CTRunGetStringRange(run)
-                guard range.location >= 0, let style = text.run(at: range.location)?.style, style.decorationLine != .none else { continue }
+                guard let style = CoreTextMeasurer.textRun(of: run, in: text)?.style, style.decorationLine != .none else { continue }
                 let attributes = CTRunGetAttributes(run) as NSDictionary
                 guard let fontValue = attributes[kCTFontAttributeName as String] else { continue }
                 let font = fontValue as! CTFont
