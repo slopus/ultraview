@@ -364,8 +364,8 @@ release, so a later hide cannot snap the content back.
 The historical chat-policy transitions in `Momentum` at `0e5c7b6` still describe
 that earlier host policy. The new host no longer tests whether content is at
 newest before a programmatic change. The conditional flight-translation and
-inset-placement lemmas retain their hypotheses; the revised host policy needs
-its own model update.
+inset-placement lemmas retain their hypotheses; the revised host policy is
+modeled in "Momentum and the keyboard at `b896af1`" below.
 
 `Proofs/UltraProofs/List/Preparation.lean` models `PreparationQueue`
 (PreparationQueue.swift) and how `UltraListView` drives it.
@@ -449,12 +449,13 @@ purge on the same serial queue), and the retention policy
 (`retainsPreparation`: ±80 rows, the pinned row, the pending target), which
 decides only when a sweep runs.
 
-## Momentum and the keyboard at `0e5c7b6`
+## Momentum and the keyboard at `b896af1`
 
 `Proofs/UltraProofs/List/Momentum.lean` models how a release, the physics
 engine's flight and keyboard (inset) changes interleave, with the chat
 screen's `followsComposer` policy that decides compensation. Events come in
-any order.
+any order. This section replaces the one at `0e5c7b6`, which modeled the
+earlier newest-edge policy.
 
 | Model (`Proofs/UltraProofs/List/Momentum.lean`) | Swift |
 | --- | --- |
@@ -462,33 +463,54 @@ any order.
 | `Baker` (structure fields: the first sample is the axis' offset and velocity) | `ScrollTrajectory(baking:)` with `FlightState(core:time:)` (ScrollCore.swift:79) |
 | `St.now` | `engine.sync()` (ScrollEngine.swift:144): the flight's offset now |
 | `Ev.touch` | `pan.touchDown` (ScrollEngine.swift:113) catching the flight, and `didTouchDown` clearing `holdsPinnedRow` (UltraListView.swift:144) |
-| `Ev.dragBegin` | `handleDragBegin` (UltraListView.swift:196) and the chat's `willBeginDragging` (ListChatController.swift:82-87) |
-| `Ev.drag` | a drag sample, and the chat's `onUserScrollDelta` (ListChatController.swift:88-93) |
-| `Ev.release` | `panned`/`receive` `.ended` (ScrollEngine.swift:285, :308): `endDrag` hands the release decision's velocity to `axis.release`, then `startMotion` bakes; the chat's `didEndDragging` (ListChatController.swift:94-97) |
-| `Ev.keyboard`, `keyboardFollows`, `kbShift` | `keyboardWillChange` (ListChatController.swift:172-193) and `applyComposerInset`'s `compensatesInsetChange: !isTracking && followsComposer` (:161), into `updateViewportInsets` (UltraListView.swift:558-594): the held-pin boundary, else `cheapFixed`, else 0, then `engine.shift(by:)` (:590) |
+| `Ev.dragBegin` | `handleDragBegin` (UltraListView.swift:196) and the chat's `willBeginDragging` recording the guide and setting `followsComposer` (ListChatController.swift:81-85) |
+| `Ev.drag` | a drag sample with the chat's `onUserScrollDelta` (:86-89), or a layout while tracking (:147): the guide more than a point from where the drag found it clears `followsComposer` |
+| `Ev.release` | `panned`/`receive` `.ended` (ScrollEngine.swift:285, :308): `endDrag` hands the release decision's velocity to `axis.release`, then `startMotion` bakes; the chat's `didEndDragging` sets `followsComposer` to whether the guide stayed (ListChatController.swift:90-93) |
+| `Ev.keyboard`, `keyboardFollows`, `kbShift` | `keyboardWillChange` (ListChatController.swift:162-183: a growing overlap with the finger up sets `followsComposer`) and `applyComposerInset`'s `compensatesInsetChange: !isTracking && followsComposer` (:159), into `updateViewportInsets` (UltraListView.swift:558-594): the held-pin boundary, else `cheapFixed`, else 0, then `engine.shift(by:)` (:590) |
+| `Ev.explicit` | the hide button (:103), `textViewDidChange` (:184-188) and `sendMessage` (:258-259) setting `followsComposer` |
 | `Ev.rebake` | the tick's `rebake` (ScrollEngine.swift:253), re-baked from the axis reseeded by `beginTick` |
 | `Ev.land`, `Ev.pinTarget` | the flight completing; `applyChanges(scrollTo:)` to the pinned row setting `holdsPinnedRow` (UltraListView.swift:307) |
 
 - `release_hands_velocity`, `keyboard_keeps_velocity`, `run_keeps_velocity`:
-  the flight starts with the release decision's velocity, and any number of
-  keyboard changes translate it without changing its velocity at any time.
-  The keyboard path calls `engine.shift(by:)` only, never `setOffset` or
-  `halt`. `rebake_continuous`: re-baking keeps the offset and the velocity at
-  the splice. `edges_keep_finiteness`: an inset change keeps which edges are
-  finite, so `setEdges` never takes its edge-discovery rebake for one.
+  the flight starts with the release decision's velocity, dismissal or not,
+  and any number of keyboard changes translate it without changing its
+  velocity at any time. The keyboard path calls `engine.shift(by:)` only,
+  never `setOffset` or `halt`. `rebake_continuous`: re-baking keeps the
+  offset and the velocity at the splice. `edges_keep_finiteness`: an inset
+  change keeps which edges are finite, so `setEdges` never takes its
+  edge-discovery rebake for one. These hold unchanged from `0e5c7b6`.
+- `grows_compensates`, `explicit_compensates`: with the finger up and no
+  pinned row held, a keyboard that grows compensates at any scroll position,
+  and after the hide button, a text change or Send every inset change does.
+  `run_follows`: compensation stays on through any events but an
+  interactive dismissal (the guide moving during a drag, or still moved at
+  its release).
+- `follows_moves_by_inset`: a compensated change moves the offset by exactly
+  the screen move (inset plus pin-slack change) whenever that destination
+  lies within the new edges, wherever the content is scrolled to, so the
+  content keeps its distance to the composer. Where it would leave them (an
+  inset shrinking with the oldest row at the far edge, say) the content
+  settles at the edge. `follows_rides_edge`: content at or past the top edge
+  always keeps its distance. With `ListPass.lockstep_iff`, the viewport
+  track then keeps it at a fixed distance from the composer at every frame
+  when the list and the composer share the keyboard's timing.
 - `no_write_unless_following`, `tracking_never_writes`: a keyboard change
   writes neither the offset nor the flight unless the pinned row is held or
   the chat compensates, and never while the finger is down.
-- `follows_rides_edge`: compensated content at or past the top edge `l`
-  ends exactly as far from the new edge `l - mv` as it was from `l`. With
-  `ListPass.lockstep_iff`, the viewport track then keeps it at a fixed
-  distance from the composer at every frame when the list and the composer
-  share the keyboard's timing.
+- `dismissal_latches`, `dismissed_never_moved`, `dismissal_then_quiet`: a
+  dismissal's release keeps compensation off, and no later keyboard shrink,
+  re-bake or landing writes the offset or the flight, so the hide that
+  finishes the dismissal does not snap the content. A growing keyboard, the
+  hide button, a text change, Send or a new drag turns compensation back on;
+  `untouched_drag_resumes`: a drag that leaves the guide alone does.
 - `run_unpinned`: after a touch, only a scroll target to the pinned row sets
   `holdsPinnedRow`, so the held-pin branch never re-pins content the user
-  moved. `dragged_off_never_moved`: once the finger is up, with no held pin
-  and the chat not following, no keyboard change moves the content, as long
-  as it reads off the edge whenever the keyboard grows.
+  moved.
+
+The hide button and Send set `followsComposer` even while tracking, and a
+text change only with the finger up; the model sets it in every case. While
+tracking nothing compensates, and the release then decides the latch, so
+the difference never reaches an offset write.
 
 The release decision itself (`ReleaseDecision.release`: velocity estimate,
 the 250 pt/s threshold, the multiplier streak) is an input. The client hook
@@ -685,11 +707,11 @@ items (the preparation queue), and the `passing` deferral.
   `purge_never_frees_hosted`, `sweep_never_drops_hosted`: a prepared root has
   at most one live host at every step, a new host never meets an attached
   renderer, and neither cleanup touches a hosted root.
-- `ListMomentum.run_keeps_velocity`, `no_write_unless_following`,
-  `follows_rides_edge`, `dragged_off_never_moved`: keyboard changes never
-  alter a flight's velocity, write the offset only for content the chat
-  follows (which keeps its distance to the edge) or a held pinned row, and
-  never move content the user dragged off the edge.
+- `ListMomentum.run_keeps_velocity`, `follows_moves_by_inset`,
+  `run_follows`, `dismissed_never_moved`: keyboard changes never alter a
+  flight's velocity; programmatic inset changes move the content with the
+  composer at any scroll position until an interactive dismissal, after
+  which nothing snaps it.
 - `ListReentry.guarded_pass_renders`: no engine callback renders a
   half-applied list, and a deferred render runs once the pass ends.
 - `ListFlight.flight_in_band`, `flight_rows_kept`: the flight stays in its

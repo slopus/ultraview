@@ -152,7 +152,7 @@ open UltraProofs
 #print axioms ListMomentum.tracking_never_writes
 #print axioms ListMomentum.follows_rides_edge
 #print axioms ListMomentum.run_unpinned
-#print axioms ListMomentum.dragged_off_never_moved
+#print axioms ListMomentum.dismissed_never_moved
 #print axioms ListReentry.guarded_pass_renders
 #print axioms ListReentry.guarded_consistent
 #print axioms ListReentry.unguarded_reads_outside
@@ -171,3 +171,10 @@ open UltraProofs
 #print axioms ListReadiness.stale_noop
 #print axioms ListReadiness.later_gen_lt
 #print axioms ListReadiness.resume_applies
+#print axioms ListMomentum.grows_compensates
+#print axioms ListMomentum.explicit_compensates
+#print axioms ListMomentum.run_follows
+#print axioms ListMomentum.follows_moves_by_inset
+#print axioms ListMomentum.dismissal_latches
+#print axioms ListMomentum.untouched_drag_resumes
+#print axioms ListMomentum.dismissal_then_quiet
