@@ -23,7 +23,10 @@ its own scroller. README.md explains what it is and how to use it.
    pinned to an exact release in Package.swift; bump it on purpose and update
    Package.resolved with it. The repo has no LICENSE yet; don't add one.
 3. **Swift 6 language mode, strict concurrency, no warnings.** No class
-   prefixes: module names are the namespace.
+   prefixes: module names are the namespace. The one exception is the public
+   component types `UltraNode`, `UltraTextNode` and `UltraScrollNode`, named
+   that way on request. Internal helper types stay unprefixed, and no type
+   shares its module's name (qualified lookup breaks).
 4. **iOS 26 and macOS 26 minimum** (`swift-tools-version: 6.2`). The tools
    version stays at 6.2 so Xcode 26 can read the manifest; don't raise it
    past what the oldest supported Xcode ships. The deployment target is set in
