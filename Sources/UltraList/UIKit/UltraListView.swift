@@ -231,7 +231,7 @@ public final class UltraListView: UltraScrollView {
         if !preparedMutation, newSize != nil || newInsets != nil { viewportRequest &+= 1 }
         if newItems == nil, newSize == nil, let newInsets, scrollTo == nil, additionalScrollDistance == 0,
            newInsets.left == viewport.insets.left, newInsets.right == viewport.insets.right,
-           !absorbsEdgeChangeIntoOverscroll, pendingItems == nil, scheduler.dirty.isEmpty, !settledWindow.rows.isEmpty {
+           !absorbsEdgeChangeIntoOverscroll, !settledWindow.rows.isEmpty {
             updateViewportInsets(newInsets, compensates: compensatesInsetChange, transition: transition)
             return
         }

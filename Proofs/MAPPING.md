@@ -352,6 +352,21 @@ that the destination exposes ready visible rows. Staging retains views, while
 node-host ownership remains with each view's displayed or pending slot, as in
 the host model below.
 
+The input follow-up after `72d9ec7` applies vertical-only viewport insets before
+pending dirty-row or collection work. It leaves that work queued and retains
+the current viewport request for its eventual pass. The inset placement
+equations and collection preparation queue are unchanged; choosing compensation
+for a programmatic keyboard/composer change is the host's policy. Interaction
+coverage now starts away from newest and observes the same surviving row
+through keyboard show, composer growth/shrink and programmatic hide in every
+engine. The interactive dismissal latch still disables compensation through
+release, so a later hide cannot snap the content back.
+The historical chat-policy transitions in `Momentum` at `0e5c7b6` still describe
+that earlier host policy. The new host no longer tests whether content is at
+newest before a programmatic change. The conditional flight-translation and
+inset-placement lemmas retain their hypotheses; the revised host policy needs
+its own model update.
+
 `Proofs/UltraProofs/List/Preparation.lean` models `PreparationQueue`
 (PreparationQueue.swift) and how `UltraListView` drives it.
 

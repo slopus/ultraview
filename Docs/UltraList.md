@@ -163,6 +163,9 @@ the old composer height until that collection applies. Its shrink shares the
 list's 0.3-second duration and viewport-animation start time, including time
 spent applying the prepared pass. The demo copies UIKit's generated geometry
 tracks to assign that start time.
+Ordinary typing starts growth immediately, including a new draft typed while
+Send is still preparing. Composer growth and shrink share the viewport's
+transaction; pending row work cannot delay a vertical inset update.
 In a compact vertical size class, the demo's screen, engine and blocker controls
 share one horizontal row so the keyboard leaves room for chat gestures. Seven
 keyboard interaction methods passed, including landscape dismissal in every
@@ -173,6 +176,13 @@ keyboard's notification supplies the occlusion target and duration in the same
 turn; `ListTransition.keyboard(_:)` applies the system keyboard spring to the
 viewport offset. The composer follows the keyboard layout guide. Noninteractive
 layout never reads an early guide destination into the list's inset.
+Programmatic keyboard show/hide and composer growth/shrink move visible content
+with the composer at every scroll position. A row-25 probe covers 21 phases
+across all three engines: show/hide move both by 252 points and growth/shrink
+by 74 points, with per-frame relative displacement below 0.001 point.
+This checkpoint passed 237 Linux tests, 373 simulator unit tests, seven keyboard
+interaction methods, the 21-phase motion and next-draft test, and eighteen
+Stream/Send scenarios.
 
 During an interactive drag, guide changes update the inset immediately, with
 anchor compensation disabled while the finger owns the motion. The inset-only
@@ -306,10 +316,10 @@ the current release policy and describe the simulator scenario, not device
 keyboard costs.
 
 Keyboard dismissal preserves the drag's release velocity in every engine.
-Content dragged away from newest keeps its position as the keyboard inset
-shrinks; the demo performs no end-drag or keyboard-hide scroll. A gesture that
-stays at newest, or returns there with the keyboard open, keeps following the
-composer. Only the scroll engine corrects a genuine edge overscroll. The
+Content involved in an interactive dismissal keeps its position as the keyboard
+inset shrinks; the demo performs no end-drag or keyboard-hide scroll. A gesture
+that leaves the keyboard open resumes normal compensation. Only the scroll
+engine corrects a genuine edge overscroll. The
 opt-in keyboard geometry probe records row presentation frames through release
 and for half a second after keyboard hide. Fast-release speed bounds remain
 diagnostic: presentation snapshots can repeat and catch up, and the probe does
@@ -388,7 +398,7 @@ bundle identifier so independent test runners retain their own identities.
 
 | Area | Implemented | Deferred or not yet validated |
 |---|---|---|
-| Keyboard | The composer follows the keyboard layout guide. The fixed inverted list receives the notified occlusion as its top inset. Content at newest follows the keyboard spring; content dragged away keeps its position and release momentum. Presentation-layer interaction checks cover all three engines. | The configuration matrix and current physical-device interaction remain to be measured. Earlier device cold entry and UIKit keyboard/input costs exceed 16.7 ms; measured limits are described below. |
+| Keyboard | The composer follows the keyboard layout guide. The fixed inverted list receives the notified occlusion as its top inset. Programmatic show/hide and composer size changes compensate at every scroll position. Interactive dismissal preserves finger placement and release momentum. Presentation-layer interaction checks cover all three engines. | Current physical-device interaction is blocked by the locked iPhone (passcode required, no developer image). Earlier device cold entry and UIKit keyboard/input costs exceed 16.7 ms; measured limits are described below. |
 | Accessibility | Hosted nodes apply accessibility properties; text nodes publish labels and static-text traits. Viewport-sized scroll actions follow screen direction, including inverted lists. Logical row focus survives virtualization and returns to a recreated descendant when available. | Physical VoiceOver interaction coverage, including custom accessibility-element containers. |
 | Node row revisions | Ready content remains visible until the newest replacement applies its visible commit; superseded candidates are discarded. | Node-internal property and text animations. Custom row hosts receive the pass transition; the default bridge animates its outer row geometry. |
 | Trackpad | Continuous indirect pan input has its own drag baseline and rubber-band coefficient. The physics model supports indirect replay. | Physical trackpad parity, indirect recording fixtures and discrete wheel input. The committed public gesture fixtures use direct touch. |
@@ -437,9 +447,9 @@ scenario.
 
 The expanded interaction test added four- and seven-line drafts that shrink the
 composer during Send. All eighteen scenarios passed, with no gap violations
-across 14,313 strict visible-pair samples; the newest row met the composer after
+across 14,340 strict visible-pair samples; the newest row met the composer after
 insertion in each multiline scenario. The maximum composer residual from the
-expected insertion curve was 0.205 point, below the test's one-point limit.
+expected insertion curve was 0.281 point, below the test's one-point limit.
 Measurements use presentation layers. Long-input button placement and typing
 the next message with the real software keyboard also passed.
 

@@ -369,6 +369,19 @@ private actor MeasurementGate: NodeRowMeasuring {
         list.haltScrolling()
         #expect(!list.isDecelerating)
     }
+    @Test(arguments: ScrollEngineMode.allCases) func verticalInsetsApplyBeforeADirtyRowIsRemeasured(mode: ScrollEngineMode) async throws {
+        let list = list(mode, count: 50)
+        let first = try #require(list.loadedItemView(at: 0) as? FixedRowView)
+        let passes = list.appliedPassCount
+        first.height = 80; first.onContentDidChange?(false)
+        list.applyChanges(newInsets: .init(top: 100), transition: .easeInOut(0.18))
+        #expect(list.viewportInsets.top == 100)
+        #expect(list.appliedPassCount == passes)
+        #expect(list.settledFrame(at: 0)?.height == 50)
+        for _ in 0..<50 where list.settledFrame(at: 0)?.height != 80 { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(list.settledFrame(at: 0)?.height == 80)
+        #expect(list.appliedPassCount > passes)
+    }
     @Test func insetExposureDoesNotAnimateRowsInFromTheWindowEdge() {
         let list = list()
         list.scrollTo(.init(index: 100), transition: .none)
