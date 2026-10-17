@@ -72,4 +72,20 @@ enum KeyboardReturnOrder: CaseIterable {
         #expect(state.end(height: 230) == nil && state.awaitsOutcome)
         #expect(state.keyboardOutcome(height: 300) == .returned(inset: 352, height: 300, displacement: 80))
     }
+
+    @Test func aNewDragAtAPartialHeightKeepsTheUnresolvedOriginalReturn() {
+        var state = KeyboardInsetGesture()
+        state.begin(inset: 352, height: 300, restingHeight: 34)
+        state.track(inset: 282, height: 230)
+        #expect(state.end(height: 230) == nil && state.awaitsOutcome)
+        let resumed = state.resumeTracking(inset: 282)
+        #expect(resumed)
+        #expect(state.isTracking && !state.awaitsOutcome)
+        state.track(inset: 262, height: 210)
+        #expect(state.end(height: 210) == nil)
+        #expect(state.keyboardOutcome(height: 300) == .returned(inset: 352, height: 300, displacement: 90))
+        let resumedAgain = state.resumeTracking(inset: 352)
+        #expect(!resumedAgain)
+        #expect(state.keyboardOutcome(height: 300) == nil)
+    }
 }

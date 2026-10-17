@@ -220,6 +220,13 @@ public final class UltraListView: UltraScrollView {
     public func scrollTo(_ target: ListScrollTarget, transition: ListTransition = .uiKitScroll()) {
         applyChanges(scrollTo: target, transition: transition)
     }
+    /// Lands only the viewport correction at its model value, keeping any engine
+    /// flight running. Does nothing when no viewport correction is animating.
+    public func finishViewportTransition() {
+        guard animations.model.tracks[.init(.viewport, .viewportOffset)] != nil else { return }
+        animations.replace(.viewport, .viewportOffset, from: 0, to: 0, at: animations.now, transition: .none)
+        renderAttachments(); reportVisibility()
+    }
 
     /// All options are captured intact if a callback re-enters the pass.
     public func applyChanges(items newItems: [any ListRow]? = nil, newSize: CGSize? = nil, newInsets: ListInsets? = nil, scrollTo: ListScrollTarget? = nil, additionalScrollDistance: Double = 0, anchorMode: ListAnchorMode = .automatic, compensatesInsetChange: Bool = true, absorbsEdgeChangeIntoOverscroll: Bool = false, animatesInsertions: Bool = true, transition requestedTransition: ListTransition = .default) {

@@ -117,6 +117,11 @@ and additional scroll distance participate in the same viewport transition.
 An unmeasured explicit target retains its transition until its measurement is
 ready; that retry uses the current viewport size and insets.
 
+`finishViewportTransition()` lands the viewport correction at its model value
+without stopping an engine flight. It does nothing when no viewport correction
+is animating. A host can use it when a system transition finishes early, even
+when the inset target has not changed.
+
 A row may request bottom pinning. Targeting it arms a latch; a user touch releases
 that latch. Slack remains clamped and supplies scroll room without becoming a
 second placement rule. Hosts decide when to target the pinned row. Keyboard
@@ -307,8 +312,16 @@ engine, with recorded drag samples and releases required by the assertions.
 The chat list keeps its full frame behind the composer and keyboard. The
 keyboard's notification supplies the occlusion target and duration in the same
 turn; `ListTransition.keyboard(_:)` applies the system keyboard spring to the
-viewport offset. The composer follows the keyboard layout guide. Noninteractive
-layout never reads an early guide destination into the list's inset.
+viewport offset. One owned composer inset positions the bar and the list in
+the same transaction. The guide supplies finger samples during a drag;
+noninteractive layout uses notification targets. The bar copies the viewport
+animation's timing, including its absolute start time.
+An undismissed interactive drag returns with an ease-in-out transition over the
+remaining fraction of the keyboard's full height, taken from its notification
+frame. That full height can exceed the overlap with the chat view. A notification
+whose begin and end frames are already below the window, or `keyboardDidHide`,
+finishes both clocks even if the inset target is unchanged. Scroll momentum
+continues through the finish.
 Programmatic keyboard show/hide and composer growth/shrink move visible content
 with the composer at every scroll position. A row-25 probe covers 21 phases
 across all three engines: show/hide move both by 252 points and growth/shrink

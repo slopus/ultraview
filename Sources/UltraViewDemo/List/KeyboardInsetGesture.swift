@@ -23,6 +23,13 @@ struct KeyboardInsetGesture: Sendable {
             ? .init(inset: inset, height: height, restingHeight: restingHeight, latestInset: inset)
             : nil
     }
+    mutating func resumeTracking(inset: Double) -> Bool {
+        guard awaitsOutcome else { return false }
+        isTracking = true
+        gesture?.latestInset = inset
+        gesture?.pendingHeight = nil
+        return true
+    }
     @discardableResult mutating func track(inset: Double, height: Double) -> Bool {
         guard isTracking else { return false }
         if let pending = gesture?.pendingHeight, abs(height - pending) <= 0.5 { return false }
