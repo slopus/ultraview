@@ -504,13 +504,15 @@ departing row against its neighbours on every frame. The demo's
 - the chat with the keyboard up.
 
 On an iPhone 17 Pro simulator (Debug) these interactions ran with zero layout,
-text or drawing on main. Main-thread p99 while swiping, carousel scrolling and
-deleting was 0.99–1.48 ms across engines. The worst seam between a departing
-row and its neighbours was 0.002 point; the buttons stayed attached within
-1e-13 point. A full-swipe delete in the 10,000-row feed has one 34–51 ms
-release turn: `applyChanges` diffs the whole collection on main in 26–40 ms and
-the demo rebuilds its item array in 5–6 ms. That cost belongs to collection
-diffing and scales with the row count; the chat's delete turn is about 11 ms.
+text or drawing on main. Main-thread p99 while swiping and deleting was
+0.8–1.7 ms across engines. Carousel scrolling measured 1.0–2.0 ms; the platform
+engine's carousel sits at the 2 ms budget. The worst seam between a departing
+row and its neighbours was 0.005 point; the buttons stayed attached within
+1e-13 point. A full-swipe delete in the 10,000-row feed has one release turn
+of roughly 30–50 ms: `applyChanges` diffs the whole collection on main in
+26–40 ms and the demo rebuilds its item array in 2–6 ms. That cost belongs to
+collection diffing and scales with the row count; the chat's delete turn is
+about 11 ms.
 
 The Xcode app target is `UltraViewDemoApp`, distinct from the SwiftPM demo library.
 The shared scheme is `UltraViewDemo`. `DEMO_BUNDLE_ID` overrides only the app's
