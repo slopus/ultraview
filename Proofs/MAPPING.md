@@ -1357,6 +1357,24 @@ notification whose begin and end frames are already off screen
 one leaves the gap off by `Δ (1 - q)`, the 90 points the bar's clock left
 before, with the same-inset guard.
 
+A running hide interrupted by that zero-duration notification lands at
+once. `keyboardFrameChanged` with `finishesHide` (ListChatController.swift:366-368)
+takes duration 0 and calls `applyComposerInset` with `.none`: if the
+inset changes, the list's immediate inset change removes the viewport track
+and `removeComposerAnimations` the bar's (:233, :240-241); if it doesn't,
+`finishesAnimation` removes both (:211-215). Either way, in one
+transaction: `interrupt_lands` (bar and content on their settled values,
+so the bar is at the final inset) and `interrupt_keeps_gap` (the bar's
+residual is a copy of the viewport's, so they share one; their distance
+is the settled one before, at and after the land, on any curve, an
+overshooting spring included: the jump is common). `interrupt_one_off`:
+landing one alone leaves the gap off by what the other's residual shows
+(`interrupt_sample`: 4.5 points with a 90-point residual overshot by 5%).
+The engine's flight goes on: `finish_keeps_engine`, or for an inset that
+changes `keyboard_keeps_velocity`. The shared residual holds while the
+viewport's compensated move equals the inset's (`follows_moves_by_inset`,
+content inside the edges); content held at an edge has its own.
+
 ## Elastic resize at `44f8a0c`
 
 `Proofs/UltraProofs/List/Elastic.lean` covers a bubble that resizes with its

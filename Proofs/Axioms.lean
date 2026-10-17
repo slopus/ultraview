@@ -110,6 +110,10 @@ open UltraProofs
 #print axioms ListPass.lockstep_iff
 #print axioms ListPass.finish_together
 #print axioms ListPass.finish_alone
+#print axioms ListPass.interrupt_lands
+#print axioms ListPass.interrupt_keeps_gap
+#print axioms ListPass.interrupt_one_off
+#print axioms ListPass.interrupt_sample
 #print axioms ListPass.chat_lockstep
 #print axioms ListPass.ghost_follows_witness
 #print axioms ListInsets.edgesAt_translate

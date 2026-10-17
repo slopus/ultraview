@@ -42,6 +42,10 @@ All positions here are at one progress `p` of the pass's timing; by
   this to the inverted chat, whose top inset is the composer's occlusion.
   `finish_together`, `finish_alone`: landing both in one turn keeps the
   distance; landing one alone opens it by what is left of the other's move.
+  `interrupt_lands`, `interrupt_keeps_gap`, `interrupt_one_off`: a running
+  hide interrupted by an immediate land puts the bar and the content on
+  their settled values; when they share one residual their distance is the
+  settled one before, at and after the land, on any curve.
 * `ghost_follows_witness`: a departure block welded to a surviving row's
   edge stays on it through the pass when it starts there.
 * `inserted_gap`, `inserted_once`: an inserted row and its neighbour, both
@@ -270,6 +274,50 @@ the content landed while the input's clock runs on at progress `q`. -/
 theorem finish_alone (content input Δ q : Rat) :
     gapAt content input Δ 1 q - (content - input) = Δ * (1 - q) := by
   simp only [gapAt]; grind
+
+/-! ### A running hide interrupted by an immediate land
+
+The bar and the viewport each show their settled value plus an additive
+residual track ending at 0. A notification that reports the keyboard
+already hidden (zero duration) removes both residuals in one transaction:
+the bar's animations go and the viewport track finishes, or an immediate
+inset change replaces it. -/
+
+/-- A settled value plus a running residual, if one runs. -/
+def shownWith (C : Curves) (model : Rat) (res : Option Track) (t : Rat) : Rat :=
+  model + match res with
+    | some r => r.value C t
+    | none => 0
+
+/-- **After the land, both show their settled values**, at every time. -/
+theorem interrupt_lands (C : Curves) (bar content t : Rat) :
+    shownWith C bar none t = bar ∧ shownWith C content none t = content := by
+  simp only [shownWith]; constructor <;> grind
+
+/-- **Sharing one residual, the land keeps their distance**: before it, at
+any time and on any curve (an overshooting spring included), and after it,
+the bar and the content are their settled distance apart, so the jump at the
+land is common to both. -/
+theorem interrupt_keeps_gap (C : Curves) (bar content : Rat) (r : Track) (t0 t : Rat) :
+    shownWith C bar (some r) t0 - shownWith C content (some r) t0 = bar - content ∧
+      shownWith C bar none t - shownWith C content none t = bar - content := by
+  simp only [shownWith]; constructor <;> grind
+
+/-- **Landing only one leaves the other's residual**: the gap is off by
+what the still-running residual shows. -/
+theorem interrupt_one_off (C : Curves) (bar content : Rat) (r : Track) (t : Rat) :
+    shownWith C bar (some r) t - shownWith C content none t = bar - content + r.value C t := by
+  simp only [shownWith]; grind
+
+/-- A hide spring 0.9 of its way along a 90-point residual that has
+overshot by 5%: landing only the viewport leaves the bar 4.5 points past
+its place; landing both leaves both on it. -/
+def overshot : Curves := ⟨fun _ x _ => if x = 0 then 0 else 21 / 20, fun _ _ => by simp⟩
+
+theorem interrupt_sample :
+    shownWith overshot 0 (some ⟨1, 90, 0, 0, ⟨1, 0, 1⟩⟩) (9 / 10) - shownWith overshot 0 none (9 / 10) = -9 / 2 ∧
+      shownWith overshot 0 none (9 / 10) = 0 := by
+  decide +kernel
 
 /-- **The inverted chat.** The composer's top is at `c` on screen; the list
 is flipped, so its top inset is the occlusion `H - c + gap` and a content
