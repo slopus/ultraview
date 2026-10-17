@@ -425,7 +425,10 @@ public final class ListSwipeController: NSObject, UIGestureRecognizerDelegate {
         guard let list, view.superview != nil, let fade = view.layer.animation(forKey: "ultraview.list.opacity") as? CABasicAnimation else { return }
         let space = list.contentView, ghost = view.convert(view.bounds, to: space)
         let neighbours = list.loadedIndexRange.compactMap { list.loadedItemView(at: $0) }.map { ($0, $0.convert($0.bounds, to: space)) }
-        func moving(_ entry: (ListRowView, CGRect)?) -> Bool? { entry.map { $0.0.layer.animation(forKey: "ultraview.list.positionY") != nil } }
+        // A row moves through its position track or through the position layers its neighbours' heights add.
+        func moving(_ entry: (ListRowView, CGRect)?) -> Bool? {
+            entry.map { $0.0.layer.animationKeys()?.contains { $0 == "ultraview.list.positionY" || $0.hasPrefix("ultraview.list.size") } == true }
+        }
         let below = neighbours.filter { $0.1.minY >= ghost.minY - 0.5 }.min { $0.1.minY < $1.1.minY }
         let above = neighbours.filter { $0.1.maxY <= ghost.maxY + 0.5 }.max { $0.1.maxY < $1.1.maxY }
         let keepsTop = moving(below) ?? !(moving(above) ?? false)
