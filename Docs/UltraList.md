@@ -202,7 +202,7 @@ bundle identifier so independent test runners retain their own identities.
 | Node row revisions | Ready content remains visible until the newest replacement applies its visible commit; superseded candidates are discarded. | Node-internal property and text animations. Custom row hosts receive the pass transition; the default bridge animates its outer row geometry. |
 | Trackpad | Continuous indirect pan input has its own drag baseline and rubber-band coefficient. The physics model supports indirect replay. | Physical trackpad parity, indirect recording fixtures and discrete wheel input. The committed public gesture fixtures use direct touch. |
 | Paging | Hosts can supply measured row targets and append new data through `applyChanges`. | Built-in page snapping and network loading policy. |
-| Attachments | Run serial continuity, top/bottom floating maps, reserved space, member trimming, one-level partner yielding, ownership, stick distance, flight keyframes and departure behavior have math and simulator coverage. The feed demonstrates reserving section headers. | A physical-device scenario combining partner yielding, pinning, keyboard movement and navigation. Render-server depth and commit-delay sweeps remain empirical work. |
+| Attachments | Run serial continuity, top/bottom floating maps, reserved space, member trimming, one-level partner yielding, ownership, stick distance, flight keyframes and departure behavior have math and simulator coverage. The feed demonstrates reserving section headers. A physical probe combines partner yielding, pinning and keyboard movement. | Navigation during that combined physical scenario. Render-server depth and commit-delay sweeps remain empirical work. |
 
 The timing probes count layout, text measurement and drawing on main separately
 from busy turns. Zero such operations does not imply that all UIKit input or
@@ -213,6 +213,19 @@ Add `-listHostProbe YES` to the keyboard probe to combine a streaming pin with
 reserving date headers and partner-yielding sender headers. Its exported states
 record pin placement, inset changes and attachment geometry before and after
 keyboard/send/dismissal. Sending releases the streaming pin deliberately.
+
+The final iPhone 12 Release probe held the strict streaming pin as keyboard
+occlusion changed from 60 to 312 points, released it on Send, and returned to
+60 points after dismissal. Two headers remained finite before Send and three
+afterward. Feed busy turns measured 38.37 ms maximum and 5.25 ms p99; ordinary
+chat measured 38.76 ms and 2.08 ms. The combined keyboard probe measured
+128.78 ms and 2.28 ms, including keyboard show at 114.32 ms, field clearing at
+92.02 ms, list application at 0.287 ms and insertion setup at 0.034 ms.
+All three probes recorded zero layout, text measurement or drawing on main.
+The separate 12-phase node scenario passed its regression budgets; host
+application peaked at 9.46 ms. Startup, some switches and rotation still
+exceeded the strict 16.67 ms benchmark. These final probes were unprofiled;
+the stack observations below come from an earlier baseline.
 
 A profiled iPhone 12 baseline measured keyboard show at 120.17 ms, filling the
 field at 31.95 ms, clearing it at 84.12 ms, list application at 0.199 ms and the
