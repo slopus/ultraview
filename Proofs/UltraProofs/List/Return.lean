@@ -39,7 +39,11 @@ notifications and layouts do nothing.
 * `resume_keeps_start`, `resume_resolution`: a drag that begins while the
   outcome is awaited resumes the gesture, keeping the first drag's start,
   so the return covers both drags. `resume_sample`: beginning afresh
-  instead leaves the displacement in place for good.
+  instead leaves the displacement in place for good. `dragBegin_open`,
+  `dragBegin_closed`, `dragBegin_partial`, `dragBegin_Q`: the whole drag
+  begin settles a waiting gesture the guide already decides (a return
+  once, or the dismissal) before beginning afresh, resumes it at a partial
+  height, and adds at most one return.
 * `touch_loses`, `touch_drops`: an outcome that resolves while a new touch
   is down after the release, and whose return the controller does not
   apply, loses the return for good.
@@ -496,6 +500,64 @@ theorem resume_resolution (c : C) (g : G) (hg : c.gesture = some g) (hr : g.rele
   have hrun : run c (.resume i :: pre ++ .release gd :: post) =
       run (step c (.resume i)) (pre ++ .release gd :: post) := rfl
   rw [hrun, e5, h2]
+
+/-- The chat's drag begin as a whole (`keyboardDragBegan`): a waiting
+gesture whose outcome the guide already shows at the drag's start is
+resolved first (its return applied), and the drag then begins afresh with
+the inset `s` it leaves; at a partial height the drag resumes the waiting
+gesture from `s`; with no waiting gesture it begins afresh. -/
+def dragBegin (c : C) (s h r : Rat) : C :=
+  match c.gesture with
+  | some g =>
+    if g.released then
+      (if g.isOpen h || g.isClosed h then step (resolve c g h) (.begin s h r) else step c (.resume s))
+    else step c (.begin s h r)
+  | none => step c (.begin s h r)
+
+/-- **The keyboard back open at the drag's start returns first**, once, and
+the drag begins afresh. -/
+theorem dragBegin_open (c : C) (g : G) (hg : c.gesture = some g) (hr : g.released = true) {s h r : Rat}
+    (ho : g.isOpen h = true) (hk : r + 1 / 2 < h) :
+    (dragBegin c s h r).shifts = c.shifts ++ [g.start - g.latest] ∧
+      (dragBegin c s h r).gesture = some ⟨s, h, r, s, none, false⟩ := by
+  simp [dragBegin, hg, hr, ho, resolve, step, hk]
+
+/-- **The keyboard closed at the drag's start is the dismissal**: nothing
+returns, and the drag, starting with the keyboard at rest, records no
+gesture. -/
+theorem dragBegin_closed (c : C) (g : G) (hg : c.gesture = some g) (hr : g.released = true) {s h : Rat}
+    (ho : g.isOpen h = false) (hc : g.isClosed h = true) :
+    (dragBegin c s h g.resting).shifts = c.shifts ∧ (dragBegin c s h g.resting).gesture = none := by
+  have hk : ¬g.resting + 1 / 2 < h := by
+    simp only [G.isClosed, decide_eq_true_eq] at hc; grind
+  simp [dragBegin, hg, hr, ho, hc, resolve, step, hk]
+
+/-- **At a partial height the drag resumes** the waiting gesture. -/
+theorem dragBegin_partial (c : C) (g : G) (hg : c.gesture = some g) (hr : g.released = true) {s h r : Rat}
+    (ho : g.isOpen h = false) (hc : g.isClosed h = false) : dragBegin c s h r = step c (.resume s) := by
+  simp [dragBegin, hg, hr, ho, hc]
+
+/-- **A drag begin adds at most one return**, to the waiting gesture it
+settles. -/
+theorem dragBegin_Q (c : C) (s h r : Rat) : Q (dragBegin c s h r) ≤ Q c + 1 := by
+  unfold dragBegin
+  cases hg : c.gesture with
+  | none => simpa [Ev.isBegin] using step_Q c (.begin s h r)
+  | some g =>
+    simp only []
+    split
+    · split
+      · have h2 := step_Q (resolve c g h) (.begin s h r)
+        simp only [Ev.isBegin, ite_true] at h2
+        -- A resolution that settles trades the gesture's slot for the return.
+        unfold resolve at h2 ⊢
+        split
+        · simp [Q, step] at h2 ⊢; split <;> simp [hg] <;> omega
+        · split
+          · simp [Q, step] at h2 ⊢; split <;> simp [hg] <;> omega
+          · rename_i hno hnc; simp_all
+      · simpa [Ev.isBegin] using step_Q c (.resume s)
+    · simpa [Ev.isBegin] using step_Q c (.begin s h r)
 
 /-- The sample: a drag from inset 300 with the keyboard 336 tall (resting
 34) lifts at inset 200 and height 150, and the keyboard waits there. A

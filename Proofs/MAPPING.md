@@ -1195,7 +1195,14 @@ never lifted, against the first start, so an open return restores the
 original inset. `resume_sample`: beginning afresh from the displaced inset
 (the behaviour at `f683c2f`) takes the partial height as the new starting
 one, and the keyboard opening back up never matches it, so the displacement
-stays for good. The rows map to the Swift when it lands.
+stays for good. The whole drag begin is `dragBegin`: a waiting gesture whose
+outcome the guide already shows at the drag's start is resolved and its
+return applied first, then the drag begins afresh from the inset that
+leaves (`dragBegin_open`: one return, a fresh snapshot; `dragBegin_closed`:
+the dismissal, no return, no gesture since the keyboard is at rest);
+otherwise it resumes from `composerInset`, which nothing changes while the
+gesture waits (`dragBegin_partial`). `dragBegin_Q`: a drag begin adds at
+most one return. The rows map to the Swift when it lands.
 
 Momentum rows at `f683c2f` (the section at `b896af1` maps the earlier
 controller): the model's tracking is `isTrackingKeyboard` (:23), which adds

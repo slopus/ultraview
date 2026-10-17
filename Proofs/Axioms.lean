@@ -319,5 +319,9 @@ open UltraProofs
 #print axioms ListReturn.resume_keeps_start
 #print axioms ListReturn.resume_resolution
 #print axioms ListReturn.resume_sample
+#print axioms ListReturn.dragBegin_open
+#print axioms ListReturn.dragBegin_closed
+#print axioms ListReturn.dragBegin_partial
+#print axioms ListReturn.dragBegin_Q
 #print axioms ListReturn.touch_loses
 #print axioms ListReturn.touch_drops
