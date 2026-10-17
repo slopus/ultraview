@@ -162,12 +162,18 @@ final class NodeRowMotion {
             guard let transition, !transition.isImmediate, let view else { return nil }
             return Self.timing(for: transition, in: view)
         }
-        // Content that arrived after its pass: in phase with the row's
-        // running height animation.
+        // Content that arrived after its pass joins the row's running size
+        // animation where the row is along it, from where the content is
+        // shown, so it covers the rest of its way as the row covers the rest.
         guard let transition, !transition.isImmediate else { return nil }
-        if let layer = view?.layer, let running = layer.animation(forKey: Self.heightKey), running.beginTime != 0,
+        if let layer = view?.layer, let running = layer.animation(forKey: Self.heightKey) as? CABasicAnimation, running.beginTime != 0,
            let timing = NodeAnimationTiming(matching: running), now < timing.beginTime + timing.activeDuration {
-            return timing
+            if timing.staysWithinItsEnds, let progress = Self.progress(of: running, on: layer), progress < 0.98 {
+                return timing.joined(at: progress)
+            }
+            // A spring that overshoots would carry the content's overshoot
+            // further than the row's; past the end, nothing is left to join.
+            return NodeAnimationTiming(duration: 0.15, timingFunction: CAMediaTimingFunction(name: .easeOut))
         }
         // Otherwise only content changes animate, over what is left of the
         // pass's transition.
@@ -175,6 +181,14 @@ final class NodeRowMotion {
         let remaining = transitionTime + transition.duration - now
         guard remaining > 0.05 else { return nil }
         return Self.timing(for: .init(duration: remaining, curve: transition.curve), in: view)
+    }
+
+    /// The share of its way `animation` has covered on `layer` as shown.
+    private static func progress(of animation: CABasicAnimation, on layer: CALayer) -> Double? {
+        guard let keyPath = animation.keyPath, let from = (animation.fromValue as? NSNumber)?.doubleValue,
+              let to = (animation.toValue as? NSNumber)?.doubleValue, abs(to - from) >= 0.5,
+              let shown = (layer.presentation()?.value(forKeyPath: keyPath) as? NSNumber)?.doubleValue else { return nil }
+        return max(0, (shown - from) / (to - from))
     }
 
     /// The timing of animations the pass added in this turn: the row's own,

@@ -942,22 +942,22 @@ row's edge at every frame. A `Track` is one scalar of a frame (a
 `CABasicAnimation` interpolates a `CGRect` or `CGPoint` value componentwise
 with one progress); an edge in row coordinates is a sum of such scalars on
 one timing, which is again a track on it. (First mapped at `44f8a0c`; the
-per-axis retiming and the moved content are `163e3f0`'s, and the other rows
-are unchanged since.)
+per-axis retiming and the moved content are `163e3f0`'s, the late join is
+the commit after `cecd483`'s, and line numbers are as of that commit.)
 
-| Model (`Proofs/UltraProofs/List/Content.lean`) | Swift at `163e3f0` |
+| Model (`Proofs/UltraProofs/List/Content.lean`) | Swift after `cecd483` |
 | --- | --- |
-| a `Track`'s `start`, `transition` | a `CABasicAnimation`'s begin time, duration, speed and curve or spring, held by `NodeAnimationTiming` (NodeTransitionAnimator.swift:11) and copied by `animation(_:from:to:)` (:75) |
-| `Shared` | `NodeAnimationTiming.isTiming(of:)` (NodeTransitionAnimator.swift:52): same begin (within 1e-6), duration, speed, offset, and curve or spring |
+| a `Track`'s `start`, `transition` | a `CABasicAnimation`'s begin time, duration, speed and curve or spring, held by `NodeAnimationTiming` (NodeTransitionAnimator.swift:11) and copied by `animation(_:from:to:)` (:104) |
+| `Shared` | `NodeAnimationTiming.isTiming(of:)` (NodeTransitionAnimator.swift:81): same begin (within 1e-6), duration, speed, offset, and curve or spring |
 | a new timing at `t0` | `NodeRowLayer.add` (NodeRowTransition.swift:21-31) reporting the list's height or width animation to `NodeRowMotion.rowDidAnimate` (:142-156), which takes its timing only when `beginTime == 0` (added in this transaction, so it begins at the commit) |
-| `retime`, `retimes` | `NodeTransitionAnimator.retime(root:_:axis:)` (NodeTransitionAnimator.swift:316-335), called through `retimeTransitions` from `rowDidAnimate` (NodeRowTransition.swift:148-155): every transition animation under the root not on the timing restarts toward its `toValue`; with an axis, x or y key paths of the other axis are skipped (:321) |
-| `retime`'s `tr.value C t0` | the start value: the presentation layer's value (:325-326); `retime_unstarted`: an animation with `beginTime == 0` has not started and restarts from `fromValue` (:323-324) |
-| `retime_same` | the `!timing.isTiming(of: running)` skip (:320) |
+| `retime`, `retimes` | `NodeTransitionAnimator.retime(root:_:axis:)` (NodeTransitionAnimator.swift:348-367), called through `retimeTransitions` from `rowDidAnimate` (NodeRowTransition.swift:148-155): every transition animation under the root not on the timing restarts toward its `toValue`; with an axis, x or y key paths of the other axis are skipped (:353) |
+| `retime`'s `tr.value C t0` | the start value: the presentation layer's value (:357-358); `retime_unstarted`: an animation with `beginTime == 0` has not started and restarts from `fromValue` (:355-356) |
+| `retime_same` | the `!timing.isTiming(of: running)` skip (:352) |
 | the row's track restarted from its presented value | `ListAnimationModel.transition`/`retime` (ListAnimation.swift:222, :234) with the height resumed from the row's presentation captured at the pass's start (`capturePositions`, AnimationController.swift:44-57, `resumeValue` :204-205) |
-| a track that continues unchanged | `value(...)`'s carrier copy (NodeTransitionAnimator.swift:409-424): a new tree's layer takes the old layer's running animation when it ends at the same value |
-| `Axis`, `onAxis` | `TransitionAxis(keyPath:)` (LayoutTransition.swift:236-248): `position.x`, `bounds.size.width`, `bounds.origin.x` horizontal, the `y` and height paths vertical, anything else none; `rowDidAnimate` takes the axis from the row animation's key path (NodeRowTransition.swift:152), and `retime` skips key paths of the other axis (NodeTransitionAnimator.swift:321), so each axis's key paths see only its own row animation's retimings |
+| a track that continues unchanged | `value(...)`'s carrier copy (NodeTransitionAnimator.swift:441-456): a new tree's layer takes the old layer's running animation when it ends at the same value |
+| `Axis`, `onAxis` | `TransitionAxis(keyPath:)` (LayoutTransition.swift:236-248): `position.x`, `bounds.size.width`, `bounds.origin.x` horizontal, the `y` and height paths vertical, anything else none; `rowDidAnimate` takes the axis from the row animation's key path (NodeRowTransition.swift:152), and `retime` skips key paths of the other axis (NodeTransitionAnimator.swift:353), so each axis's key paths see only its own row animation's retimings |
 | `axes_keep` | the two filters together: x and y insets each through `retimes_keep` on their own row animation |
-| `shift` | `TransitionShift.start(from:to:target:)` (LayoutTransition.swift:254-259), `from + (target - to)`, applied by `NodeTransitionAnimator.shift(root:from:)` (NodeTransitionAnimator.swift:341-364): a copy of the old view's running animation (same begin, duration, speed and curve) on the matching new view, from that start to the new model value |
+| `shift` | `TransitionShift.start(from:to:target:)` (LayoutTransition.swift:254-259), `from + (target - to)`, applied by `NodeTransitionAnimator.shift(root:from:)` (NodeTransitionAnimator.swift:373-396): a copy of the old view's running animation (same begin, duration, speed and curve) on the matching new view, from that start to the new model value |
 | content replaced with no timing | `NodeRowMotion.show`'s `else` branch (NodeRowTransition.swift:116-122): `replacementTiming()` is `nil` (an immediate pass, or one whose time is up), so `NodeHostView.continueTransitions(from:)` (NodeHostView.swift:317-322) calls `shift` |
 | the row's moved track | `ListAnimationModel.transition`'s immediate branch (ListAnimation.swift:212-219): `from + new - to`, same start and transition, which is `shift` of the row's height |
 
@@ -986,11 +986,11 @@ Both start values are read from the same rendered frame: the inner one from
 its presentation layer in `retime`, the row's from the presentation captured
 at the pass's start, in the same main-thread turn. Where a layer has no
 presentation yet, `retime` uses the value its carrier showed when the
-animation was copied (`shownKey`, :327-328), else `fromValue`; the model
+animation was copied (`shownKey`, :359-360), else `fromValue`; the model
 assumes that is the value at `t0`. Not covered:
 
 - content that arrives after its pass (`replacementTiming`,
-  NodeRowTransition.swift:160-178) joins the running height animation at its
+  NodeRowTransition.swift:160-184) joins the running height animation at its
   phase, from the old tree's snapshot: `edge_lerp` holds (one progress), but
   its start inset is the snapshot's, not the row's at the animation's begin,
   so `edge_constant` does not apply; with no running height animation it
@@ -1007,9 +1007,12 @@ assumes that is the value at `t0`. Not covered:
   (`join_remap`), which stays within `[s, T]` from the join on for any
   curve that moves forward without overshooting (`join_within`); a spring's
   overshoot past its end is magnified by `1 / (1 - p)` (`clamp_sample`: 25
-  points past at `p = 0.9` where the row is 2.5 past). f4yx's chosen fix
-  (hash to come, `NodeAnimationTiming.joined(at:)` and
-  `TransitionJoin.start(shown:to:progress:)`): unclamped on the row's timing
+  points past at `p = 0.9` where the row is 2.5 past). The fix, in the commit
+  after `cecd483` (`NodeAnimationTiming.joined(at:)` and
+  `staysWithinItsEnds`, NodeTransitionAnimator.swift:51-79, applied in
+  `animation(_:from:to:)` :109-111; `TransitionJoin.start(shown:to:progress:)`,
+  LayoutTransition.swift:264-271; chosen in `replacementTiming` :169-177 with
+  `progress(of:on:)` :187-192), not yet mapped row by row: unclamped on the row's timing
   when it can't overshoot, `p` read from the row's value progress, which is
   its curve progress (`valueProgress_eq`); a basic curve with control
   points in `[0, 1]` never moves backward and stays in `[0, 1]`
@@ -1021,7 +1024,7 @@ assumes that is the value at `t0`. Not covered:
   from `s` to `T`: no jump and lands on `T` (`catchup_ends`), off the row's
   clock until then. Colors and transforms keep the jump;
 - in `shift`, a child whose parent is unmatched: positions carry only
-  within a matched parent (NodeTransitionAnimator.swift:347-352), so its
+  within a matched parent (NodeTransitionAnimator.swift:379-384), so its
   position lands at the new value while the row still moves, outside
   `shift_keeps`. Its size, opacity and radius still carry. Values that are
   not single numbers (colors, transforms) land, which has no inset

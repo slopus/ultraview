@@ -10,6 +10,9 @@ import UltraLayout
 @MainActor
 public struct NodeAnimationTiming {
     let template: CABasicAnimation
+    /// The value progress at which animations join this timing, if they
+    /// join one already running.
+    private(set) var joinProgress: Double?
 
     /// The timing of `animation`, including its begin time once it has
     /// one. `nil` for animations that aren't basic or spring animations.
@@ -41,6 +44,32 @@ public struct NodeAnimationTiming {
     /// When the animations begin, in layer time; 0 until the transaction
     /// that adds them commits.
     public var beginTime: CFTimeInterval { template.beginTime }
+
+    /// The same timing for animations joining it at value progress
+    /// `progress` (the share of its way an animation on it has covered):
+    /// each starts from where its layer shows it and arrives with the rest.
+    public func joined(at progress: Double) -> NodeAnimationTiming {
+        var joined = self
+        joined.joinProgress = min(max(progress, 0), 0.999)
+        return joined
+    }
+
+    /// Whether values on this timing stay between their two ends: a curve
+    /// that doesn't overshoot, or a spring damped enough not to.
+    public var staysWithinItsEnds: Bool {
+        if let spring = template as? CASpringAnimation {
+            // A damping ratio of 0.99 overshoots by less than 1e-9; springs
+            // meant to be critical are often written a digit short of it.
+            return spring.initialVelocity == 0 && spring.damping >= 0.99 * 2 * (spring.stiffness * spring.mass).squareRoot()
+        }
+        guard let function = template.timingFunction else { return true }
+        for index in 1...2 {
+            var point: [Float] = [0, 0]
+            function.getControlPoint(at: index, values: &point)
+            if point[1] < 0 || point[1] > 1 { return false }
+        }
+        return true
+    }
 
     /// How long they run, in layer time.
     public var activeDuration: CFTimeInterval {
@@ -77,6 +106,9 @@ public struct NodeAnimationTiming {
         animation.keyPath = keyPath
         animation.fromValue = from
         animation.toValue = to
+        if let joinProgress, let shown = (from as? NSNumber)?.doubleValue, let end = (to as? NSNumber)?.doubleValue {
+            animation.fromValue = TransitionJoin.start(shown: shown, to: end, progress: joinProgress)
+        }
         animation.isAdditive = false
         animation.delegate = nil
         animation.fillMode = .both

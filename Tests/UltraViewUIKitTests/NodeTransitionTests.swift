@@ -168,5 +168,50 @@ import UltraView
             #expect(abs(height - (88 + 60 * phase + 40)) < 0.01, "phase \(phase): \(height)")
         }
     }
+
+    @Test func contentJoiningARunningTimingStartsWhereItIsShown() async throws {
+        let (root, _) = bubble("Hello")
+        let hosted = Hosted(root, size: CGSize(width: 320, height: 100))
+        defer { hosted.window.isHidden = true }
+        await hosted.settle()
+        let before = hosted.host.transitionSnapshot()
+        hosted.host.frame.size.height = 160
+        hosted.host.layoutIfNeeded()
+        await hosted.settle()
+        let host = hosted.host
+        host.layer.speed = 0
+        host.layer.timeOffset = 1.5
+        // A row halfway along a linear second when the new layout arrives.
+        let template = CABasicAnimation()
+        template.beginTime = 1
+        template.duration = 1
+        template.timingFunction = CAMediaTimingFunction(name: .linear)
+        let timing = try #require(NodeAnimationTiming(matching: template))
+        #expect(timing.staysWithinItsEnds)
+        host.animateTransition(from: before, timing: timing.joined(at: 0.5))
+
+        let box = try layer(host, "bubble")
+        // The box goes 88 -> 148: from 88 at the join, over the row's rest.
+        for (time, expected) in [(1.5, 88.0), (1.75, 118.0), (2.0, 148.0)] {
+            CATransaction.begin(); CATransaction.setDisableActions(true)
+            host.layer.timeOffset = time
+            CATransaction.commit(); CATransaction.flush()
+            try await Task.sleep(for: .milliseconds(35))
+            let height = try #require(box.presentation()).bounds.height
+            #expect(abs(height - expected) < 0.01, "at \(time): \(height)")
+        }
+    }
+
+    @Test func overshootingSpringsAreTold() throws {
+        let damped = CASpringAnimation()
+        damped.mass = 1; damped.stiffness = 180; damped.damping = 8
+        #expect(try #require(NodeAnimationTiming(matching: damped)).staysWithinItsEnds == false)
+        let critical = CASpringAnimation()
+        critical.mass = 1; critical.stiffness = 555.027; critical.damping = 47.118
+        #expect(try #require(NodeAnimationTiming(matching: critical)).staysWithinItsEnds)
+        let back = CABasicAnimation()
+        back.timingFunction = CAMediaTimingFunction(controlPoints: 0.3, 1.4, 0.6, 1)
+        #expect(try #require(NodeAnimationTiming(matching: back)).staysWithinItsEnds == false)
+    }
 }
 #endif

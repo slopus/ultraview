@@ -257,3 +257,15 @@ public enum TransitionShift {
         from + (target - to)
     }
 }
+
+/// Content that joins a running animation partway, on its timing: it starts
+/// from where it is shown and covers the rest of the way to its destination
+/// as the animation covers the rest of its own.
+public enum TransitionJoin {
+    /// The start that, at value progress `progress` of the timing, shows
+    /// `shown`, and at the end shows `to`. It lies beyond `shown`, away from
+    /// `to`, at a progress already past.
+    public static func start(shown: Double, to: Double, progress: Double) -> Double {
+        (shown - to * progress) / (1 - progress)
+    }
+}

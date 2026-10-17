@@ -423,6 +423,21 @@ import UltraLayout
         }
     }
 
+    @Test func joiningPartwayShowsTheCurrentValueAndCoversTheRestInStep() {
+        // A bubble 90 high whose layout is now 140 joins a row halfway.
+        let start = TransitionJoin.start(shown: 90, to: 140, progress: 0.5)
+        #expect(start == 40)
+        func value(_ progress: Double) -> Double { start + (140 - start) * progress }
+        #expect(value(0.5) == 90 && value(1) == 140)
+        // From the join on it covers the rest as the row covers its rest.
+        for progress in [0.5, 0.6, 0.75, 0.9, 1.0] {
+            #expect(abs(value(progress) - (90 + 50 * (progress - 0.5) / 0.5)) < 1e-9)
+            #expect(value(progress) >= 90 && value(progress) <= 140)
+        }
+        #expect(abs(TransitionJoin.start(shown: 30, to: 30, progress: 0.7) - 30) < 1e-9)
+        #expect(TransitionJoin.start(shown: 12, to: 4, progress: 0) == 12)
+    }
+
     @Test func aShiftedAnimationKeepsItsMotionAndEndsAtTheNewTarget() {
         // A height running 100 -> 160 whose destination becomes 200 at once.
         let start = TransitionShift.start(from: 100, to: 160, target: 200)
