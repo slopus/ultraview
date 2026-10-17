@@ -466,6 +466,36 @@ purge on the same serial queue), and the retention policy
 (`retainsPreparation`: ±80 rows, the pinned row, the pending target), which
 decides only when a sweep runs.
 
+## Node transitions at the commit that adds this section
+
+Node rows can now animate their content (`NodeRow.animatesContent`). This
+section records how that touches the mapped Swift; nothing here is a new
+machine-checked result.
+
+- `Pass.Deps`: `makeProps` also reads the node's `transitionKey`, which
+  comes from synced node state like every other prop, and text props also
+  carry line boxes taken from the text layout they already used.
+  `drawingInput` adds a contents placement (top-anchored text,
+  nine-slice boxes, or fill), a function of the inputs it already read.
+  Dependencies keep the shape `deps_of_inputs` requires.
+- `Entry.apply`: `CommitApplier.apply` also sets the layer's contents
+  gravity and center from that placement when the placement changes. The
+  entries applied, and their order, are unchanged.
+- `Hosts.lean`, `S.start`: a prepared content can hold a `staged` host,
+  made in `NodeRow.prepare` for the content's root before any row view
+  checks it out. `checkout` uses it in place of making one and clears it,
+  so `staged` is set only while `host` is `nil`, and a root still has at
+  most one host. Until the checkout, the staged host is owned by the
+  prepared content, not by a row view, so a sweep that drops the content
+  frees it. The model doesn't cover the staged state.
+- The animations themselves (`NodeTransitionAnimator`, `NodeRowMotion`)
+  run after a commit applies, as Core Animation, and are outside the
+  model. The invariant they keep (inner frames use the row height
+  animation's begin time, duration and curve, so a node sized with the row
+  keeps its edges on the row's edges in every frame) is checked in the
+  simulator by `NodeTransitionTests`; `Content.lean` (below) proves the
+  timing argument for its model, which is not yet mapped to this Swift.
+
 ## Momentum and the keyboard at `b896af1`
 
 `Proofs/UltraProofs/List/Momentum.lean` models how a release, the physics

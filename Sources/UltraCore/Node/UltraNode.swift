@@ -39,6 +39,8 @@ open class UltraNode: @unchecked Sendable {
     @MainActor var mountedChildren: [UltraNode] = []
     /// The properties last applied to `mountedView`.
     @MainActor var appliedProps: ViewProps?
+    /// The bitmap last applied to `mountedView`.
+    @MainActor var appliedContents: Contents?
     #endif
 
     public init(style: Style = Style(), children: [UltraNode] = []) {
@@ -120,6 +122,15 @@ open class UltraNode: @unchecked Sendable {
             }
             setNeedsSync(redraw: true)
         }
+    }
+
+    /// Matches this node with its counterpart in another revision of the
+    /// tree, so a layout transition animates it from where that one was
+    /// (see `NodeHostView.animateTransition(from:timing:)`). Unique within
+    /// a tree; the roots match without one.
+    public var transitionKey: String? {
+        get { state.withLock { $0.transitionKey } }
+        set { update(\.transitionKey, newValue) }
     }
 
     /// A name for debugging.

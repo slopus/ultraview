@@ -25,12 +25,43 @@ public struct Contents: Sendable {
     /// The image: a `CGImage` on Apple platforms. Tests on other platforms
     /// put any token here.
     public let image: any Sendable
+    /// How the bitmap sits in a view whose size differs from it, as while
+    /// the view's frame animates. Set by the pipeline from what was drawn.
+    public internal(set) var placement: ContentsPlacement = .fill
 
     public init(size: CGSize, scale: CGFloat, image: any Sendable) {
         id = IDs.contents.next()
         self.size = size
         self.scale = scale
         self.image = image
+    }
+}
+
+/// How a bitmap fits a view of another size. A bitmap is drawn at its
+/// node's final size; while a frame animates toward that size, text must
+/// not stretch and a drawn box must keep its corners.
+public enum ContentsPlacement: Sendable, Equatable {
+    /// Stretched to fill the view.
+    case fill
+    /// Unscaled, against the view's top edge, placed horizontally like its
+    /// lines.
+    case top(TextLayout.Alignment)
+    /// Edge bands this wide keep their size; the middle stretches. For a
+    /// drawn box, whose corners and borders lie in the bands.
+    case stretch(Insets)
+
+    /// The placement for a box drawn at `size`: bands as wide as its widest
+    /// corner or border on every side, leaving at least one pixel to
+    /// stretch in each direction.
+    static func stretching(_ box: BoxStyle, size: CGSize, scale: CGFloat) -> ContentsPlacement {
+        let radii = box.radii
+        let band = max(radii.topLeft, radii.topRight, radii.bottomLeft, radii.bottomRight,
+                       box.widths.top, box.widths.left, box.widths.bottom, box.widths.right)
+        let pixel = 1 / max(scale, 1)
+        let horizontal = min(band, max(0, (size.width - pixel) / 2))
+        let vertical = min(band, max(0, (size.height - pixel) / 2))
+        guard horizontal > 0 || vertical > 0 else { return .fill }
+        return .stretch(Insets(top: vertical, left: horizontal, bottom: vertical, right: horizontal))
     }
 }
 

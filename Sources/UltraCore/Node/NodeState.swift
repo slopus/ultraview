@@ -24,6 +24,7 @@ struct NodeState: Sendable {
     /// For a scroll node's content container: lay children out in a row.
     var isHorizontalContent = false
     var debugName: String?
+    var transitionKey: String?
 
     init(style: Style) {
         self.style = style

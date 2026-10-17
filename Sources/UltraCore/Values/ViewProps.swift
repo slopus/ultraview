@@ -26,6 +26,8 @@ public struct ViewProps: Sendable, Equatable {
     public var accessibility = AccessibilityProps()
     public var text: TextViewProps?
     public var scroll: ScrollViewProps?
+    /// The node's `transitionKey`.
+    public var transitionKey: String?
 
     public init() {}
 }
@@ -73,6 +75,9 @@ public struct TextViewProps: Sendable, Equatable {
     public var links: [TextLinkRegion]
     /// Draw a highlight over a pressed span.
     public var highlightsPress: Bool
+    /// The lines the bitmap shows, in the view's coordinates, when the
+    /// bitmap shows only text. Layout transitions compare them.
+    public var lines: TextTransitionLines?
 }
 
 public struct TextLinkRegion: Sendable, Equatable {

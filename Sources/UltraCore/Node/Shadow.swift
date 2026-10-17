@@ -52,6 +52,15 @@ final class Shadow {
     /// The last constraint supplied by the flex layout measure callback.
     var textMeasureWidth: CGFloat?
     var hasTextMeasureWidth = false
+    /// The text node this one is the trailing accessory of: its measurement
+    /// depends on this node's size.
+    weak var accessoryOwner: UltraTextNode?
+    /// How the owner's text and this accessory shared space in the last
+    /// layout.
+    var accessoryFit: TrailingAccessoryFit?
+    /// The line summary handed to the main thread, for the layout and inset
+    /// it was made from.
+    var transitionLines: (layout: UInt64, inset: Insets, width: CGFloat, lines: TextTransitionLines)?
 
     // MARK: Scrolling
 

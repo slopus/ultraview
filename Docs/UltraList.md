@@ -45,8 +45,41 @@ During a revision, the ready host remains visible until its replacement applies
 the current-size visible commit. A shrinking row keeps its tall ready host until
 the animated outer clip reaches the new height, then reveals the shorter host.
 A newer revision discards a pending replacement.
-Outer row geometry animates with the pass; `NodeRow` does not animate node-internal
-property or text changes. Custom row hosts receive the transition through `apply`.
+Outer row geometry animates with the pass. By default `NodeRow` swaps in a new
+revision's content at its final layout, so a growing row's clip wipes it in.
+Custom row hosts receive the transition through `apply`.
+
+A `NodeRow` created with `animatesContent: true` animates its content instead.
+Nodes with a `transitionKey` are matched between the shown revision and the new
+one. Their frames, opacity, color, corner radius and transform animate from
+where they are on screen, and their bitmaps crossfade. Text that only gained
+lines or words keeps its unchanged lines still and reveals the rest through a
+mask, while removed text fades out. Every one of these animations copies the
+timing (begin time, duration, curve) of the row's own height animation. The
+row's layer reports the height and width animations the list adds, and running
+node animations move onto each new one, so a node sized with its row keeps its
+edges on the row's edges in every frame, including when a later pass retimes the
+row. When a row with this flag is on screen, a new revision is drawn off the
+main thread before its pass applies, so the swap and its animations happen in
+the pass's transaction and no frame shows a blank row. An optional
+`NodeRowAppearance` plays the first time a row shows: it grows keyed nodes out
+of frames in window coordinates, such as a text field, or scales and fades them
+in about a corner, on the timing of the pass that inserts the row. The main
+thread only reads frames and adds Core Animation animations; nothing runs per
+frame.
+
+`UltraTextNode.trailingAccessory` places a node, such as a message's time,
+after the text's last line when it fits there and on a line of its own when it
+doesn't. The text's measurement includes it, off the main thread.
+
+Simulator tests (`NodeTransitionTests`) pause a host's time and read the
+presentation tree at points along one timing: a box with fixed margins in a
+growing row keeps them, and the text inside keeps its padding. In the Chat
+demo with bubbles on a development branch, a keyboard-up run (Stream, then
+Send at 0.5 s and 1.5 s) found no clipped bubble frame in any engine, where
+the card rows (`animatesContent` off) clip a growing card's bottom by up to
+16 pt for about 350 ms on every growth. That demo, its probe and its timings
+land separately.
 
 The preload window defaults to 160 points beyond the viewport. The list requests
 up to 80 nearby asynchronous measurements, with the predicted direction first.
@@ -534,7 +567,7 @@ bundle identifier so independent test runners retain their own identities.
 |---|---|---|
 | Keyboard | The composer follows the keyboard layout guide. The fixed inverted list receives the notified occlusion as its top inset. Programmatic show/hide and composer size changes compensate at every scroll position. Interactive dismissal preserves finger placement and release momentum. Presentation-layer interaction checks cover all three engines. | Current physical-device interaction is blocked by the locked iPhone (passcode required, no developer image). Earlier device cold entry and UIKit keyboard/input costs exceed 16.7 ms; measured limits are described below. |
 | Accessibility | Hosted nodes apply accessibility properties; text nodes publish labels and static-text traits. Viewport-sized scroll actions follow screen direction, including inverted lists. Logical row focus survives virtualization and returns to a recreated descendant when available. | Physical VoiceOver interaction coverage, including custom accessibility-element containers. |
-| Node row revisions | Ready content remains visible until the newest replacement applies its visible commit; superseded candidates are discarded. | Node-internal property and text animations. Custom row hosts receive the pass transition; the default bridge animates its outer row geometry. |
+| Node row revisions | Ready content remains visible until the newest replacement applies its visible commit; superseded candidates are discarded. With `animatesContent`, keyed nodes, text and bitmaps animate on the row's height timing. | Rows without `animatesContent` (the default, and the demo's cards) still swap content at its final layout under the row's clip. Measured main-thread cost while content animates. |
 | Trackpad | Continuous indirect pan input has its own drag baseline and rubber-band coefficient. The physics model supports indirect replay. | Physical trackpad parity, indirect recording fixtures and discrete wheel input. The committed public gesture fixtures use direct touch. |
 | Paging | Hosts can supply measured row targets and append new data through `applyChanges`. | Built-in page snapping and network loading policy. |
 | Swipe actions | Leading and trailing actions, full swipe with one haptic per crossing, one open row, closing on drag, tap or another swipe, collapse on delete, VoiceOver custom actions. Presentation-layer simulator tests and real synthesized drags cover all three engines and the inverted chat. | Device timing. In the stepped engine, a tap that stops a fling still presses the content under it (a list-core issue; keyframe and the platform engine don't). Tapping the platform engine mid-fling can't be automated. |

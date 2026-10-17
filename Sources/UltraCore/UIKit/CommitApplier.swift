@@ -114,6 +114,7 @@ extension UltraNode {
         mountedChildren = []
         mountedView = nil
         appliedProps = nil
+        appliedContents = nil
     }
 
     @MainActor
@@ -135,11 +136,17 @@ extension UltraNode {
         case .set(let contents)?:
             view.layer.contents = contents.cgImage
             view.layer.contentsScale = contents.scale
+            if appliedContents?.placement != contents.placement || entry.kind == .mount {
+                contents.placement.apply(to: view, size: contents.size)
+            }
+            appliedContents = contents
         case .clear?:
             view.layer.contents = nil
+            appliedContents = nil
         case nil:
             if entry.kind == .mount {
                 view.layer.contents = nil
+                appliedContents = nil
             }
         }
         if let children = entry.children {
@@ -262,6 +269,39 @@ enum ViewPropsApplier {
                 view.alpha = props.opacity
             }
         }
+    }
+}
+
+extension ContentsPlacement {
+    /// Sets how the view shows a bitmap of `size` when its bounds differ.
+    @MainActor
+    func apply(to view: UIView, size: CGSize) {
+        switch self {
+        case .fill:
+            view.contentMode = .scaleToFill
+            view.layer.contentsCenter = CGRect(x: 0, y: 0, width: 1, height: 1)
+        case .top(let alignment):
+            view.contentMode = switch alignment {
+            case .left: .topLeft
+            case .center: .top
+            case .right: .topRight
+            }
+            view.layer.contentsCenter = CGRect(x: 0, y: 0, width: 1, height: 1)
+        case .stretch(let insets):
+            view.contentMode = .scaleToFill
+            view.layer.contentsCenter = contentsCenter(size: size, insets: insets)
+        }
+    }
+
+    /// The stretchable middle in unit coordinates of a bitmap of `size`.
+    func contentsCenter(size: CGSize, insets: Insets) -> CGRect {
+        guard size.width > 0, size.height > 0 else { return CGRect(x: 0, y: 0, width: 1, height: 1) }
+        return CGRect(
+            x: insets.left / size.width,
+            y: insets.top / size.height,
+            width: max(0, size.width - insets.left - insets.right) / size.width,
+            height: max(0, size.height - insets.top - insets.bottom) / size.height
+        )
     }
 }
 

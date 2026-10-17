@@ -22,6 +22,8 @@ fileprivate final class PreparedNodeContent: ListPreparedContent {
     let size: CGSize
     weak var host: NodeHostView?
     weak var owner: NodeRowView?
+    /// Drawn ahead, outside a window, until a row view checks it out.
+    var staged: NodeHostView?
     var hasLiveHost: Bool { host != nil }
     init(root: UltraNode, size: CGSize) { self.root = root; self.size = size }
     func checkout(owner: NodeRowView) -> NodeHostView {
@@ -30,8 +32,9 @@ fileprivate final class PreparedNodeContent: ListPreparedContent {
             if self.owner !== owner { self.owner?.release(host) }
             result = host
         } else {
-            result = NodeHostView(rootNode: root); host = result
+            result = staged ?? NodeHostView(rootNode: root); host = result
         }
+        staged = nil
         self.owner = owner
         return result
     }
@@ -46,6 +49,16 @@ public final class NodeRow: ListRow {
     public var attachments: [String: any ListAttachment]
     public var measuresAsynchronously: Bool { true }
     public let measurementEnvironment: UInt64
+    /// Whether a new revision's nodes animate from where the shown
+    /// revision's were, on the row's own timing (see `transitionKey`). Such a
+    /// row draws a revision before its pass applies when the identity is on
+    /// screen, so the change shows in the pass's own transaction.
+    public let animatesContent: Bool
+    /// How content animates in the first time this row is shown. A row with
+    /// an appearance is drawn before its pass applies.
+    public let appearance: NodeRowAppearance?
+    /// The appearance plays once, the first time any view shows this row.
+    var appearanceShown = false
     private let factory: @Sendable () -> UltraNode
     private let measurer: any NodeRowMeasuring
     private let environment: RenderEnvironment?
@@ -54,8 +67,9 @@ public final class NodeRow: ListRow {
     // Lists call prepare instead and own the returned content themselves.
     private var prepared: [PreparedKey: PreparedNodeContent] = [:]
 
-    public init(identity: String, revision: UInt64 = 0, pinsToBottomEdge: Bool = false, attachments: [String: any ListAttachment] = [:], environment: RenderEnvironment? = nil, measurer: any NodeRowMeasuring = NodeRowMeasurer(), makeNode: @escaping @Sendable () -> UltraNode) {
+    public init(identity: String, revision: UInt64 = 0, pinsToBottomEdge: Bool = false, attachments: [String: any ListAttachment] = [:], environment: RenderEnvironment? = nil, measurer: any NodeRowMeasuring = NodeRowMeasurer(), animatesContent: Bool = false, appearance: NodeRowAppearance? = nil, makeNode: @escaping @Sendable () -> UltraNode) {
         self.identity = identity; self.revision = revision; self.pinsToBottomEdge = pinsToBottomEdge
+        self.animatesContent = animatesContent; self.appearance = appearance
         self.attachments = attachments; self.environment = environment; self.measurer = measurer; factory = makeNode
         measurementEnvironment = environment.map(environmentKey) ?? 0
     }
@@ -77,10 +91,22 @@ public final class NodeRow: ListRow {
             return (root, size)
         }.value
         guard result.1.height.isFinite, result.1.height >= 0 else { return nil }
-        return ListPreparation(height: result.1.height, content: PreparedNodeContent(root: result.0, size: result.1))
+        let content = PreparedNodeContent(root: result.0, size: result.1)
+        if animatesContent, appearance != nil && !appearanceShown || NodeRowLiveness.isLive(identity) {
+            // Drawn now, so the pass that shows it can swap in the same
+            // transaction as its own animations.
+            let host = NodeHostView(rootNode: result.0)
+            content.staged = host
+            await host.prepareContent(size: .init(width: width, height: result.1.height), environment: resolved)
+        }
+        return ListPreparation(height: result.1.height, content: content)
     }
     public func makeView() -> ListRowView { NodeRowView(row: self) }
-    public func apply(to view: ListRowView, transition: ListTransition) { (view as? NodeRowView)?.row = self }
+    public func apply(to view: ListRowView, transition: ListTransition) {
+        guard let view = view as? NodeRowView else { return }
+        view.row = self
+        if animatesContent { view.motion.passWillApply(transition) }
+    }
     fileprivate func preparedContent(width: Double, environment: RenderEnvironment) -> PreparedNodeContent? {
         prepared[.init(width: width, environment: environmentKey(self.environment ?? environment))]
     }
@@ -100,11 +126,28 @@ fileprivate final class NodeRowView: ListRowView {
     private var displayedSize = CGSize.zero
     private var revealDeadline: Double?
     private var preparing: (row: NodeRow, width: Double, environment: UInt64)?
+    /// What a host this view gave away showed, until this view shows a host again.
+    private var releasedSnapshot: UIView?
     override var isDisplayReady: Bool { displayedHost != nil }
-    init(row: NodeRow) { self.row = row; super.init(frame: .zero); clipsToBounds = true }
+    let motion = NodeRowMotion()
+    override class var layerClass: AnyClass { NodeRowLayer.self }
+    init(row: NodeRow) {
+        self.row = row; super.init(frame: .zero); clipsToBounds = true
+        motion.view = self
+        (layer as? NodeRowLayer)?.onAnimationAdded = { [weak self] animation, key in
+            guard let self, self.row.animatesContent else { return }
+            motion.rowDidAnimate(animation, key: key)
+        }
+    }
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window != nil, row.animatesContent { NodeRowLiveness.add(self, identity: row.identity) }
+    }
     fileprivate func release(_ host: NodeHostView) {
+        guard displayedHost === host || pendingHost === host else { return }
         if !host.isHidden, let snapshot = host.snapshotView(afterScreenUpdates: false) {
-            snapshot.frame = host.frame; addSubview(snapshot)
+            releasedSnapshot?.removeFromSuperview()
+            snapshot.frame = host.frame; addSubview(snapshot); releasedSnapshot = snapshot
         }
         if displayedHost === host { displayedHost = nil }
         if pendingHost === host { pendingHost = nil; pendingCandidate = nil; revealDeadline = nil }
@@ -113,6 +156,29 @@ fileprivate final class NodeRowView: ListRowView {
     }
     private func showPreparedHost(_ host: NodeHostView) {
         guard pendingHost === host, host.hasContent else { return }
+        if row.animatesContent {
+            // The new nodes animate from where the old ones are; the row's
+            // own clip follows its height.
+            let old = displayedHost
+            displayedSize = pendingCandidate?.size ?? host.bounds.size
+            displayedHost = host; pendingHost = nil
+            releasedSnapshot?.removeFromSuperview(); releasedSnapshot = nil
+            pendingCandidate = nil; revealDeadline = nil
+            host.clipsToBounds = false
+            host.frame = .init(origin: .zero, size: displayedSize); host.isHidden = false
+            let appearance = row.appearanceShown ? nil : row.appearance
+            row.appearanceShown = true
+            CATransaction.begin(); CATransaction.setDisableActions(true)
+            motion.show(host, replacing: old, appearance: appearance)
+            CATransaction.commit()
+            old?.removeFromSuperview()
+            reportDisplayReady()
+            if let next = queuedCandidate {
+                queuedCandidate = nil
+                if next.content.root !== host.rootNode { start(next) }
+            }
+            return
+        }
         // Keep the old tall content while the render server clips it down.
         // A short replacement would otherwise make the visible card jump.
         if revealDeadline == nil {
@@ -132,6 +198,7 @@ fileprivate final class NodeRowView: ListRowView {
         displayedHost?.removeFromSuperview()
         displayedSize = pendingCandidate?.size ?? host.bounds.size
         displayedHost = host; pendingHost = nil
+        releasedSnapshot?.removeFromSuperview(); releasedSnapshot = nil
         pendingCandidate = nil; revealDeadline = nil
         host.frame = .init(origin: .zero, size: displayedSize); host.isHidden = false
         reportDisplayReady()
@@ -187,6 +254,9 @@ fileprivate final class NodeRowView: ListRowView {
             start(candidate)
         }
         setNeedsLayout()
+    }
+    override func visibleRectUpdated(_ rect: CGRect?) {
+        if row.animatesContent { motion.passDidComplete() }
     }
     override func layoutSubviews() {
         super.layoutSubviews()

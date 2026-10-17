@@ -58,6 +58,12 @@ public final class NodeHostView: UIView {
     private var spentSinceFrame: CFTimeInterval = 0
     /// The request that set the current size.
     private var sizeRequest: UInt64 = .max
+    /// The environment to lay out and draw in while outside a window, from
+    /// `prepareContent(size:environment:)`.
+    private var preparedEnvironment: RenderEnvironment?
+    private var completionWaiters: [UInt64: CheckedContinuation<Void, Never>] = [:]
+    private var nextWaiter: UInt64 = 0
+    let transitions = NodeTransitionAnimator()
 
     public init(rootNode: UltraNode, measurer: (any TextMeasurer)? = nil, rasterizer: (any Rasterizer)? = nil) {
         self.rootNode = rootNode
@@ -105,6 +111,7 @@ public final class NodeHostView: UIView {
         MainActor.assumeIsolated {
             frameLink?.invalidate()
             rootNode.unmountView()
+            for waiter in completionWaiters.values { waiter.resume() }
         }
     }
 
@@ -153,6 +160,9 @@ public final class NodeHostView: UIView {
     }
 
     private func currentEnvironment() -> RenderEnvironment {
+        if window == nil, let preparedEnvironment {
+            return preparedEnvironment
+        }
         let traits = traitCollection
         let scale = traits.displayScale > 0 ? traits.displayScale : (window?.screen.scale ?? 3)
         return RenderEnvironment(
@@ -211,6 +221,113 @@ public final class NodeHostView: UIView {
             hasContent = true
         }
         onCommit?()
+        if isContentComplete, !completionWaiters.isEmpty {
+            let waiters = completionWaiters
+            completionWaiters.removeAll()
+            for waiter in waiters.values { waiter.resume() }
+        }
+    }
+
+    /// Whether every view of the layout for the current size exists: the
+    /// host has content and no off-screen work is waiting for a frame.
+    public var isContentComplete: Bool {
+        hasContent && !queue.hasWork
+    }
+
+    /// Lays the tree out at `size` in `environment` and creates all its
+    /// views and bitmaps, outside a window, returning once they are ready.
+    /// The main thread never waits: the work runs off it, and views are
+    /// created within `mountBudget` per frame. A host shown afterward, in a
+    /// window with the same environment, shows its content in the same
+    /// transaction it is added in.
+    ///
+    /// Returns early, with the content still on its way, after `timeout`
+    /// seconds or when the calling task is cancelled.
+    public func prepareContent(size: CGSize, environment: RenderEnvironment, timeout: TimeInterval = 0.5) async {
+        if window == nil, preparedEnvironment != environment {
+            preparedEnvironment = environment
+            renderer.update { $0.environment = environment }
+        }
+        setSize(size)
+        guard !isContentComplete, !Task.isCancelled else { return }
+        nextWaiter += 1
+        let waiter = nextWaiter
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                completionWaiters[waiter] = continuation
+                DispatchQueue.main.asyncAfter(deadline: .now() + timeout) { [weak self] in
+                    self?.completionWaiters.removeValue(forKey: waiter)?.resume()
+                }
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                self?.completionWaiters.removeValue(forKey: waiter)?.resume()
+            }
+        }
+    }
+
+    // MARK: Layout transitions
+
+    /// The tree as it is on screen now, as a layout transition's start.
+    public func transitionSnapshot() -> NodeTransitionSnapshot {
+        NodeTransitionAnimator.snapshot(of: rootNode, presented: true)
+    }
+
+    /// Animates the views from `snapshot` to the layout they show now, on
+    /// `timing`: in the transaction that shows the new layout (usually
+    /// right after its commit is applied), with no work per frame.
+    ///
+    /// The snapshot may come from another host showing another revision of
+    /// the tree: nodes match by `transitionKey`, and the roots match. Matched
+    /// nodes move and resize from where they were, keyed nodes without a
+    /// match fade in or out, a bitmap that changed crossfades, and text that
+    /// grew reveals only what was added.
+    public func animateTransition(from snapshot: NodeTransitionSnapshot, timing: NodeAnimationTiming) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        transitions.animate(root: rootNode, from: snapshot, timing: timing)
+        CATransaction.commit()
+    }
+
+    /// Animates keyed nodes in as the tree first appears.
+    public func animateAppearance(_ appearances: [NodeAppearance], timing: NodeAnimationTiming) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        transitions.appear(root: rootNode, appearances, timing: timing)
+        CATransaction.commit()
+    }
+
+    /// Moves the transition animations still running onto `timing`, from
+    /// where they are now, toward the same layout.
+    public func retimeTransitions(_ timing: NodeAnimationTiming) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        transitions.retime(root: rootNode, timing)
+        CATransaction.commit()
+    }
+
+    /// The view of the mounted node with `key` as its `transitionKey`, as
+    /// of the last applied commit.
+    public func view(forTransitionKey key: String) -> UIView? {
+        func find(_ node: UltraNode) -> UIView? {
+            guard let view = node.mountedView else { return nil }
+            if node.appliedProps?.transitionKey == key { return view }
+            for child in node.mountedChildren {
+                if let found = find(child) { return found }
+            }
+            return nil
+        }
+        return find(rootNode)
+    }
+
+    /// Whether a layout transition is still playing.
+    public var isAnimatingTransition: Bool {
+        transitions.isAnimating(root: rootNode)
+    }
+
+    /// Ends every layout transition at once, at the new layout.
+    public func cancelTransitions() {
+        transitions.cancel(root: rootNode)
     }
 
     private func startFrameLink() {

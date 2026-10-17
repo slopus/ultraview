@@ -583,6 +583,7 @@ final class Renderer: @unchecked Sendable {
                     node: node,
                     drawing: input.drawing,
                     key: input.key,
+                    placement: input.placement,
                     sentinel: node.displaySentinel.load(ordering: .relaxed),
                     isVisible: shadow.interfaceState.contains(.visible)
                 ))
@@ -635,6 +636,7 @@ final class Renderer: @unchecked Sendable {
             )
         }
         props.isHidden = style.layout.display == .none
+        props.transitionKey = state.transitionKey
         props.pointerEvents = style.pointerEvents
         props.hitSlop = style.hitSlop
         props.isPressable = !state.handlers.isEmpty
@@ -651,15 +653,24 @@ final class Renderer: @unchecked Sendable {
         return props
     }
 
-    private func drawingInput(for node: UltraNode, state: NodeState, box: BoxStyle, pass: Pass) -> (drawing: any Drawing, key: DrawingKey)? {
+    private func drawingInput(for node: UltraNode, state: NodeState, box: BoxStyle, pass: Pass) -> (drawing: any Drawing, key: DrawingKey, placement: ContentsPlacement)? {
         let size = node.shadow.frame.size
         guard size.width > 0, size.height > 0 else { return nil }
         let drawnBox = box.isLayerRepresentable || box.isEmpty ? nil : box
         let content = node.contentDrawing(state: state)
         guard drawnBox != nil || content != nil else { return nil }
+        let placement: ContentsPlacement
+        if let text = content?.drawing as? TextDrawing {
+            placement = drawnBox == nil ? .top(text.layout.alignment) : .fill
+        } else if let drawnBox, content == nil {
+            placement = .stretching(drawnBox, size: size, scale: pass.environment.scale)
+        } else {
+            placement = .fill
+        }
         return (
             NodeDrawing(box: drawnBox, content: content?.drawing),
-            DrawingKey(size: size, scale: pass.environment.scale, box: drawnBox, content: content?.key ?? .none)
+            DrawingKey(size: size, scale: pass.environment.scale, box: drawnBox, content: content?.key ?? .none),
+            placement
         )
     }
 
@@ -707,8 +718,9 @@ final class Renderer: @unchecked Sendable {
             let isCancelled = { job.node.displaySentinel.load(ordering: .relaxed) != job.sentinel }
             guard !isCancelled() else { return nil }
             Diagnostics.shared.recordDraw()
-            guard let contents = rasterizer.rasterize(job.drawing, size: job.key.size, scale: scale, isCancelled: isCancelled),
+            guard var contents = rasterizer.rasterize(job.drawing, size: job.key.size, scale: scale, isCancelled: isCancelled),
                   !isCancelled() else { return nil }
+            contents.placement = job.placement
             return contents
         }
         for (index, job) in jobs.enumerated() {
@@ -782,6 +794,7 @@ struct DrawJob: Sendable {
     let node: UltraNode
     let drawing: any Drawing
     let key: DrawingKey
+    let placement: ContentsPlacement
     /// The node's display sentinel when the job was made.
     let sentinel: UInt64
     let isVisible: Bool

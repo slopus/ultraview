@@ -56,6 +56,9 @@ struct TextContent: Sendable {
     var allowFontScaling = true
     var maxFontSizeMultiplier: CGFloat?
     var suppressHighlighting = false
+    /// Placed after the last line; see `UltraTextNode.trailingAccessory`.
+    var accessory: UltraTextNode?
+    var accessorySpacing: CGFloat = 0
     /// Bumped by every change, so the pipeline knows to re-measure.
     var version: UInt64 = 0
 

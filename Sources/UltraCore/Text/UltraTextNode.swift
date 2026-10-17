@@ -101,6 +101,28 @@ public final class UltraTextNode: UltraNode, @unchecked Sendable {
         set { updateContent { $0.suppressHighlighting = newValue } }
     }
 
+    /// A text node that goes after this text's last line, like the time in
+    /// a chat bubble. This node measures as the box holding both: when the
+    /// last line leaves room for the accessory (and `trailingAccessorySpacing`
+    /// before it), the box keeps the text's height and widens to fit it;
+    /// otherwise the box grows by the accessory's height for a line of its
+    /// own. Place the accessory itself absolutely at its parent's bottom
+    /// trailing corner, in the same tree. Only left-aligned text shares its
+    /// last line.
+    public var trailingAccessory: UltraTextNode? {
+        get { content.accessory }
+        set {
+            precondition(newValue !== self, "a text node can't be its own accessory")
+            updateContent { $0.accessory = newValue }
+        }
+    }
+
+    /// The least space between the last line's glyphs and the accessory.
+    public var trailingAccessorySpacing: CGFloat {
+        get { content.accessorySpacing }
+        set { updateContent { $0.accessorySpacing = newValue } }
+    }
+
     private var content: TextContent {
         state.withLock { $0.text ?? TextContent() }
     }
@@ -131,6 +153,7 @@ public final class UltraTextNode: UltraNode, @unchecked Sendable {
 
     override func syncContent(previous: NodeState?, current: NodeState, pass: Pass) {
         guard let content = current.text else { return }
+        content.accessory?.shadow.accessoryOwner = self
         // The text's layouts outlive a host: another host (or a measurement)
         // in the same environment keeps them.
         guard content.version != shadow.textVersion || shadow.textEnvironment != pass.environment
@@ -154,7 +177,12 @@ public final class UltraTextNode: UltraNode, @unchecked Sendable {
         #endif
         shadow.textLayouts = []
         shadow.textLayout = nil
+        shadow.transitionLines = nil
         shadow.layout.markDirty()
+        // The owner's box holds this text too.
+        if let owner = shadow.accessoryOwner, owner.shadow.isAttached, owner.shadow.layout.measureFunction != nil {
+            owner.shadow.layout.markDirty()
+        }
     }
 
     /// Yoga's measure function. Runs inside the pass's layout computation.
@@ -162,7 +190,21 @@ public final class UltraTextNode: UltraNode, @unchecked Sendable {
         let limit: CGFloat? = widthMode == .undefined || width.isNaN ? nil : width
         shadow.textMeasureWidth = limit
         shadow.hasTextMeasureWidth = true
-        var size = textLayout(fitting: limit).size
+        let layout = textLayout(fitting: limit)
+        var size = layout.size
+        if let accessory = shadow.snapshot?.text?.accessory, accessory !== self {
+            let fit = TrailingAccessoryFit.fit(
+                layout,
+                accessory: accessory.accessoryBoxSize(),
+                spacing: shadow.snapshot?.text?.accessorySpacing ?? 0,
+                maxWidth: limit,
+                scale: shadow.renderer?.environment.scale ?? 1
+            )
+            shadow.accessoryFit = fit
+            size = fit.size
+        } else {
+            shadow.accessoryFit = nil
+        }
         switch widthMode {
         case .exactly: size.width = width
         case .atMost: size.width = min(size.width, width)
@@ -226,6 +268,19 @@ public final class UltraTextNode: UltraNode, @unchecked Sendable {
         return shadow.frame.width - inset.left - inset.right
     }
 
+    /// This node's size as an accessory: its text unbounded, plus its own
+    /// padding and border in points. Layout queue, inside the owner's
+    /// measurement.
+    func accessoryBoxSize() -> CGSize {
+        let text = textLayout(fitting: nil).size
+        let style = shadow.snapshot?.style.layout ?? LayoutStyle()
+        let padding = style.paddings.points
+        let border = style.borderWidths.resolved
+        let horizontal: CGFloat = padding.left + padding.right + border.left + border.right
+        let vertical: CGFloat = padding.top + padding.bottom + border.top + border.bottom
+        return CGSize(width: text.width + horizontal, height: text.height + vertical)
+    }
+
     override func updateContentForFrame(pass: Pass) {
         let width = contentWidth
         guard width > 0 else { return }
@@ -241,7 +296,7 @@ public final class UltraTextNode: UltraNode, @unchecked Sendable {
         let links = (shadow.textLayout?.linkRegions(inWidth: contentWidth) ?? []).map { region in
             TextLinkRegion(index: region.index, rects: region.rects.map { $0.offsetBy(dx: inset.left, dy: inset.top) })
         }
-        props.text = TextViewProps(version: content.version, links: links, highlightsPress: !content.suppressHighlighting)
+        props.text = TextViewProps(version: content.version, links: links, highlightsPress: !content.suppressHighlighting, lines: transitionLines(inset: inset))
         if state.accessibility.label == nil {
             props.accessibility.label = shadow.attributedText?.string
         }
@@ -259,9 +314,41 @@ public final class UltraTextNode: UltraNode, @unchecked Sendable {
         return (TextDrawing(layout: layout, inset: inset), .text(layout.id, inset: inset))
     }
 
+    /// The lines the bitmap shows, in view coordinates, for layout
+    /// transitions. `nil` when a drawn box shares the bitmap.
+    private func transitionLines(inset: Insets) -> TextTransitionLines? {
+        guard let layout = shadow.textLayout, !layout.lines.isEmpty else { return nil }
+        let width = contentWidth
+        if let cached = shadow.transitionLines, cached.layout == layout.id, cached.inset == inset, cached.width == width {
+            return cached.lines
+        }
+        let units = Array(layout.text.string.utf16)
+        var boxes: [TextLineBox] = []
+        boxes.reserveCapacity(layout.lines.count)
+        for (index, line) in layout.lines.enumerated() {
+            let truncated = layout.isTruncated && index == layout.lines.count - 1
+            boxes.append(TextLineBox(
+                rect: CGRect(x: inset.left + layout.originX(ofLine: index, inWidth: width), y: inset.top + line.top, width: line.width, height: line.height),
+                range: line.range,
+                fingerprint: TextTransitionLines.fingerprint(of: line.range, units: units, text: layout.text, truncated: truncated)
+            ))
+        }
+        let lines = TextTransitionLines(
+            string: layout.text.string,
+            lines: boxes,
+            isLeftAligned: layout.alignment == .left && !layout.lines.contains(where: \.isJustified)
+        )
+        shadow.transitionLines = (layout.id, inset, width, lines)
+        return lines
+    }
+
     /// The layout the node is drawn from, as of the last pass. Layout queue
     /// and tests only.
     var currentTextLayout: TextLayout? { shadow.textLayout }
+
+    /// How the text and its trailing accessory shared space in the last
+    /// layout. Layout queue and tests only.
+    var currentAccessoryFit: TrailingAccessoryFit? { shadow.accessoryFit }
 }
 
 /// Draws a text layout. The drawing code lives with the Core Text measurer.
