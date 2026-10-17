@@ -125,6 +125,18 @@ xcodebuild test -project UltraView.xcodeproj -scheme UltraViewDemo \
     -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
 ```
 
+## Proofs
+
+`Proofs/` is a Lean 4 model of the pipeline with machine-checked proofs:
+no change is lost, commits merge soundly, at quiescence the screen is a
+fresh render of the tree, and nothing is laid out, measured or drawn twice.
+`Proofs/MAPPING.md` maps each definition to the Swift it models and lists
+the hypotheses.
+
+```sh
+scripts/proofs.sh   # lake build, and fails on sorry or extra axioms
+```
+
 ## Clean-room reimplementation
 
 UltraView is a clean-room reimplementation of ideas from three projects:

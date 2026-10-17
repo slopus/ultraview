@@ -115,3 +115,17 @@ xcodegen
 xcodebuild test -project UltraView.xcodeproj -scheme UltraViewDemo \
     -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
 ```
+
+## Proofs
+
+`Proofs/` is a separate Lake package (Lean 4.34.0, no Mathlib) with
+machine-checked proofs about the pipeline. `scripts/proofs.sh` builds it and
+fails on `sorry`, `admit`, a new `axiom` or a non-standard axiom dependency.
+
+- `Proofs/MAPPING.md` maps each model definition to the Swift function it
+  models, as of a commit. When you change a mapped Swift function, re-check
+  its rows, update the hash, and run `scripts/proofs.sh`.
+- Environment assumptions (Yoga's caching contract, scheduler fairness,
+  UIKit) are theorem hypotheses or structure fields, never axioms.
+- `Tests/UltraCoreTests/ProvenPropertyTests.swift` pins proven properties;
+  its `withKnownIssue` cases are known gaps that should flip when fixed.
