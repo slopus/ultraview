@@ -422,17 +422,17 @@ every frame iff their own deltas agree, so the inserted-block animation's
 screen made before `b5667e5`) opens a gap of `h * (1 - p)`. The chat screen
 now inserts with the pass alone (ListChatController.swift:243).
 
-## Node row hosts at `44f8a0c`
+## Node row hosts at `1dd0bb4`
 
 `Proofs/UltraProofs/List/Hosts.lean` models how node rows hand a prepared
 root between row views (NodeRow.swift), the host a preparation draws ahead
 (`staged`), and the two cleanups that must not touch a hosted root: the
 renderer's queued purge and the list's preparation sweep. (First mapped at
-`0592bc8`, before `staged`. NodeRow.swift lines are as of the commit after
-`4f3d0fa` that stages every live node row, not only animated ones; the
-model's `stage` already allows any fresh root, so no theorem changes.)
+`0592bc8`, before `staged`, and at `44f8a0c` with it. `1dd0bb4` stages
+every live node row, not only animated ones; the model's `stage` already
+allows any fresh root, so no theorem changes.)
 
-| Model (`Proofs/UltraProofs/List/Hosts.lean`) | Swift at `44f8a0c` |
+| Model (`Proofs/UltraProofs/List/Hosts.lean`) | Swift at `1dd0bb4` |
 | --- | --- |
 | `S.displayed`, `S.pending` | `NodeRowView.displayedHost`, `pendingHost` (NodeRow.swift:121-122) |
 | `S.hostOf`, `S.weak` | `PreparedNodeContent.host` (weak) and `hasLiveHost` (NodeRow.swift:23, :27) |
@@ -442,12 +442,12 @@ model's `stage` already allows any fresh root, so no theorem changes.)
 | `S.stage` | `NodeRow.prepare` (NodeRow.swift:87-105): for a row whose identity is live, or an animated row whose appearance is still to show (:97), a `NodeHostView` for the root the same call made (:100-101), so the root has no renderer |
 | `S.start` | `NodeRowView.start` with `checkout(owner:)` (NodeRow.swift:227, :29-40): the live host, else `staged`, else a new `NodeHostView` (:35), and `staged = nil` (:37). Under `accept`'s and the queued candidate's guard: nothing pending, a different root shown (:264-273, :222-225) |
 | `S.release` | `NodeRowView.release(_:)` (NodeRow.swift:155): the old owner lets the host go and keeps a snapshot |
-| `S.reveal` | `showPreparedHost(_:)` (NodeRow.swift:166): the pending host replaces the shown one; a shorter one ready inside an animated pass waits for the pass's end first |
+| `S.reveal` | `showPreparedHost(_:)` (NodeRow.swift:166): the pending host replaces the shown one. A shorter one ready inside an animated pass waits for the pass's end (:191-197), then `passDidEnd` reveals it (:279-284): the same step later, and the model allows reveals at any time, with any operations between; the host stays pending meanwhile, so `start` on that view is refused and `accept` queues (:264-273) |
 | `S.free` | a row view deallocated: its hosts go, weak `owner`s read `nil` |
-| `S.drop` | the last reference to a preparation goes after the store drops it with `hasLiveHost` false (UltraListView.swift:888, :951 in `sweepPreparations` :945), taking `staged` with it |
+| `S.drop` | the last reference to a preparation goes after the store drops it with `hasLiveHost` false (UltraListView.swift:895, :958 in `sweepPreparations` :952), taking `staged` with it |
 | `S.collect` | `NodeHostView.deinit` (NodeHostView.swift:109-110) calling `Renderer.detach()` (Renderer.swift:101), which clears the renderer if it is still this host's |
 | `purge_unhosted`'s hypothesis | the purge's check on the layout queue, `renderer == nil` (Renderer.swift:108) |
-| `sweep_never_drops_hosted`'s hypothesis | `hasLiveHost` false at UltraListView.swift:888 and :951 |
+| `sweep_never_drops_hosted`'s hypothesis | `hasLiveHost` false at UltraListView.swift:895 and :958 |
 
 - `inv_run`, `one_host_always`: after every sequence of stagings,
   checkouts, reveals, view deallocations and drops, a root has at most one
@@ -1458,8 +1458,16 @@ rows and the viewport (one progress) are unchanged, and rows all move with
 the viewport, so relations among them don't depend on its curve
 (`common_mode_cancels`). The bar copies the keyframe animation (same begin,
 duration, speed, values profile), so `ListPass.lockstep_iff` applies.
-Appearances of node rows revealed by an inset-only pass are skipped
-(their timing needs a basic animation). Assumed, not proved: the
+Appearances of node rows revealed by a viewport moving on samples land at
+their final state (`237be64`: `appearanceTiming` returns nil when
+`NodeRowMotion.viewportMovesOnSamples(above:since:)`, NodeRowTransition.swift:202-205
+and :226-240, finds a non-basic viewport animation added this turn), and a
+`.growing` appearance, whose start is in window coordinates outside the
+list, lands while such a viewport animation still runs at all (:291). The first
+is safe on any clock: within the content the viewport's motion is common
+(`common_mode_cancels`). The second is the relation to outside content
+that would need the viewport's own progress (`lockstep_iff`), so landing
+it is the choice that keeps it. Assumed, not proved: the
 keyboard's sampled progress (from the reported duration and the fitted
 keyboard spring) stays in `[0, 1]` and moves forward, as a critically
 damped spring from rest does. The helper requires the physical progress
