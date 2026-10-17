@@ -22,6 +22,7 @@ public struct AttachmentMap: Sendable, Equatable {
     }
     public func position(offset: Double) -> Double {
         var result = ownPosition(offset: offset)
+        if partners.isEmpty { return result }
         for _ in 0...partners.count {
             var next = result
             for partner in partners {
@@ -69,13 +70,16 @@ public enum AttachmentRuns {
                 pending.append(.init(key: key, serial: 0, members: index..<end, identities: Array(identities[index..<end]), edge: edge(key, index), startsRun: !continues(key, index), endsRun: !continues(key, end)))
             }
         }
+        let lookup = Dictionary(uniqueKeysWithValues: loaded.map { (identities[$0], $0) })
         for index in pending.indices {
             let run = pending[index]
             let candidates = prior.compactMap { previous -> (UInt64, Int)? in
                 guard previous.key == run.key else { return nil }
                 let ordered = previous.edge == .top ? previous.identities : previous.identities.reversed().map { $0 }
-                guard let witness = ordered.first(where: { identities.contains($0) }),
-                      let newIndex = identities.firstIndex(of: witness), run.members.contains(newIndex) else { return nil }
+                guard let witness = ordered.first(where: { id in
+                    guard let index = lookup[id] else { return false }
+                    return pending.contains { $0.key == previous.key && $0.members.contains(index) }
+                }), let newIndex = lookup[witness], run.members.contains(newIndex) else { return nil }
                 return (previous.serial, newIndex)
             }
             if let chosen = candidates.min(by: { run.edge == .top ? $0.1 < $1.1 : $0.1 > $1.1 }) { pending[index].serial = chosen.0 }

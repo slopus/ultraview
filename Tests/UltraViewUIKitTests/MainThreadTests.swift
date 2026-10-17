@@ -108,10 +108,12 @@ import UltraView
         #expect(child.view == nil)
     }
 
-    @Test func listViewTakesGeometry() throws {
-        let list = ListView(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
-        list.setGeometry(ListGeometry(itemExtents: [10, 20]))
-        #expect(list.geometry.contentExtent == 30)
+    @Test func listViewAcceptsAViewport() throws {
+        let list = UltraListView()
+        list.frame = CGRect(x: 0, y: 0, width: 100, height: 100)
+        list.layoutIfNeeded()
+        #expect(list.loadedIndexRange.isEmpty)
+        #expect(list.currentScrollOffset == 0)
     }
 }
 #endif

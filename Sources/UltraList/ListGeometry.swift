@@ -1,7 +1,7 @@
 import Foundation
 import UltraLayout
 
-/// Placeholder for the list's pure geometry: where items sit along the scroll
+/// Prefix geometry for collections whose row heights are already known: where items sit along the scroll
 /// axis and which of them a viewport shows. It imports no UIKit so the
 /// virtualization math is tested on Linux.
 public struct ListGeometry: Sendable, Equatable {

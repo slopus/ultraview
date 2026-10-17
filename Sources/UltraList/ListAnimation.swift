@@ -145,4 +145,6 @@ public struct ListAnimationModel: Sendable {
     public func completed(at time: Double) -> [(Key, UInt64)] {
         tracks.compactMap { time >= $0.value.deadline ? ($0.key, $0.value.generation) : nil }
     }
+    public func contains(_ owner: AnimationOwner) -> Bool { stored.keys.contains { $0.owner == owner } }
+    public func hasTracks(_ owner: AnimationOwner) -> Bool { tracks.keys.contains { $0.owner == owner } }
 }

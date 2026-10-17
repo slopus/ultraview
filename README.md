@@ -3,15 +3,15 @@
 A Swift library for fast UI on iOS. Views are described as a tree of nodes
 that are measured, laid out and rendered off the main thread; the main thread
 only applies finished results. Layout is flexbox, computed by
-[Yoga](https://github.com/facebook/yoga), and the components follow React
-Native's View, Text and ScrollView model. A virtualized list with its own
-scroller instead of `UIScrollView` is planned on top of nodes.
+[Yoga](https://github.com/facebook/yoga). The components provide boxes, styled
+text and scrolling. A virtualized list measures a nearby window and plays
+momentum through Core Animation, with its own gestures and scroll physics.
 
 | Module        | What it is                                                                 |
 | ------------- | -------------------------------------------------------------------------- |
 | `UltraLayout` | Yoga flexbox behind a Swift API. Foundation only, tested on Linux.         |
 | `UltraCore`   | The node pipeline and the `UltraNode`, `UltraTextNode` and `UltraScrollNode` components. |
-| `UltraList`   | The list and its scroller (placeholder). The math is tested on Linux.      |
+| `UltraList`   | A virtualized list, scroll physics, animation tracks and floating attachments. Pure behavior is tested on Linux. |
 | `UltraView`   | Umbrella: `import UltraView` re-exports the three above.                   |
 
 Requires iOS 26 and Swift 6.2 (Xcode 26).
@@ -72,6 +72,29 @@ title.text = "Updated from a background queue"
 Styles default to Yoga's: column direction, `flexShrink` 0, `alignContent`
 flex-start.
 
+### Lists
+
+`UltraListView` accepts rows with stable string identities. Plain view rows
+implement `ListRow`, returning a `ListRowView` whose `update(width:transition:)`
+returns its height. `NodeRow` prepares node trees asynchronously; an unmeasured
+row leaves the loaded edge open until its measurement is ready.
+
+```swift
+let list = UltraListView() // .keyframe momentum; .stepped and .uiKit also available
+list.frame = view.bounds
+view.addSubview(list)
+list.applyChanges(items: rows)
+list.applyChanges(items: updatedRows,
+                  anchorMode: .preserveVisibleContent,
+                  transition: .easeInOut(0.3))
+list.scrollTo(.init(index: 500), transition: .smoothDeceleration())
+```
+
+The list publishes settled geometry immediately. Use `settledFrame(at:)` for
+destinations and `presentedFrame(at:)` for animated positions. Floating or
+reserving headers implement `ListAttachment`. See [the list design](Docs/UltraList.md)
+for threading, measurement, animation and host behavior.
+
 ### Threads
 
 A change to a node, from any thread, records the new value and schedules a
@@ -113,10 +136,13 @@ xcodegen                       # writes UltraView.xcodeproj (not committed)
 open UltraView.xcodeproj       # scheme UltraViewDemo: run the demo, ⌘U for tests
 ```
 
-The demo has three tabs: Layout (flexbox, borders, text, presses), Feed
+The Xcode app target is `UltraViewDemoApp`; the scheme remains `UltraViewDemo`.
+The demo has four tabs: Layout (flexbox, borders, text, presses), Feed
 (1,000 cards in a scroll node) and Stress (background threads changing
-nodes, with the main thread's cost per commit on screen). Launch it with
-`-screen layout`, `-screen feed` or `-screen stress` to open a given tab.
+nodes, with the main thread's cost per commit on screen), and Lists (streaming
+chat, a 10,000-row feed, three engine modes and a public gesture recorder).
+Launch with `-screen lists -listScreen chat`, `feed`, `compare` or `record` for
+the list demos. The other tabs accept `-screen layout`, `feed` or `stress`.
 
 From the command line:
 

@@ -59,6 +59,7 @@ public struct DepartureLedger: Sendable {
         return resolved
     }
     public mutating func setRoot(_ id: UInt64, _ root: Double) { blocks[id]?.root = root }
+    public mutating func seal(_ id: UInt64) { blocks[id]?.boundaryOpen = false }
     public mutating func promoteToViewport(_ id: UInt64, offset: Double) {
         guard var block = blocks[id] else { return }
         block.root -= offset; block.viewportAnchored = true; block.witness = .unresolved; blocks[id] = block
@@ -67,6 +68,11 @@ public struct DepartureLedger: Sendable {
         for id in blocks.keys where blocks[id]?.viewportAnchored == false { blocks[id]?.root += delta }
     }
     public mutating func finishMember(_ id: UInt64) { blocks[id]?.members -= 1 }
+    public mutating func addMember(_ id: UInt64, localTop: Double, localBottom: Double) {
+        guard var block = blocks[id] else { return }
+        block.members += 1; block.localTop = min(block.localTop, localTop); block.localBottom = max(block.localBottom, localBottom)
+        blocks[id] = block
+    }
     public mutating func collect() -> [UInt64] {
         var removed: [UInt64] = []
         while let id = blocks.keys.sorted().first(where: { id in

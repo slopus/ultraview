@@ -8,12 +8,14 @@ enum DemoScreen: String, CaseIterable {
     case layout
     case feed
     case stress
+    case lists
 
     var title: String {
         switch self {
         case .layout: "Layout"
         case .feed: "Feed"
         case .stress: "Stress"
+        case .lists: "Lists"
         }
     }
 
@@ -22,6 +24,7 @@ enum DemoScreen: String, CaseIterable {
         case .layout: "square.grid.2x2"
         case .feed: "text.bubble"
         case .stress: "speedometer"
+        case .lists: "list.bullet"
         }
     }
 
@@ -31,6 +34,7 @@ enum DemoScreen: String, CaseIterable {
         case .layout: NodeScreenController(rootNode: LayoutScreen.make())
         case .feed: NodeScreenController(rootNode: FeedScreen.make(cardCount: 1_000))
         case .stress: StressScreenController()
+        case .lists: ListsScreenController()
         }
         controller.tabBarItem = UITabBarItem(title: title, image: UIImage(systemName: symbol), tag: 0)
         return controller
