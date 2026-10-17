@@ -60,7 +60,7 @@ import Testing
         let failed = MeasurementKey(identity: "failure", width: 300)
         let failedTicket = cache.request(failed)!
         cache.cancelRequest(failed, ticket: failedTicket)
-        #expect(cache.request(failed) == failedTicket)
+        #expect(cache.request(failed) != failedTicket)
         #expect(MeasurementCache.priority(count: 5, anchor: 2, direction: -1, limit: 5) == [2, 1, 3, 0, 4])
     }
     @Test func schedulerDoesNotDropDirtyOnDeferredPass() {
@@ -72,6 +72,24 @@ import Testing
         #expect(scheduler.animated)
         let dirty = scheduler.consume()
         #expect(dirty == ["a", "b"] && scheduler.dirty.isEmpty)
+    }
+    @Test func evictionCannotAcceptOrCancelANewerRequestWithAnOldTicket() {
+        let cache = MeasurementCache(), key = MeasurementKey(identity: "a", width: 300)
+        let old = cache.request(key)!
+        cache.forget(key)
+        let fresh = cache.request(key)!
+        #expect(old != fresh)
+        #expect(cache.store(key, height: 12, ticket: old) == .stale)
+        #expect(cache.store(key, height: .nan, ticket: old) == .stale)
+        cache.cancelRequest(key, ticket: old)
+        #expect(cache.store(key, height: .nan, ticket: fresh) == .invalid)
+        #expect(cache.store(key, height: 24, ticket: fresh) == .stored)
+        #expect(cache.height(for: key) == 24)
+        let revised = MeasurementKey(identity: "a", revision: 1, width: 300)
+        let ticket = cache.request(revised)!
+        cache.retain(keys: [key])
+        #expect(cache.store(revised, height: 48, ticket: ticket) == .stale)
+        #expect(cache.height(for: key) == 24)
     }
 }
 

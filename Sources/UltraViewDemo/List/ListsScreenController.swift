@@ -107,6 +107,7 @@ struct DemoListRow: ListRow {
         view.accessibilityIdentifier = "row-\(identity)"; view.accessibilityLabel = title
     }
     func measure(width: Double, environment: RenderEnvironment) async -> Double? { await nodeRow.measure(width: width, environment: environment) }
+    func prepare(width: Double, environment: RenderEnvironment) async -> ListPreparation? { await nodeRow.prepare(width: width, environment: environment) }
 }
 @MainActor
 private final class DemoRowStorage { var rows: [UInt64: NodeRow] = [:] }

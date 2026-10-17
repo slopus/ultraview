@@ -276,6 +276,23 @@ follow the same rule for rendering. Scroll targets and inserted-block animation
 intent survive replacement by identity, while later viewport changes supersede
 older queued insets. This follow-up passed 210 Linux and 303 simulator tests.
 
+Each list owns prepared content together with its height. Normal node-row
+preparation leaves no tree in the row model. The list retains a band of 80 rows
+around its loaded window, plus pending dependencies and content with live
+hosts. It checks eviction after 16 rows of travel or a collection/size change;
+departing hosts get a later check after their animations. Speculative work is
+limited to six concurrent requests. Awaited window and mutation work bypasses
+that limit, so six is not a bound on all measurement tasks. Repeated distant
+jumps retain at most three departing strips. Detached renderers discard bitmaps
+on the layout queue while preserving layout and text caches; a replacement
+host prevents that queued purge from touching its content.
+
+The residency regressions use 2,000 rows, fresh model instances, repeated
+immediate and animated jumps, two lists sharing row models, and complete list
+removal. They check retained preparations and live roots rather than claiming
+a fixed byte budget. This checkpoint passed 213 Linux and 308 simulator tests.
+The 49 integration and ownership tests also passed with each sanitizer.
+
 A focused simulator fling started with loaded index 38 and injected a 252.1 ms
 main-thread block. The flight remained active at the next sample, continued from
 loaded index 14 to 0, and finished with all 60 geometry samples finite. Node

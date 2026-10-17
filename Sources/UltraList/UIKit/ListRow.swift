@@ -2,6 +2,21 @@
 import UIKit
 import UltraCore
 
+/// Content retained by one list together with its measured height.
+@MainActor
+public protocol ListPreparedContent: AnyObject, Sendable {
+    var hasLiveHost: Bool { get }
+}
+public extension ListPreparedContent { var hasLiveHost: Bool { false } }
+
+public struct ListPreparation: Sendable {
+    public var height: Double
+    public var content: (any ListPreparedContent)?
+    public init(height: Double, content: (any ListPreparedContent)? = nil) {
+        self.height = height; self.content = content
+    }
+}
+
 /// Stable identity and content equality are separate: changed content reuses its row view.
 @MainActor
 public protocol ListRow {
@@ -15,6 +30,7 @@ public protocol ListRow {
     func apply(to view: ListRowView, transition: ListTransition)
     func isEqual(to other: any ListRow) -> Bool
     func measure(width: Double, environment: RenderEnvironment) async -> Double?
+    func prepare(width: Double, environment: RenderEnvironment) async -> ListPreparation?
 }
 public extension ListRow {
     var revision: UInt64 { 0 }
@@ -25,6 +41,9 @@ public extension ListRow {
     func apply(to view: ListRowView, transition: ListTransition) {}
     func isEqual(to other: any ListRow) -> Bool { identity == other.identity && revision == other.revision }
     func measure(width: Double, environment: RenderEnvironment) async -> Double? { nil }
+    func prepare(width: Double, environment: RenderEnvironment) async -> ListPreparation? {
+        await measure(width: width, environment: environment).map { ListPreparation(height: $0) }
+    }
 }
 
 @MainActor
@@ -42,6 +61,9 @@ open class ListRowView: UIView {
     open func update(width: Double, transition: ListTransition) -> Double { bounds.height }
     /// An asynchronous row receives its ready size before it enters the view hierarchy.
     open func applyMeasurement(width: Double, height: Double, environment: RenderEnvironment) {}
+    open func applyPreparation(_ preparation: ListPreparation, width: Double, environment: RenderEnvironment) {
+        applyMeasurement(width: width, height: preparation.height, environment: environment)
+    }
     open func visibleRectUpdated(_ rect: CGRect?) {}
     open func attachedViewsUpdated(_ views: [UIView]) {}
     open var attachmentBandTrim: Double { 0 }

@@ -13,10 +13,11 @@ public struct MeasurementKey: Sendable, Hashable {
 }
 
 public final class MeasurementCache: Sendable {
+    public enum Completion: Sendable, Equatable { case stored, stale, invalid }
     private struct State {
         var heights: [MeasurementKey: Double] = [:]
-        var pending: Set<MeasurementKey> = []
-        var generation: UInt64 = 0
+        var pending: [MeasurementKey: UInt64] = [:]
+        var nextTicket: UInt64 = 0
     }
     private let state = Mutex(State())
     public init() {}
@@ -24,26 +25,42 @@ public final class MeasurementCache: Sendable {
     /// Returns a generation ticket only to the first requester.
     public func request(_ key: MeasurementKey) -> UInt64? {
         state.withLock { state in
-            guard state.heights[key] == nil, state.pending.insert(key).inserted else { return nil }
-            return state.generation
+            guard state.heights[key] == nil, state.pending[key] == nil else { return nil }
+            state.nextTicket &+= 1
+            state.pending[key] = state.nextTicket
+            return state.nextTicket
         }
     }
     @discardableResult
     public func complete(_ key: MeasurementKey, height: Double, ticket: UInt64) -> Bool {
-        guard height.isFinite && height >= 0 else { return false }
+        store(key, height: height, ticket: ticket) == .stored
+    }
+    @discardableResult
+    public func store(_ key: MeasurementKey, height: Double, ticket: UInt64) -> Completion {
         return state.withLock { state in
-            guard ticket == state.generation, state.pending.remove(key) != nil else { return false }
-            state.heights[key] = height; return true
+            guard state.pending[key] == ticket else { return .stale }
+            guard height.isFinite && height >= 0 else { return .invalid }
+            state.pending.removeValue(forKey: key)
+            state.heights[key] = height; return .stored
         }
     }
-    public func invalidate() { state.withLock { $0.generation += 1; $0.heights.removeAll(); $0.pending.removeAll() } }
+    public func invalidate() { state.withLock { $0.heights.removeAll(); $0.pending.removeAll() } }
     public func cancelRequest(_ key: MeasurementKey, ticket: UInt64) {
-        state.withLock { state in if state.generation == ticket { state.pending.remove(key) } }
+        state.withLock { state in if state.pending[key] == ticket { state.pending.removeValue(forKey: key) } }
+    }
+    public func forget(_ key: MeasurementKey) {
+        state.withLock { $0.heights.removeValue(forKey: key); $0.pending.removeValue(forKey: key) }
+    }
+    public func retain(keys: Set<MeasurementKey>) {
+        state.withLock { state in
+            state.heights = state.heights.filter { keys.contains($0.key) }
+            state.pending = state.pending.filter { keys.contains($0.key) }
+        }
     }
     public func retain(identities: Set<String>) {
         state.withLock { state in
             state.heights = state.heights.filter { identities.contains($0.key.identity) }
-            state.pending = state.pending.filter { identities.contains($0.identity) }
+            state.pending = state.pending.filter { identities.contains($0.key.identity) }
         }
     }
     /// Nearby rows come first, followed by the predicted direction of travel.

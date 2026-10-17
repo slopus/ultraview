@@ -530,6 +530,33 @@ private struct Tree {
         #expect(same(commit.entry(for: tree.root)?.children, [tree.a, tree.b]))
     }
 
+    @Test func detachingDropsBitmapsButRetainsMeasuredText() throws {
+        let label = text("retained measurement")
+        let harness = Harness(root: box(children: [label]))
+        harness.pass()
+        #expect(harness.read { label.shadow.contents != nil && label.shadow.textLayout != nil })
+        harness.renderer.detach()
+        harness.renderer.waitUntilIdle()
+        #expect(harness.read { label.shadow.contents == nil && label.shadow.drawnKey == nil })
+        #expect(harness.read { label.shadow.textLayout != nil && !label.shadow.isMounted })
+        #expect(label.interfaceState.isEmpty)
+    }
+
+    @Test func queuedDetachPurgeCannotEraseAReplacementHostsContent() throws {
+        let label = text("replacement host")
+        let root = box(children: [label])
+        let first = Harness(root: root)
+        first.pass()
+        let gate = DispatchSemaphore(value: 0)
+        Pipeline.layoutQueue.async { gate.wait() }
+        first.renderer.detach()
+        let second = Harness(root: root)
+        gate.signal()
+        let commit = try #require(second.pass())
+        #expect(commit.entry(for: label)?.kind == .mount)
+        #expect(second.read { label.shadow.contents != nil && label.shadow.isMounted })
+    }
+
     @Test func aChangeDuringDrawingIsPickedUpByTheNextPass() throws {
         // A change made while a pass is drawing isn't lost: it marks the
         // tree again, and an automatic renderer runs another pass.

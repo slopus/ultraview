@@ -57,7 +57,15 @@ public final class UltraListView: UltraScrollView {
     private var scheduler = PassScheduler()
     private var deferred: [() -> Void] = []
     private let measurements = MeasurementCache()
+    private var preparations: [MeasurementKey: ListPreparation] = [:]
+    var retainedPreparationCount: Int { preparations.count }
+    private var preparationKeys: Set<MeasurementKey> = []
+    private var lastPreparationSweepAnchor: Int?
+    private var preparationSweepScheduled = false
     private var measurementTasks: [MeasurementKey: Task<Void, Never>] = [:]
+    private var measurementTickets: [MeasurementKey: UInt64] = [:]
+    private var speculativeKeys: Set<MeasurementKey> = []
+    private var speculativeRequests: [(item: any ListRow, key: MeasurementKey, width: Double)] = []
     private var pendingTarget: ListScrollTarget?
     private var pendingScroll: (@MainActor () -> Void)?
     private var pendingItems: [any ListRow]?
@@ -263,7 +271,7 @@ public final class UltraListView: UltraScrollView {
             identityIndices = Dictionary(uniqueKeysWithValues: nextIDs.enumerated().map { ($0.element, $0.offset) })
             pinnedIndex = incoming.firstIndex(where: \.pinsToBottomEdge); pendingItems = nil; pendingIdentityIndices.removeAll()
             let preparingIDs = preparationQueue.entries.flatMap { $0.value.items.map(\.identity) }
-            measurements.retain(identities: Set(nextIDs).union(preparingIDs))
+            measurements.retain(identities: Set(nextIDs).union(preparingIDs).union(preparations.keys.map(\.identity)))
             unavailableMeasurements = unavailableMeasurements.filter { key in identityIndices[key.identity].map { items[$0].revision == key.revision } == true }
             measurementFailures = measurementFailures.filter { unavailableMeasurements.contains($0.key) }
         }
@@ -296,6 +304,10 @@ public final class UltraListView: UltraScrollView {
             for view in ghostWrappers.values { view.removeFromSuperview() }
             ghostWrappers.removeAll(); ghostExitOwners.removeAll(); ghostMembers.removeAll(); ghostLedger = .init(); newGhostRanges.removeAll()
             for view in carousel.subviews { animations.unbind(.carry(UInt64(max(0, view.tag))), removeModel: true); view.removeFromSuperview() }
+            preparations.removeAll(); measurements.invalidate(); preparationKeys.removeAll()
+            speculativeRequests.removeAll(); speculativeKeys.removeAll()
+            for task in measurementTasks.values { task.cancel() }
+            measurementTasks.removeAll(); measurementTickets.removeAll()
             engine.setEdges(.init(minimum: 0, maximum: 0)); engine.setOffset(0)
             runs.removeAll(); renderAttachments(); return
         }
@@ -324,7 +336,7 @@ public final class UltraListView: UltraScrollView {
             let height = item.measuresAsynchronously ? measurements.height(for: key)! : view.update(width: viewport.contentWidth, transition: (reconciled.contains(identity) || sizeChanged) ? transition : .immediate)
             if item.measuresAsynchronously {
                 if view.superview == nil { container.addSubview(view) }
-                view.applyMeasurement(width: viewport.contentWidth, height: height, environment: measurementEnvironment)
+                view.applyPreparation(preparations[key] ?? .init(height: height), width: viewport.contentWidth, environment: measurementEnvironment)
             }
             precondition(height.isFinite && height >= 0)
             let reserve = reservedHeights(at: index)
@@ -467,6 +479,7 @@ public final class UltraListView: UltraScrollView {
             }
         }
         CATransaction.commit()
+        sweepPreparations(force: newItems != nil || sizeChanged)
         renderAttachments()
     }
 
@@ -524,7 +537,7 @@ public final class UltraListView: UltraScrollView {
             let height = item.measuresAsynchronously ? measurements.height(for: key)! : view.update(width: viewport.contentWidth, transition: .immediate)
             if item.measuresAsynchronously {
                 if view.superview == nil { container.addSubview(view) }
-                view.applyMeasurement(width: viewport.contentWidth, height: height, environment: measurementEnvironment)
+                view.applyPreparation(preparations[key] ?? .init(height: height), width: viewport.contentWidth, environment: measurementEnvironment)
             }
             let reserve = reservedHeights(at: index)
             return (height, reserve.0, reserve.1)
@@ -558,6 +571,7 @@ public final class UltraListView: UltraScrollView {
             CATransaction.commit()
         }
         if let index = settledWindow.rows.first(where: { base + $0.maxY > offset })?.index { requestAhead(anchor: index, direction: delta < 0 ? -1 : 1) }
+        sweepPreparations()
         renderAttachments(); reportVisibility(); super.handleScroll(engine.offset)
     }
     private static func mergePreparedMutations(_ old: PreparedMutation, _ new: PreparedMutation) -> PreparedMutation {
@@ -579,7 +593,7 @@ public final class UltraListView: UltraScrollView {
         guard let index = mutation.items.firstIndex(where: { $0.identity == identity }) else { return nil }
         return .init(index: index, forward: target.forward, resolve: target.resolve)
     }
-    private func missingPreparations(_ mutation: PreparedMutation) -> [(item: any ListRow, key: MeasurementKey, width: Double)] {
+    private func requestedPreparations(_ mutation: PreparedMutation) -> [(item: any ListRow, key: MeasurementKey, width: Double)] {
         guard !mutation.items.isEmpty else { return [] }
         let currentViewport = mutation.viewportRequest == viewportRequest
         let insets = currentViewport ? mutation.insets ?? viewport.insets : viewport.insets
@@ -590,7 +604,7 @@ public final class UltraListView: UltraScrollView {
         let anchor = preparedTarget(mutation)?.index ?? identity.flatMap { id in mutation.items.firstIndex { $0.identity == id } } ?? 0
         return MeasurementCache.priority(count: mutation.items.count, anchor: anchor, direction: 1, limit: min(80, max(24, settledWindow.rows.count + 8))).compactMap { index in
             let item = mutation.items[index], key = measurementKey(item, width: width)
-            guard item.measuresAsynchronously, measurements.height(for: key) == nil, !unavailableMeasurements.contains(key) else { return nil }
+            guard item.measuresAsynchronously else { return nil }
             return (item, key, width)
         }
     }
@@ -599,11 +613,14 @@ public final class UltraListView: UltraScrollView {
         drainingPreparations = true
         defer { drainingPreparations = false }
         while !preparationQueue.isEmpty {
+            preparationKeys.removeAll(keepingCapacity: true)
             for entry in preparationQueue.entries {
                 let effective = entry.generation == preparationQueue.latest?.generation
                     ? preparationQueue.inFlight.map { Self.mergePreparedMutations($0.value, entry.value) } ?? entry.value
                     : entry.value
-                let missing = missingPreparations(effective)
+                let requests = requestedPreparations(effective)
+                preparationKeys.formUnion(requests.map(\.key))
+                let missing = requests.filter { measurements.height(for: $0.key) == nil && !unavailableMeasurements.contains($0.key) }
                 preparationQueue.replaceWaiting(generation: entry.generation, with: Set(missing.map(\.key)))
                 for request in missing { requestMeasurement(request.item, key: request.key, width: request.width) }
             }
@@ -618,6 +635,7 @@ public final class UltraListView: UltraScrollView {
             if pendingItems != nil { pendingBlockAnimations += mutation.blocks }
             else { for block in mutation.blocks { animateInsertedBlockNow(block) } }
         }
+        preparationKeys.removeAll(keepingCapacity: true)
     }
     private func markDirty(_ id: String, animated: Bool) {
         if scheduler.mark(id, animated: animated) {
@@ -644,13 +662,24 @@ public final class UltraListView: UltraScrollView {
     private func requestMeasurement(_ item: any ListRow, key: MeasurementKey, width: Double) {
         let environment = measurementEnvironment
         guard width > 0, !unavailableMeasurements.contains(key), let ticket = measurements.request(key) else { return }
+        measurementTickets[key] = ticket
         measurementTasks[key] = Task { [weak self] in
-            let height = await item.measure(width: width, environment: environment)
+            let preparation = await item.prepare(width: width, environment: environment)
             guard let self else { return }
+            guard measurementTickets[key] == ticket else { return }
+            measurementTickets.removeValue(forKey: key)
             measurementTasks.removeValue(forKey: key)
-            if let height, measurements.complete(key, height: height, ticket: ticket) {
+            speculativeKeys.remove(key)
+            defer { pumpSpeculativePreparations() }
+            let result = measurements.store(key, height: preparation?.height ?? .nan, ticket: ticket)
+            if result == .stored, let preparation {
+                preparations[key] = preparation
                 measurementFailures.removeValue(forKey: key)
                 let awaited = finishAwaitedMeasurement(key)
+                if !retainsPreparation(key), preparation.content?.hasLiveHost != true {
+                    preparations.removeValue(forKey: key); measurements.forget(key)
+                }
+                sweepPreparations()
                 if !awaited, let index = identityIndices[item.identity], items[index].revision == item.revision,
                    settledWindow.range.contains(index) || index == settledWindow.range.lowerBound - 1 || index == settledWindow.range.upperBound || index == pendingTarget?.index {
                     markDirty(item.identity, animated: false)
@@ -658,7 +687,7 @@ public final class UltraListView: UltraScrollView {
                     markDirty(item.identity, animated: false)
                 }
             }
-            else {
+            else if result == .invalid {
                 measurements.cancelRequest(key, ticket: ticket)
                 unavailableMeasurements.insert(key)
                 _ = finishAwaitedMeasurement(key)
@@ -684,7 +713,49 @@ public final class UltraListView: UltraScrollView {
         return awaited
     }
     private func requestAhead(anchor: Int, direction: Int) {
-        for index in MeasurementCache.priority(count: items.count, anchor: anchor, direction: direction, limit: 80) { requestMeasurement(index) }
+        speculativeRequests = MeasurementCache.priority(count: items.count, anchor: anchor, direction: direction, limit: 64).compactMap { index in
+            let item = items[index], key = measurementKey(item, width: viewport.contentWidth)
+            guard item.measuresAsynchronously, measurements.height(for: key) == nil, measurementTasks[key] == nil else { return nil }
+            return (item, key, viewport.contentWidth)
+        }
+        pumpSpeculativePreparations()
+    }
+    private func pumpSpeculativePreparations() {
+        while speculativeKeys.count < 6, !speculativeRequests.isEmpty {
+            let request = speculativeRequests.removeFirst()
+            guard measurementTasks[request.key] == nil, measurements.height(for: request.key) == nil,
+                  !unavailableMeasurements.contains(request.key) else { continue }
+            requestMeasurement(request.item, key: request.key, width: request.width)
+            if measurementTasks[request.key] != nil { speculativeKeys.insert(request.key) }
+        }
+    }
+    private func sweepPreparations(force: Bool = false) {
+        let anchor = settledWindow.range.lowerBound
+        guard force || lastPreparationSweepAnchor.map({ abs($0 - anchor) >= 16 }) ?? true else { return }
+        lastPreparationSweepAnchor = anchor
+        for (key, preparation) in preparations {
+            guard !retainsPreparation(key) else { continue }
+            if preparation.content?.hasLiveHost == true {
+                schedulePreparationSweep(); continue
+            }
+            preparations.removeValue(forKey: key); measurements.forget(key)
+        }
+    }
+    private func retainsPreparation(_ key: MeasurementKey) -> Bool {
+        if preparationKeys.contains(key) { return true }
+        guard let index = identityIndices[key.identity],
+              measurementKey(items[index], width: viewport.contentWidth) == key else { return false }
+        let lower = max(0, settledWindow.range.lowerBound - 80)
+        let upper = min(items.count, settledWindow.range.upperBound + 80)
+        return index >= lower && index < upper || index == pinnedIndex || index == pendingTarget?.index
+    }
+    private func schedulePreparationSweep() {
+        guard !preparationSweepScheduled else { return }
+        preparationSweepScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+            guard let self else { return }
+            preparationSweepScheduled = false; sweepPreparations(force: true)
+        }
     }
     private func reportVisibility() {
         let viewportRect = CGRect(x: viewport.insets.left, y: viewport.insets.top, width: viewport.contentWidth, height: viewport.visibleHeight)
@@ -905,6 +976,12 @@ public final class UltraListView: UltraScrollView {
             }
         }
         wrapper.tag = Int(carryID)
+        // Repeated distant jumps retain a bounded tail of departing strips.
+        let strips = carousel.subviews.filter { $0.tag != 0 }
+        for expired in strips.dropLast(3) {
+            animations.unbind(.carry(UInt64(expired.tag)), removeModel: true)
+            expired.removeFromSuperview()
+        }
         animations.replace(.carry(carryID), .opacity, from: 1, to: 1, at: time, transition: transition) { [weak self, weak wrapper] in wrapper?.removeFromSuperview(); self?.animations.unbind(.carry(carryID), removeModel: true) }
         animations.replace(.viewport, .viewportOffset, from: correction, to: 0, at: time, transition: transition)
     }

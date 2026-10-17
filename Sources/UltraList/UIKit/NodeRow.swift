@@ -16,6 +16,27 @@ public struct NodeRowMeasurer: NodeRowMeasuring {
     }
 }
 
+@MainActor
+fileprivate final class PreparedNodeContent: ListPreparedContent {
+    let root: UltraNode
+    let size: CGSize
+    weak var host: NodeHostView?
+    weak var owner: NodeRowView?
+    var hasLiveHost: Bool { host != nil }
+    init(root: UltraNode, size: CGSize) { self.root = root; self.size = size }
+    func checkout(owner: NodeRowView) -> NodeHostView {
+        let result: NodeHostView
+        if let host {
+            if self.owner !== owner { self.owner?.release(host) }
+            result = host
+        } else {
+            result = NodeHostView(rootNode: root); host = result
+        }
+        self.owner = owner
+        return result
+    }
+}
+
 /// Creates node trees off main, measures ahead, and mounts only a prepared tree.
 @MainActor
 public final class NodeRow: ListRow {
@@ -29,14 +50,9 @@ public final class NodeRow: ListRow {
     private let measurer: any NodeRowMeasuring
     private let environment: RenderEnvironment?
     private struct PreparedKey: Hashable { var width: Double; var environment: UInt64 }
-    private final class Prepared {
-        let root: UltraNode
-        let size: CGSize
-        weak var host: NodeHostView?
-        weak var owner: NodeRowView?
-        init(root: UltraNode, size: CGSize) { self.root = root; self.size = size }
-    }
-    private var prepared: [PreparedKey: Prepared] = [:]
+    // The explicit measure/applyMeasurement API retains its legacy preparation.
+    // Lists call prepare instead and own the returned content themselves.
+    private var prepared: [PreparedKey: PreparedNodeContent] = [:]
 
     public init(identity: String, revision: UInt64 = 0, pinsToBottomEdge: Bool = false, attachments: [String: any ListAttachment] = [:], environment: RenderEnvironment? = nil, measurer: any NodeRowMeasuring = NodeRowMeasurer(), makeNode: @escaping @Sendable () -> UltraNode) {
         self.identity = identity; self.revision = revision; self.pinsToBottomEdge = pinsToBottomEdge
@@ -47,6 +63,13 @@ public final class NodeRow: ListRow {
         let resolved = self.environment ?? environment
         let key = PreparedKey(width: width, environment: environmentKey(resolved))
         if let ready = prepared[key] { return ready.size.height }
+        guard let result = await prepare(width: width, environment: environment),
+              let content = result.content as? PreparedNodeContent else { return nil }
+        prepared[key] = content
+        return result.height
+    }
+    public func prepare(width: Double, environment: RenderEnvironment) async -> ListPreparation? {
+        let resolved = self.environment ?? environment
         let factory = factory, measurer = measurer
         let result = await Task.detached(priority: .userInitiated) {
             let root = factory()
@@ -54,24 +77,12 @@ public final class NodeRow: ListRow {
             return (root, size)
         }.value
         guard result.1.height.isFinite, result.1.height >= 0 else { return nil }
-        prepared[key] = Prepared(root: result.0, size: result.1)
-        return result.1.height
+        return ListPreparation(height: result.1.height, content: PreparedNodeContent(root: result.0, size: result.1))
     }
     public func makeView() -> ListRowView { NodeRowView(row: self) }
     public func apply(to view: ListRowView, transition: ListTransition) { (view as? NodeRowView)?.row = self }
-    fileprivate func preparedNode(width: Double, environment: RenderEnvironment) -> UltraNode? { prepared[.init(width: width, environment: environmentKey(self.environment ?? environment))]?.root }
-    fileprivate func host(width: Double, environment: RenderEnvironment, owner: NodeRowView) -> NodeHostView? {
-        guard let ready = prepared[.init(width: width, environment: environmentKey(self.environment ?? environment))] else { return nil }
-        let host: NodeHostView
-        if let existing = ready.host {
-            if ready.owner !== owner { ready.owner?.release(existing) }
-            host = existing
-        } else {
-            host = NodeHostView(rootNode: ready.root)
-            ready.host = host
-        }
-        ready.owner = owner
-        return host
+    fileprivate func preparedContent(width: Double, environment: RenderEnvironment) -> PreparedNodeContent? {
+        prepared[.init(width: width, environment: environmentKey(self.environment ?? environment))]
     }
 }
 
@@ -81,10 +92,8 @@ fileprivate final class NodeRowView: ListRowView {
     private var displayedHost: NodeHostView?
     private var pendingHost: NodeHostView?
     private struct Candidate {
-        var row: NodeRow
-        var root: UltraNode
+        var content: PreparedNodeContent
         var size: CGSize
-        var environment: RenderEnvironment
     }
     private var pendingCandidate: Candidate?
     private var queuedCandidate: Candidate?
@@ -128,11 +137,11 @@ fileprivate final class NodeRowView: ListRowView {
         reportDisplayReady()
         if let next = queuedCandidate {
             queuedCandidate = nil
-            if next.root !== host.rootNode { start(next) }
+            if next.content.root !== host.rootNode { start(next) }
         }
     }
     private func start(_ candidate: Candidate) {
-        guard let host = candidate.row.host(width: candidate.size.width, environment: candidate.environment, owner: self) else { return }
+        let host = candidate.content.checkout(owner: self)
         pendingCandidate = candidate; revealDeadline = nil
         host.onCommit = { [weak self, weak host] in
             guard let self, let host else { return }
@@ -144,7 +153,7 @@ fileprivate final class NodeRowView: ListRowView {
         if host.hasContent { showPreparedHost(host) }
     }
     override func applyMeasurement(width: Double, height: Double, environment: RenderEnvironment) {
-        guard let root = row.preparedNode(width: width, environment: environment) else {
+        guard let content = row.preparedContent(width: width, environment: environment) else {
             let key = environmentKey(environment)
             if let preparing, preparing.row === row, preparing.width == width, preparing.environment == key { return }
             let requested = row
@@ -159,7 +168,18 @@ fileprivate final class NodeRowView: ListRowView {
             return
         }
         preparing = nil
-        let candidate = Candidate(row: row, root: root, size: .init(width: width, height: height), environment: environment)
+        accept(content, width: width, height: height)
+    }
+    override func applyPreparation(_ preparation: ListPreparation, width: Double, environment: RenderEnvironment) {
+        guard let content = preparation.content as? PreparedNodeContent else {
+            super.applyPreparation(preparation, width: width, environment: environment); return
+        }
+        preparing = nil
+        accept(content, width: width, height: preparation.height)
+    }
+    private func accept(_ content: PreparedNodeContent, width: Double, height: Double) {
+        let root = content.root
+        let candidate = Candidate(content: content, size: .init(width: width, height: height))
         if let pendingHost {
             if pendingHost.rootNode !== root { queuedCandidate = candidate }
             else { queuedCandidate = nil }

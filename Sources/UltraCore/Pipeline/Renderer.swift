@@ -104,6 +104,20 @@ final class Renderer: @unchecked Sendable {
                 state.renderer = nil
             }
         }
+        Pipeline.layoutQueue.async { [self] in
+            guard root.state.withLock({ $0.renderer == nil }) else { return }
+            purgeDetachedContents(root)
+        }
+    }
+
+    private func purgeDetachedContents(_ node: UltraNode) {
+        let shadow = node.shadow
+        shadow.contents = nil; shadow.drawnKey = nil
+        shadow.interfaceState = []; shadow.isMounted = false
+        shadow.sentProps = nil; shadow.sentFrame = nil
+        node.publish([])
+        node.displaySentinel.add(1, ordering: .relaxed)
+        for child in shadow.children where child.shadow.parent === node { purgeDetachedContents(child) }
     }
 
     /// Changes the inputs and schedules a pass. Returns the request number a
