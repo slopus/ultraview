@@ -105,8 +105,13 @@ public final class UltraListView: UltraScrollView {
         let owner = AnimationOwner.row(items[index].identity), time = animations.now
         frame.origin.x += animations.value(owner, .positionX, at: time)
         frame.origin.y += animations.value(owner, .positionY, at: time) - animations.value(.viewport, .viewportOffset, at: time)
+        let finalSize = frame.size
         frame.size.width = animations.value(owner, .width, at: time)
         frame.size.height = animations.value(owner, .height, at: time)
+        if let view = views[items[index].identity] {
+            let finalOffset = view.placementOffset(size: finalSize), liveOffset = view.placementOffset(size: frame.size)
+            frame.origin.x += finalOffset.x - liveOffset.x; frame.origin.y += finalOffset.y - liveOffset.y
+        }
         return frame
     }
     public func scrollTo(_ target: ListScrollTarget, transition: ListTransition = .uiKitScroll()) {
@@ -149,6 +154,7 @@ public final class UltraListView: UltraScrollView {
             items = incoming; identities = nextIDs
             identityIndices = Dictionary(uniqueKeysWithValues: nextIDs.enumerated().map { ($0.element, $0.offset) })
             pinnedIndex = incoming.firstIndex(where: \.pinsToBottomEdge); pendingItems = nil
+            measurements.retain(identities: Set(nextIDs))
         }
         let newIDs = identities
         let diff = ItemDiff(old: oldIDs, new: newIDs)
@@ -198,7 +204,7 @@ public final class UltraListView: UltraScrollView {
         var measuredViews: [String: ListRowView] = [:]
         func measure(_ index: Int) -> (height: Double, top: Double, bottom: Double)? {
             let item = items[index], identity = item.identity
-            let key = MeasurementKey(identity: identity, revision: item.revision, width: viewport.contentWidth)
+            let key = MeasurementKey(identity: identity, revision: item.revision, width: viewport.contentWidth, environment: item.measurementEnvironment)
             if item.measuresAsynchronously, measurements.height(for: key) == nil { requestMeasurement(index); return nil }
             let view = oldViews[identity] ?? carried[identity]?.view ?? measuredViews[identity] ?? item.makeView()
             if oldViews[identity] == nil && measuredViews[identity] == nil { item.apply(to: view, transition: .immediate) }
@@ -313,8 +319,10 @@ public final class UltraListView: UltraScrollView {
             if let old = oldSnapshot[id] {
                 let oldY = (target != nil || displaces) ? oldBase + old.y + coordinateMap : oldBase + old.y - oldOffset
                 let newY = (target != nil || displaces) ? newBase + row.y : newBase + row.y - engine.offset
-                animations.transition(owner, .positionY, old: oldY, new: newY, at: time, transition: transition)
-                animations.transition(owner, .positionX, old: oldViewport.insets.left, new: viewport.insets.left, at: time, transition: transition)
+                let oldPlacement = views[id]?.placementOffset(size: .init(width: oldViewport.contentWidth, height: old.height)) ?? .zero
+                let newPlacement = views[id]?.placementOffset(size: .init(width: viewport.contentWidth, height: row.height)) ?? .zero
+                animations.transition(owner, .positionY, old: oldY + oldPlacement.y, new: newY + newPlacement.y, at: time, transition: transition)
+                animations.transition(owner, .positionX, old: oldViewport.insets.left + oldPlacement.x, new: viewport.insets.left + newPlacement.x, at: time, transition: transition)
                 animations.transition(owner, .width, old: oldViewport.contentWidth, new: viewport.contentWidth, at: time, transition: transition)
                 animations.transition(owner, .height, old: old.height, new: row.height, at: time, transition: transition)
             } else if !oldIDs.contains(id), animatesInsertions, !(isCarousel && destinationNew) {
@@ -336,7 +344,7 @@ public final class UltraListView: UltraScrollView {
         previousOffset = engine.offset; onUserScrollDelta?(delta, animations.now)
         let base = origin - settledWindow.minY, previous = settledWindow
         settledWindow.rebalance(count: items.count, offsetInFrameSpace: engine.offset - base, viewportHeight: viewport.height, margin: preloadMargin) { [self] index in
-            let item = items[index], key = MeasurementKey(identity: item.identity, revision: item.revision, width: viewport.contentWidth)
+            let item = items[index], key = MeasurementKey(identity: item.identity, revision: item.revision, width: viewport.contentWidth, environment: item.measurementEnvironment)
             if item.measuresAsynchronously, measurements.height(for: key) == nil { requestMeasurement(index); return nil }
             let view = views[item.identity] ?? carried[item.identity]?.view ?? item.makeView()
             if views[item.identity] == nil { item.apply(to: view, transition: .immediate) }
@@ -387,13 +395,14 @@ public final class UltraListView: UltraScrollView {
         guard items.indices.contains(index) else { return }
         let item = items[index]
         guard item.measuresAsynchronously else { return }
-        let width = viewport.contentWidth, key = MeasurementKey(identity: item.identity, revision: item.revision, width: width)
+        let width = viewport.contentWidth, key = MeasurementKey(identity: item.identity, revision: item.revision, width: width, environment: item.measurementEnvironment)
         guard width > 0, let ticket = measurements.request(key) else { return }
         measurementTasks[key] = Task { [weak self] in
             let height = await item.measure(width: width)
             guard let self else { return }
             measurementTasks.removeValue(forKey: key)
             if let height, measurements.complete(key, height: height, ticket: ticket) { markDirty(item.identity, animated: false) }
+            else { measurements.cancelRequest(key, ticket: ticket) }
         }
     }
     private func requestAhead(anchor: Int, direction: Int) {
@@ -450,9 +459,14 @@ public final class UltraListView: UltraScrollView {
                 continue
             }
             serial += 1; let blockID = serial
-            let root = oldBase + first.0.y + coordinateShift + animations.value(.row(first.1), .positionY, at: time)
+            func liveBounds(_ row: WindowRow, _ id: String, _ view: ListRowView) -> CGRect {
+                let size = CGSize(width: animations.value(.row(id), .width, at: time), height: animations.value(.row(id), .height, at: time))
+                let oldPlacement = view.placementOffset(size: view.bounds.size), livePlacement = view.placementOffset(size: size)
+                return .init(x: view.frame.minX + oldPlacement.x - livePlacement.x, y: oldBase + row.y + coordinateShift + animations.value(.row(id), .positionY, at: time) + oldPlacement.y - livePlacement.y, width: size.width, height: size.height)
+            }
+            let root = liveBounds(first.0, first.1, first.2).minY
             let wrapper = UIView(); wrapper.layer.anchorPoint = .zero; wrapper.isUserInteractionEnabled = false
-            let localBottom = members.map { oldBase + $0.0.maxY + coordinateShift + animations.value(.row($0.1), .positionY, at: time) - root }.max() ?? 0
+            let localBottom = members.map { liveBounds($0.0, $0.1, $0.2).maxY - root }.max() ?? 0
             wrapper.frame = .init(x: 0, y: root, width: viewport.width, height: max(1, localBottom))
             exits.addSubview(wrapper); ghostWrappers[blockID] = wrapper
             ghostLedger.insert(.init(id: blockID, root: root, localTop: 0, localBottom: localBottom, members: members.count))
@@ -460,12 +474,13 @@ public final class UltraListView: UltraScrollView {
             animations.bind(.block(blockID), layer: wrapper.layer)
             for (row, id, view) in members {
                 let owner = AnimationOwner.row(id)
-                let y = oldBase + row.y + coordinateShift + animations.value(owner, .positionY, at: time) - root
+                let frozen = liveBounds(row, id, view)
+                let y = frozen.minY - root
                 let height = animations.value(owner, .height, at: time), width = animations.value(owner, .width, at: time)
                 let opacity = animations.value(owner, .opacity, at: time)
                 animations.unbind(owner, removeModel: true)
                 view.onContentDidChange = nil; wrapper.addSubview(view)
-                view.place(in: .init(x: viewport.insets.left, y: y, width: width, height: height))
+                view.place(in: .init(x: frozen.minX, y: y, width: width, height: height))
                 view.layer.opacity = Float(opacity)
                 serial += 1; let exitID = serial
                 ghostMembers[id] = blockID
@@ -571,9 +586,10 @@ public final class UltraListView: UltraScrollView {
             let height = animations.value(.row(id), .height, at: time)
             let width = animations.value(.row(id), .width, at: time)
             let opacity = animations.value(.row(id), .opacity, at: time)
+            let oldPlacement = view.placementOffset(size: view.bounds.size), livePlacement = view.placementOffset(size: .init(width: width, height: height))
             animations.unbind(.row(id))
             view.onContentDidChange = nil; wrapper.addSubview(view)
-            view.place(in: .init(x: view.frame.minX, y: row.y - oldWindow.minY + offset, width: width, height: height))
+            view.place(in: .init(x: view.frame.minX + oldPlacement.x - livePlacement.x, y: row.y - oldWindow.minY + offset + oldPlacement.y - livePlacement.y, width: width, height: height))
             view.layer.opacity = Float(opacity)
         }
         serial += 1; let carryID = serial
@@ -615,6 +631,7 @@ public final class UltraListView: UltraScrollView {
     }
     private func resolveAttachments(transition: ListTransition, oldItems: [any ListRow] = [], oldState: [UInt64: AttachmentSnapshot] = [:], suppressFade: Bool = false) {
         let prior = runs
+        let priorMaps = attachmentMaps
         runs = AttachmentRuns.resolve(identities: identities, loaded: settledWindow.range, keys: { items[$0].attachments.keys.sorted() }, edge: { items[$1].attachments[$0]!.edge }, combines: { key, a, b in
             guard let first = items[a].attachments[key], let second = items[b].attachments[key] else { return false }
             return first.combines(with: second)
@@ -668,6 +685,7 @@ public final class UltraListView: UltraScrollView {
             map.partners = runs.filter { $0.serial != run.serial && descriptor($0)?.stackingGroup == group }.compactMap { rawMaps[$0.serial] }
             map.gap = item.yieldGap; attachmentMaps[run.serial] = map
         }
+        for run in runs where priorMaps[run.serial] != attachmentMaps[run.serial] { attachmentFlightSignatures.removeValue(forKey: run.serial) }
         let time = animations.now
         let nextState = attachmentSnapshot(offset: engine.offset, correction: animations.value(.viewport, .viewportOffset, at: time))
         for run in runs {

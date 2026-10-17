@@ -16,6 +16,7 @@ public final class NodeRow: ListRow {
     public var pinsToBottomEdge: Bool
     public var attachments: [String: any ListAttachment]
     public var measuresAsynchronously: Bool { true }
+    public let measurementEnvironment: UInt64
     private let factory: @Sendable () -> UltraNode
     private let measurer: any NodeRowMeasuring
     private let environment: RenderEnvironment
@@ -24,6 +25,10 @@ public final class NodeRow: ListRow {
     public init(identity: String, revision: UInt64 = 0, pinsToBottomEdge: Bool = false, attachments: [String: any ListAttachment] = [:], environment: RenderEnvironment = .init(), measurer: any NodeRowMeasuring, makeNode: @escaping @Sendable () -> UltraNode) {
         self.identity = identity; self.revision = revision; self.pinsToBottomEdge = pinsToBottomEdge
         self.attachments = attachments; self.environment = environment; self.measurer = measurer; factory = makeNode
+        var hash = Hasher()
+        hash.combine(Double(environment.scale)); hash.combine(Double(environment.fontScale))
+        hash.combine(environment.isDark); hash.combine(environment.isRightToLeft)
+        measurementEnvironment = UInt64(bitPattern: Int64(hash.finalize()))
     }
     public func measure(width: Double) async -> Double? {
         if let ready = prepared[width] { return ready.1.height }

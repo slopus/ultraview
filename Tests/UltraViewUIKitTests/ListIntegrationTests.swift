@@ -117,6 +117,17 @@ private actor MeasurementGate: NodeRowMeasuring {
         #expect(list.settledFrame(at: 0)?.height == 60)
         list.applyChanges(items: [])
     }
+    @Test func invertedHeightAnimationPreservesTheSameRowBoundary() {
+        let list = list(count: 0)
+        var rows = (0..<10).map { FixedRow(identity: String($0), height: 100, inverted: true) }
+        list.applyChanges(items: rows)
+        rows[0].height = 160; rows[0].revision = 1
+        list.applyChanges(items: rows, transition: .easeInOut(2))
+        let first = list.presentedFrame(at: 0)!, second = list.presentedFrame(at: 1)!
+        #expect(abs(first.minY) < 0.1)
+        #expect(first.height < 101)
+        #expect(abs(first.maxY - second.minY) < 0.1)
+    }
     @Test func animatedGrowthStartsFromOldHeight() {
         let list = list(count: 10)
         var items = (0..<10).map { FixedRow(identity: String($0)) }

@@ -37,6 +37,9 @@ public final class MeasurementCache: Sendable {
         }
     }
     public func invalidate() { state.withLock { $0.generation += 1; $0.heights.removeAll(); $0.pending.removeAll() } }
+    public func cancelRequest(_ key: MeasurementKey, ticket: UInt64) {
+        state.withLock { state in if state.generation == ticket { state.pending.remove(key) } }
+    }
     public func retain(identities: Set<String>) {
         state.withLock { state in
             state.heights = state.heights.filter { identities.contains($0.key.identity) }

@@ -25,7 +25,7 @@ final class ListInteractionTests: XCTestCase {
             name.tap()
             if let value = name.value as? String { name.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: value.count)) }
             name.typeText(fixture)
-            app.buttons["Record"].tap()
+            app.buttons["beginGestureRecording"].tap()
             let start = canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75))
             let end = canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2))
             if fixture == "slow-drag" {
@@ -36,7 +36,7 @@ final class ListInteractionTests: XCTestCase {
             // Wait through deceleration before exporting the delegate observations.
             let deadline = Date().addingTimeInterval(4)
             while Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.05)) }
-            app.buttons["Save"].tap()
+            app.buttons["saveGestureRecording"].tap()
         }
     }
 

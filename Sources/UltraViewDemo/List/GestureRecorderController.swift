@@ -14,7 +14,9 @@ final class GestureRecorderController: UIViewController, UIScrollViewDelegate {
         scroll.panGestureRecognizer.addTarget(self, action: #selector(panChanged))
         name.text = "medium-flick"; name.borderStyle = .roundedRect; name.accessibilityIdentifier = "recordingName"
         record.setTitle("Record", for: .normal); record.addTarget(self, action: #selector(begin), for: .touchUpInside)
+        record.accessibilityIdentifier = "beginGestureRecording"
         save.setTitle("Save", for: .normal); save.addTarget(self, action: #selector(finish), for: .touchUpInside)
+        save.accessibilityIdentifier = "saveGestureRecording"
         let bar = UIStackView(arrangedSubviews: [name, record, save]); bar.spacing = 8
         for v in [bar, scroll] { v.translatesAutoresizingMaskIntoConstraints = false; view.addSubview(v) }
         NSLayoutConstraint.activate([

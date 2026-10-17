@@ -57,6 +57,10 @@ import Testing
         #expect(cache.complete(key, height: 120, ticket: fresh))
         #expect(cache.height(for: key) == 120)
         #expect(cache.height(for: .init(identity: "a", width: 301)) == nil)
+        let failed = MeasurementKey(identity: "failure", width: 300)
+        let failedTicket = cache.request(failed)!
+        cache.cancelRequest(failed, ticket: failedTicket)
+        #expect(cache.request(failed) == failedTicket)
         #expect(MeasurementCache.priority(count: 5, anchor: 2, direction: -1, limit: 5) == [2, 1, 3, 0, 4])
     }
     @Test func schedulerDoesNotDropDirtyOnDeferredPass() {

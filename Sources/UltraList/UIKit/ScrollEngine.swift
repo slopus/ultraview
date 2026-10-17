@@ -117,7 +117,12 @@ final class PhysicsEngine: NSObject, ScrollEngine, UIGestureRecognizerDelegate {
         host.bounds.origin.y = value
         CATransaction.commit()
     }
-    func setOffset(_ value: Double) { catchMotion(braking: false); core.setOffset(value); writeBase(value) }
+    func setOffset(_ value: Double) {
+        let dragging = pan.state == .began || pan.state == .changed
+        catchMotion(braking: false); core.setOffset(value)
+        if dragging { baseline = pan.translation(in: host); core.beginDrag() }
+        writeBase(value)
+    }
     func halt() { catchMotion(braking: false); core.halt(); writeBase(offset) }
     func sync() { flightState?.beginTick(at: now, core: &core) }
     func shift(by delta: Double) {

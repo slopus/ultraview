@@ -37,7 +37,8 @@ final class ListChatController: UIViewController {
         monitor.start()
         if UserDefaults.standard.bool(forKey: "listProbe") {
             Task { [weak self] in
-                try? await Task.sleep(for: .seconds(2)); self?.beginStreaming()
+                let delay = UserDefaults.standard.double(forKey: "listProbeDelay")
+                try? await Task.sleep(for: .seconds(delay > 0 ? delay : 2)); self?.beginStreaming()
                 try? await Task.sleep(for: .seconds(1)); self?.list.beginMomentum(velocity: 3500)
                 try? await Task.sleep(for: .seconds(7)); self?.monitor.finish()
             }
@@ -77,6 +78,7 @@ final class ListFrameMonitor: NSObject {
     private var gaps: [Double] = []
     private let name: String
     init(name: String) { self.name = name }
+    static func stallForProbe() { Thread.sleep(forTimeInterval: 0.12) }
     func start() {
         link?.invalidate(); gaps.removeAll(); previous = nil
         let link = CADisplayLink(target: self, selector: #selector(tick))
@@ -91,7 +93,7 @@ final class ListFrameMonitor: NSObject {
     func finish() {
         guard link != nil else { return }
         link?.invalidate(); link = nil
-        let document: [String: Any] = ["screen": name, "samples": gaps.count, "maximumMainGapMilliseconds": gaps.max() ?? 0, "gapsAbove16_7": gaps.filter { $0 > 16.7 }.count, "missedFramesAbove25": gaps.filter { $0 > 25 }.count]
+        let document: [String: Any] = ["screen": name, "samples": gaps.count, "maximumMainGapMilliseconds": gaps.max() ?? 0, "gapsAbove16_7": gaps.filter { $0 > 16.7 }.count, "missedFramesAbove25": gaps.filter { $0 > 25 }.count, "injectedStall": UserDefaults.standard.bool(forKey: "listStall")]
         if let data = try? JSONSerialization.data(withJSONObject: document, options: [.prettyPrinted, .sortedKeys]), let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
             try? data.write(to: url.appendingPathComponent("list-\(name)-timing.json"))
             print("LIST-TIMING \(String(data: data, encoding: .utf8) ?? "")")

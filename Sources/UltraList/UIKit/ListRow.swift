@@ -9,6 +9,7 @@ public protocol ListRow {
     var pinsToBottomEdge: Bool { get }
     var attachments: [String: any ListAttachment] { get }
     var measuresAsynchronously: Bool { get }
+    var measurementEnvironment: UInt64 { get }
     func makeView() -> ListRowView
     func apply(to view: ListRowView, transition: ListTransition)
     func isEqual(to other: any ListRow) -> Bool
@@ -19,6 +20,7 @@ public extension ListRow {
     var pinsToBottomEdge: Bool { false }
     var attachments: [String: any ListAttachment] { [:] }
     var measuresAsynchronously: Bool { false }
+    var measurementEnvironment: UInt64 { 0 }
     func apply(to view: ListRowView, transition: ListTransition) {}
     func isEqual(to other: any ListRow) -> Bool { identity == other.identity && revision == other.revision }
     func measure(width: Double) async -> Double? { nil }
@@ -41,8 +43,12 @@ open class ListRowView: UIView {
     /// Places the transformed bounding rectangle without asking UIKit to infer bounds from a frame.
     func place(in frame: CGRect) {
         bounds = .init(origin: .zero, size: frame.size)
-        let relative = CGRect(x: -layer.anchorPoint.x * frame.width, y: -layer.anchorPoint.y * frame.height, width: frame.width, height: frame.height).applying(transform)
-        layer.position = .init(x: frame.minX - relative.minX, y: frame.minY - relative.minY)
+        let offset = placementOffset(size: frame.size)
+        layer.position = .init(x: frame.minX + offset.x, y: frame.minY + offset.y)
+    }
+    func placementOffset(size: CGSize) -> CGPoint {
+        let relative = CGRect(x: -layer.anchorPoint.x * size.width, y: -layer.anchorPoint.y * size.height, width: size.width, height: size.height).applying(transform)
+        return .init(x: -relative.minX, y: -relative.minY)
     }
 }
 

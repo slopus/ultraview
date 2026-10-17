@@ -145,7 +145,13 @@ final class LargeListController: UIViewController {
         monitor.start()
         if UserDefaults.standard.bool(forKey: "listProbe") {
             Task { [weak self] in
-                try? await Task.sleep(for: .seconds(2)); self?.list.beginMomentum(velocity: 6000)
+                let delay = UserDefaults.standard.double(forKey: "listProbeDelay")
+                try? await Task.sleep(for: .seconds(delay > 0 ? delay : 2)); self?.list.beginMomentum(velocity: 6000)
+                if UserDefaults.standard.bool(forKey: "listStall") {
+                    try? await Task.sleep(for: .milliseconds(300))
+                    // Opt-in probe: demonstrate that momentum survives a delayed sampler.
+                    ListFrameMonitor.stallForProbe()
+                }
                 try? await Task.sleep(for: .seconds(5)); self?.monitor.finish()
             }
         }
