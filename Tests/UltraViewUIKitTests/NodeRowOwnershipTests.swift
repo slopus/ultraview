@@ -65,6 +65,24 @@ import UltraLayout
         }
         #expect(list.loadedItemView(at: 50)?.isDisplayReady == true)
     }
+    @Test func anImmediateFarJumpExposesOnlyReadyVisibleNodes() async throws {
+        let (window, list) = mounted(rows(200)); defer { window.isHidden = true }
+        try await Task.sleep(for: .milliseconds(250))
+        var arrived = false
+        list.onVisibleWindowChanged = {
+            guard list.loadedIndexRange.contains(150) else { return }
+            arrived = true
+            for index in list.loadedIndexRange {
+                if let frame = list.settledFrame(at: index), frame.intersects(list.bounds) {
+                    #expect(list.loadedItemView(at: index)?.isDisplayReady == true, "row \(index), frame \(frame), loaded \(list.loadedIndexRange)")
+                }
+            }
+        }
+        defer { list.onVisibleWindowChanged = nil }
+        list.scrollTo(.init(index: 150), transition: .none)
+        for _ in 0..<100 where !arrived { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(arrived)
+    }
     @Test func twoListsPrepareIndependentRootsEvenWithTheSameRowModels() async throws {
         let models = rows(100)
         let (firstWindow, first) = mounted(models)

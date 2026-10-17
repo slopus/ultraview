@@ -339,6 +339,19 @@ flight and one shifted to a new coordinate base, plus a pinned attachment.
 Core Animation's fill behavior remains an environment assumption; the flight
 trajectory and pass-geometry equations are unchanged.
 
+The readiness follow-up after `d844843` holds a pure immediate disjoint target
+while its destination lacks visible-band measurements or a row's first visible
+commit. Views are staged by measurement key and reused by the eventual pass;
+an obsolete target's generation cannot resume a newer request. A scroll waiting
+for its first height no longer creates a pending collection snapshot. These
+callbacks and the display-ready predicate are outside `Preparation.Q`; its
+active/latest collection algorithm is unchanged. The pass equations apply when
+the ready pass executes. `ListDisplayReadinessTests` covers late callbacks after
+a superseding target in all three engines, and a real-node regression checks
+that the destination exposes ready visible rows. Staging retains views, while
+node-host ownership remains with each view's displayed or pending slot, as in
+the host model below.
+
 `Proofs/UltraProofs/List/Preparation.lean` models `PreparationQueue`
 (PreparationQueue.swift) and how `UltraListView` drives it.
 
