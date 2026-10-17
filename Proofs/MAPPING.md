@@ -735,6 +735,21 @@ its `.began` made active, and a removal in between makes `release` return
 early. Gesture delivery, the reveal's rubber band and spring
 (`displayed`, `SwipeMotion`) and the buttons' spans are outside the model.
 
+## Content inside an animating row (for the node-row transitions change)
+
+`Proofs/UltraProofs/List/Content.lean` states what the coming node-row
+content transitions rely on: inner node frames on the row's own height
+timing, with running inner animations moved onto each new row timing from
+their presented values. It is not yet mapped to Swift.
+
+- `edge_lerp`, `edge_constant`: on one timing, a child edge minus the row
+  edge is `(1 - p) * d0 + p * d1`; equal end differences make it constant.
+- `retime_keeps`, `retimes_keep`: restarting both from their presented
+  values toward their targets on a new timing, any number of times, keeps a
+  constant inset at every frame.
+- `alone_drifts`: retiming the row alone, with a 10-point inset bubble left
+  on its timing, overlaps the row's edge by 2.5 points at 1 s.
+
 ## Theorems
 
 **Correctness**
@@ -814,6 +829,8 @@ early. Gesture delivery, the reveal's rubber band and spring
   covered band until the horizon, so rows it will show stay loaded.
 - `ListLayers.superpose`: motions on separate timings keep every linear
   relation when each is its own additive layer.
+- `ListContent.retimes_keep`: inner content retimed with its row keeps a
+  constant inset through any number of retimings.
 
 **Optimality**
 

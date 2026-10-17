@@ -204,3 +204,8 @@ open UltraProofs
 #print axioms ListSwipe.remove_keeps_other
 #print axioms ListSwipe.inv_run
 #print axioms ListSwipe.one_open
+#print axioms ListContent.edge_lerp
+#print axioms ListContent.edge_constant
+#print axioms ListContent.retime_keeps
+#print axioms ListContent.retimes_keep
+#print axioms ListContent.alone_drifts
