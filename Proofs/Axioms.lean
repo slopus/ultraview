@@ -284,3 +284,5 @@ open UltraProofs
 #print axioms ListReturn.begin_fresh
 #print axioms ListReturn.begin_closed_never
 #print axioms ListReturn.notify_keeps_latest
+#print axioms ListReturn.jump_as_track
+#print axioms ListReturn.jump_as_outcome

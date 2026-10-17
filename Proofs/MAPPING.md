@@ -1033,6 +1033,13 @@ layout. Resolving clears the gesture, and a new drag replaces it.
   layouts after the return do nothing. `begin_fresh`: a new drag replaces
   the whole snapshot. `notify_keeps_latest`: only tracked samples change the
   recorded inset, so the return is the inset the finger took away.
+- `jump_as_track`, `jump_as_outcome`: after the finger lifts and before the
+  release is reported, the guide jumps back to the starting height with no
+  animation. Taken as a tracked sample, that sets the recorded inset to the
+  start and the return is 0 (the cause of the unchanged reversal clips);
+  taken as a target, the release returns `start - latest`. The classifier
+  that tells a lifted finger's jump from finger motion is the controller's
+  and is not modeled; the resolver's policy does not change.
 
 The return itself runs the inset-only path with compensation and a screen
 move of `start - latest`: `ListMomentum.keyboard_keeps_velocity` and

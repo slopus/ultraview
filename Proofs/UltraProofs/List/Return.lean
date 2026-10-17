@@ -36,6 +36,10 @@ notifications and layouts do nothing.
   and never returns.
 * `notify_keeps_latest`: notifications, layouts and the release never change
   the recorded inset, so the shift is the finger's, not the animation's.
+* `jump_as_track`, `jump_as_outcome`: the keyboard jumping back open after
+  the finger lifts, if taken as a tracked sample, sets the recorded inset
+  to the start and the return is 0 (or none); taken as a target it returns
+  `start - latest`.
 
 The shift itself goes through the inset-only path with compensation, which
 `ListMomentum.keyboard_keeps_velocity` and `follows_moves_by_inset` cover.
@@ -391,5 +395,46 @@ theorem notify_keeps_latest (c : C) (g g' : G) (e : Ev) (hg : c.gesture = some g
         · simp at hg'
         · simp only [Option.some.injEq] at hg'; subst hg'; rfl
     · rw [hg, Option.some.injEq] at hg'; subst hg'; rfl
+
+/-! ## Classifying the jump after the finger lifts -/
+
+/-- **The keyboard's jump back, taken as a tracked sample, cancels the
+return**: a gesture whose finger took the inset to `latest`, then a
+sample at the start inset and height (the guide jumping back open after
+the finger lifts, before the release is reported), then the release,
+returns by 0. -/
+theorem jump_as_track (c : C) (g : G) (hg : c.gesture = some g) (hr : g.released = false)
+    (hp : g.pending = none) (gd : Rat) :
+    (run c [.track g.start g.startHeight, .release gd]).shifts = c.shifts ++ [0] ∨
+      (run c [.track g.start g.startHeight, .release gd]).shifts = c.shifts := by
+  have ht : step c (.track g.start g.startHeight) = ⟨some { g with latest := g.start }, c.shifts⟩ := by
+    simp [step, hg, hr, matchesTarget, hp]
+  have hrel : step ⟨some { g with latest := g.start }, c.shifts⟩ (.release gd) =
+      resolve ⟨some { g with latest := g.start }, c.shifts⟩ { g with latest := g.start } gd := by
+    simp [step, hr, hp]
+  have hrun : run c [.track g.start g.startHeight, .release gd] = step (step c (.track g.start g.startHeight)) (.release gd) := rfl
+  rw [hrun, ht, hrel]
+  have h0 : g.start - g.start = 0 := by grind
+  unfold resolve
+  split
+  · left; simp [h0]
+  · split <;> simp
+
+/-- **Taken as a target, it returns what the finger took away**: the same
+jump as a keyboard target, then the release, returns `start - latest`. -/
+theorem jump_as_outcome (c : C) (g : G) (hg : c.gesture = some g) (hr : g.released = false) (gd : Rat) :
+    (run c [.outcome g.startHeight, .release gd]).shifts = c.shifts ++ [g.start - g.latest] := by
+  have ho : step c (.outcome g.startHeight) = ⟨some { g with pending := some g.startHeight }, c.shifts⟩ := by
+    simp [step, hg, hr]
+  have hopen : near g.startHeight g.startHeight = true := by
+    have h0 : g.startHeight - g.startHeight = 0 := by grind
+    simp only [near, h0]; decide +kernel
+  have hrel : step ⟨some { g with pending := some g.startHeight }, c.shifts⟩ (.release gd) =
+      resolve ⟨some { g with pending := some g.startHeight }, c.shifts⟩ { g with pending := some g.startHeight }
+        g.startHeight := by
+    simp [step, hr]
+  have hrun : run c [.outcome g.startHeight, .release gd] = step (step c (.outcome g.startHeight)) (.release gd) := rfl
+  rw [hrun, ho, hrel]
+  simp [resolve, G.isOpen, hopen]
 
 end UltraProofs.ListReturn
