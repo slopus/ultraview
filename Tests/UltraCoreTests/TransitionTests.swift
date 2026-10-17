@@ -413,6 +413,28 @@ import UltraLayout
 }
 
 @Suite struct TransitionValueTests {
+    @Test func keyPathsMoveAlongOneAxisOrNone() {
+        #expect(TransitionAxis(keyPath: "position.x") == .horizontal)
+        #expect(TransitionAxis(keyPath: "bounds.size.width") == .horizontal)
+        #expect(TransitionAxis(keyPath: "position.y") == .vertical)
+        #expect(TransitionAxis(keyPath: "bounds.size.height") == .vertical)
+        for keyPath in ["opacity", "cornerRadius", "backgroundColor", "transform", "bounds"] {
+            #expect(TransitionAxis(keyPath: keyPath) == nil)
+        }
+    }
+
+    @Test func aShiftedAnimationKeepsItsMotionAndEndsAtTheNewTarget() {
+        // A height running 100 -> 160 whose destination becomes 200 at once.
+        let start = TransitionShift.start(from: 100, to: 160, target: 200)
+        #expect(start == 140)
+        // At every progress the shifted value is the old one plus 40.
+        for progress in [0.0, 0.25, 0.5, 0.75, 1.0] {
+            let old = 100 + (160 - 100) * progress, shifted = start + (200 - start) * progress
+            #expect(shifted - old == 40)
+        }
+        #expect(TransitionShift.start(from: 80, to: 20, target: 20) == 80)
+    }
+
     @Test func appearanceKeepsItsAnchorFixed() {
         let appearance = NodeAppearance(key: "bubble", scale: 0.8, anchor: CGPoint(x: 0, y: 1))
         let translation = appearance.translation(for: CGSize(width: 100, height: 50))

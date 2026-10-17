@@ -229,3 +229,31 @@ public struct NodeAppearance: Sendable, Equatable {
         return CGPoint(x: dx * (1 - scale), y: dy * (1 - scale))
     }
 }
+
+/// The direction a layout animation moves or sizes a node in. A row whose
+/// width and height animate on different timings moves each axis of its
+/// content on that axis's timing, so content insets hold on both.
+public enum TransitionAxis: Sendable, Equatable {
+    case horizontal, vertical
+
+    /// The axis `keyPath` animates; `nil` for one that isn't a position or
+    /// size along one axis (opacity, color, corner radius, transform).
+    public init?(keyPath: String) {
+        switch keyPath {
+        case "position.x", "bounds.size.width", "bounds.origin.x": self = .horizontal
+        case "position.y", "bounds.size.height", "bounds.origin.y": self = .vertical
+        default: return nil
+        }
+    }
+}
+
+/// A running animation whose destination moves at once: it keeps its timing
+/// and its remaining motion, now ending at the new destination. Every value
+/// it shows from then on is shifted by how far the destination moved, as a
+/// list moves a row's running track when its size changes immediately.
+public enum TransitionShift {
+    /// The start that, on the same timing, ends at `target` instead of `to`.
+    public static func start(from: Double, to: Double, target: Double) -> Double {
+        from + (target - to)
+    }
+}

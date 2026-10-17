@@ -115,6 +115,10 @@ final class NodeRowMotion {
             origin = nil
             if let timing = replacementTiming() {
                 new.animateTransition(from: start, timing: timing)
+            } else {
+                // A change at once: what still moves with the row keeps
+                // moving with it, toward the new layout.
+                new.continueTransitions(from: start)
             }
         } else if let appearance {
             // Where a node starts depends on the whole pass (the viewport's
@@ -143,7 +147,10 @@ final class NodeRowMotion {
         guard animation.beginTime == 0, let timing = NodeAnimationTiming(matching: animation) else { return }
         if let displayed, displayed.isAnimatingTransition {
             let started = CACurrentMediaTime()
-            displayed.retimeTransitions(timing)
+            // Content moves along each axis on the timing of the row's size
+            // along it (a turned row sizes its width under the height key).
+            let axis = (animation as? CAPropertyAnimation)?.keyPath.flatMap(TransitionAxis.init(keyPath:))
+            displayed.retimeTransitions(timing, axis: axis)
             MainThreadMonitor.shared.note("node row retime \((CACurrentMediaTime() - started) * 1000) ms")
         }
     }

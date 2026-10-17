@@ -311,12 +311,14 @@ final class NodeTransitionAnimator {
     /// Moves every animation still running under `root` onto `timing`, from
     /// where it is toward where it was going. Animations added in the
     /// current transaction restart from where they started; those already
-    /// on `timing` stay as they are.
-    func retime(root: UltraNode, _ timing: NodeAnimationTiming) {
+    /// on `timing` stay as they are. With an `axis`, positions and sizes
+    /// along the other axis keep their timing.
+    func retime(root: UltraNode, _ timing: NodeAnimationTiming, axis: TransitionAxis? = nil) {
         for layer in Self.layers(under: root) {
             for key in layer.animationKeys() ?? [] where key.hasPrefix(Self.keyPrefix) {
                 guard let running = layer.animation(forKey: key) as? CABasicAnimation, let keyPath = running.keyPath,
                       !timing.isTiming(of: running) else { continue }
+                if let axis, let moves = TransitionAxis(keyPath: keyPath), moves != axis { continue }
                 let from: Any?
                 if running.beginTime == 0 {
                     from = running.fromValue
@@ -328,6 +330,35 @@ final class NodeTransitionAnimator {
                 let animation = timing.animation(keyPath, from: from, to: running.toValue)
                 animation.delegate = running.delegate
                 layer.add(animation, forKey: key)
+            }
+        }
+    }
+
+    /// For a layout that replaced `old`'s at once while `old`'s views were
+    /// still animating: each number they animate continues on `root`'s
+    /// matching view, on its own timing, ending at the new value, shifted
+    /// by how far that moved. Everything else shows the new layout at once.
+    func shift(root: UltraNode, from old: NodeTransitionSnapshot) {
+        let new = Self.snapshot(of: root, presented: false)
+        guard !new.isEmpty else { return }
+        let partners = LayoutTransitionPlan.match(old.tree, new.tree)
+        for (index, visual) in new.visuals.enumerated() {
+            guard let layer = visual.layer, let partner = partners[index], let carrier = old.visuals[partner].layer else { continue }
+            // Positions carry over only within the same parent's coordinates.
+            let newParent = new.tree.nodes[index].parent
+            let oldParent = old.tree.nodes[partner].parent
+            let sameParent = newParent.flatMap { partners[$0] } == oldParent && (newParent == nil) == (oldParent == nil)
+            for keyPath in ["position.x", "position.y", "bounds.size.width", "bounds.size.height", "opacity", "cornerRadius"] {
+                if !sameParent, keyPath.hasPrefix("position") { continue }
+                let key = Self.keyPrefix + keyPath
+                guard let running = carrier.animation(forKey: key) as? CABasicAnimation,
+                      let from = (running.fromValue as? NSNumber)?.doubleValue, let to = (running.toValue as? NSNumber)?.doubleValue,
+                      let target = (layer.value(forKeyPath: keyPath) as? NSNumber)?.doubleValue else { continue }
+                let shifted = running.copy() as! CABasicAnimation
+                shifted.delegate = nil
+                shifted.fromValue = TransitionShift.start(from: from, to: to, target: target)
+                shifted.toValue = target
+                layer.add(shifted, forKey: key)
             }
         }
     }

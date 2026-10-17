@@ -298,11 +298,26 @@ public final class NodeHostView: UIView {
     }
 
     /// Moves the transition animations still running onto `timing`, from
-    /// where they are now, toward the same layout.
-    public func retimeTransitions(_ timing: NodeAnimationTiming) {
+    /// where they are now, toward the same layout. With an `axis`, only
+    /// positions and sizes along it move (with everything that is neither),
+    /// for a row whose width and height run on different timings.
+    public func retimeTransitions(_ timing: NodeAnimationTiming, axis: TransitionAxis? = nil) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        transitions.retime(root: rootNode, timing)
+        transitions.retime(root: rootNode, timing, axis: axis)
+        CATransaction.commit()
+    }
+
+    /// Shows the layout at once where `snapshot`'s tree was still in a
+    /// transition: the positions, sizes, opacities and radii it was
+    /// animating keep moving, on their own timing, toward the new values,
+    /// shifted by how far each destination moved; the rest lands. This is
+    /// how a list moves a row's running size when it changes immediately,
+    /// so content sized with the row keeps its insets.
+    public func continueTransitions(from snapshot: NodeTransitionSnapshot) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        transitions.shift(root: rootNode, from: snapshot)
         CATransaction.commit()
     }
 
