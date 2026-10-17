@@ -271,3 +271,15 @@ open UltraProofs
 #print axioms ListDecel.coast_monotone
 #print axioms ListDecel.coast_rest
 #print axioms ListDecel.coast_between
+#print axioms ListReturn.cleared_quiet
+#print axioms ListReturn.awaiting
+#print axioms ListReturn.tracking
+#print axioms ListReturn.open_once
+#print axioms ListReturn.closed_never
+#print axioms ListReturn.verdict_released
+#print axioms ListReturn.resolution
+#print axioms ListReturn.missing_recovers
+#print axioms ListReturn.step_Q
+#print axioms ListReturn.at_most_once
+#print axioms ListReturn.begin_fresh
+#print axioms ListReturn.notify_keeps_latest

@@ -997,6 +997,43 @@ on the frame lengths; and the settling frame (`|v| < 0.01`, then a snap of
 at most half a point, :121-122) depends on them too. The engine's
 settlement scheduling (`settleIfNeeded`, added in `1768f72`) is not modeled.
 
+## A cancelled keyboard dismissal (for the chat's next change)
+
+`Proofs/UltraProofs/List/Return.lean` models the resolver the chat screen's
+next change adds (`KeyboardInsetGesture`), as its author described it; it is
+not yet mapped to Swift. A drag snapshots the starting inset and keyboard
+height. While the finger is down a tracked sample records the inset unless
+its height matches the recorded target within half a point; a keyboard
+animation with a duration records its target height, the last one winning;
+zero-duration notifications record nothing; no notification records an
+inset. The release resolves with the recorded target, or the guide's height
+without one. A height within half a point of the starting one returns the
+content by `start - latest`; one at most half a point above the resting
+height is a dismissal; anything else waits for a later notification or
+layout. Resolving clears the gesture, and a new drag replaces it.
+
+- `resolution`: for every order of tracked samples, notifications and
+  layouts around the one release, the returns are `verdict` of the last
+  target before release (or the guide at release) followed by each later
+  height in order: one return of `start - latest` if the first conclusive
+  height is open, none if it is closed or none is conclusive.
+- `open_once`, `closed_never`, `missing_recovers`: an open outcome returns
+  exactly once; a closed release never shifts (so `ListMomentum`'s
+  `dismissed_never_moved` still describes it); with no notification and the
+  keyboard mid-way at release, the first layout that sees it open returns.
+- `at_most_once`: a run never returns more often than it begins gestures,
+  plus one for a gesture already running, so duplicated notifications and
+  layouts after the return do nothing. `begin_fresh`: a new drag replaces
+  the whole snapshot. `notify_keeps_latest`: only tracked samples change the
+  recorded inset, so the return is the inset the finger took away.
+
+The return itself runs the inset-only path with compensation and a screen
+move of `start - latest`: `ListMomentum.keyboard_keeps_velocity` and
+`run_keeps_velocity` (a flight is translated and keeps its velocity),
+`follows_moves_by_inset` (the offset moves by exactly that much inside the
+edges) and `ListPass.lockstep_iff` (in step with the composer when both use
+the keyboard's timing) cover it.
+
 ## Theorems
 
 **Correctness**
@@ -1079,6 +1116,9 @@ settlement scheduling (`settleIfNeeded`, added in `1768f72`) is not modeled.
   list composes from settled places, moves, height followers and a shared
   layout layer touch at every frame with any shared term. `kink_bound`: a pinned anchor's chord is off
   its boundary only across half the viewport, and by a stated bound.
+- `ListReturn.resolution`, `at_most_once`: a cancelled keyboard dismissal
+  returns the content exactly once, by the inset the finger took away, in
+  every order of notifications, layouts and the release.
 - `ListDecel.engines_agree`, `springs_agree`: deceleration and bounce do not
   depend on the frame rate between edge crossings.
 - `ListRubber.adapt_no_jump`, `begin_catches`, `reanchor_idle`: an edge
