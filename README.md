@@ -176,11 +176,18 @@ YES` and capture its console output. `python3 scripts/check-performance.py
 <console.log>` checks the result; add `--simulator` for simulator output.
 The device regression budgets in milliseconds are 200 for launch, 50 for
 first Feed, 33.33 for repeated switches and feed jumps, 25 for rapid switches,
-66.67 for rotation, 50 for background/return, and 16.67 for the other phases.
-The simulator budget is 200 for startup and 50 for other phases. These allow
-headroom over measured results; they do not establish a one-frame guarantee. Every overrun of
-16.67 ms is printed. `--one-frame` checks the stricter benchmark, which
-currently fails on device startup, rotation and some tab switches. Use
+66.67 for rotation, 50 for background, 200 for return, and 16.67 for the
+other phases.
+The simulator budget is 200 for launch/return and 50 for other phases. Both
+checks also require all three node hosts to report at most 50 ms applying a
+commit. Launch and return include synchronous system scene work: an observed
+91 ms simulator return turn contained no library commit application, while
+reported host application peaked at 4.6 ms across that run. This observation
+does not identify which system call occupied that turn. These limits allow
+headroom over measured results; they do not establish a one-frame guarantee.
+Every overrun of 16.67 ms is printed. `--one-frame` checks the stricter benchmark, which
+currently fails on startup, rotation and some tab switches, and can fail on
+foreground restoration. It includes lifecycle phases on both platforms. Use
 `--require-background` when checking a run driven through background/return.
 
 The demo has four tabs: Layout (flexbox, borders, text, presses), Feed
