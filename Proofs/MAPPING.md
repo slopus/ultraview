@@ -142,7 +142,7 @@ up to rounding.
 | `Diff.survivors`, `moves` | the `kept` split into `survivors` and `moves` (ItemDiff.swift:28-32) |
 | `Animation.Track`, `value`, `deadline` | `AnimationTrack` (ListAnimation.swift:108-119) |
 | `Animation.Model.replace`, `transition`, `finish` | `ListAnimationModel.replace` / `transition` / `finish` (ListAnimation.swift:138-171) |
-| `Animation.Model.retime`, `fixedPass` | `ListAnimationModel.retime(since:)` (ListAnimation.swift:157), `AnimationController.capturePositions` / `retime` (AnimationController.swift:42, 81) |
+| `Animation.Model.retime`, `fixedPass` | Historical: `ListAnimationModel.retime(since:)` (ListAnimation.swift:157), `AnimationController.capturePositions` / `retime` (AnimationController.swift:42, 81). Since `460d78f` the controller does not retime; see "Independent size and position motion" |
 | `Animation.swiftPass` | the `transition`/`replace` calls of one `applyChanges` pass, all at one `time` with one transition (UltraListView.swift:207-483) |
 | `Pass.screen`, `displaced_row_screen`, `kept_row_screen` | the settled-rows loop's `oldY`/`newY` (UltraListView.swift:465-466) and the viewport replace (431) |
 | `Pass.detached_jump`, `scroll_carry_jumps` | `shiftDetached(by: shift)`, `makeDepartures(coordinateShift: shift)`, the carried placement and the crossing samples (UltraListView.swift:395, 400, 406, 439) |
@@ -166,7 +166,8 @@ up to rounding.
    overlap by 50 points. The fix is `retime` at the end of every animated
    pass that started a track (`fixed_one_timeline`, `fixed_pass_sync`,
    `fixed_scenario_touches`); `swiftPass_started` shows the Swift's
-   generation guard is the model's condition.
+   generation guard is the model's condition. `460d78f` replaced retiming
+   with size followers on each height's own clock (`composed_seam`).
 
 **Not covered.** `updateViewportInsets` (UltraListView.swift:486-514), the
 inset-only path, shifts the engine and the viewport track only; the
@@ -233,10 +234,12 @@ These rows pin `8afead2` plus the commit that adds this section.
 | --- | --- |
 | `Model.transitionNow`, `nowPass` | `ListAnimationModel.transition`'s immediate branch (ListAnimation.swift:153-161): opacity lands at once; an additive key in flight keeps its track; an absolute key in flight moves its track by the change unless an end would go below zero; otherwise `replace` |
 | a moved track keeps its timing | `AnimationController.transition` reinstalls it at the running animation's `beginTime` (AnimationController.swift:62-68) |
-| `Model.retime`'s `incl` | `AnimationController.retime`'s `including:` (AnimationController.swift:87-88): a bound layer, not `.viewport`, not `.opacity` |
+| `Model.retime`'s `incl` | Historical until `460d78f`: `AnimationController.retime`'s `including:` (AnimationController.swift:87-88): a bound layer, not `.viewport`, not `.opacity` |
 
-`fixed_one_timeline` and `fixed_pass_sync` now hold over the accepted keys, and
-`fixed_keeps_excluded` shows retiming leaves the others unchanged.
+`fixed_one_timeline` and `fixed_pass_sync` held over the accepted keys until
+`460d78f` removed the controller's retiming, and `fixed_keeps_excluded`
+shows retiming leaves the others unchanged. The immediate-branch rows still
+apply.
 `common_mode_cancels` is the reason the viewport may keep its own timing: a
 relation between content positions whose coefficients sum to zero does not
 depend on it. The model still does not cover completions, layer binding or
@@ -597,22 +600,28 @@ ticks is the physics' own, and the `maximumAdditionalRows: 64` budget, which
 `rebalanceIn_keeps` does not need (it bounds new rows, never removes loaded
 ones).
 
-## Independent size and position motion after `55e05d9`
+## Independent size and position motion at `460d78f`
 
 `Proofs/UltraProofs/List/Layers.lean` states what keeping a size motion's
-timing through a later move pass requires. The follow-up after `55e05d9`
-replaces the controller's whole-pass retiming with independent size followers.
-The older `fixed_pass_sync` model describes the earlier retiming policy.
-`ListAnimationModel.retime` remains as a legacy helper for ordinary property
-keys; it excludes the internal follower keys. The controller no longer calls it.
+clock through a later move pass requires, and `460d78f` implements it: the
+controller's whole-pass retiming is replaced by size followers. The older
+`fixed_pass_sync` model describes the earlier retiming policy (see the
+historical rows above). `ListAnimationModel.retime` remains as a legacy
+helper for ordinary property keys; it excludes the follower keys, and the
+controller no longer calls it. The rows pin `460d78f`.
 
-| Model | Swift |
+| Model (`Proofs/UltraProofs/List/Layers.lean`) | Swift |
 | --- | --- |
-| one term per timing in `superpose` | `ListAnimationModel.Key.positionSource`, `setPositionLayer`, and the sum in `value` (ListAnimation.swift:146-195) |
-| the height and follower group in `layered_touches` | `AnimationTrack.residual(multipliedBy:)` copies the size track's start and transition, with its residual scaled by the position coefficient (ListAnimation.swift:138) |
-| the follower's independent timing | `AnimationController.heightMotions`, `setPositionLayers`, and full-key `install` copy the source's actual layer origin; completion compares that key's generation (AnimationController.swift:131, :139, :262, :278) |
-| each group's start/end relation in `superpose` | `SizePositionGeometry.coefficient`: preceding heights, the anchor's common translation, and the row's own placement offset; `applyChanges` establishes all heights before followers (SizePositionGeometry.swift:8, UltraListView.swift:539-583) |
-| the move group in `layered_touches` | `preservesMoveClock` leaves an own move running during a size-only pass. Structural passes resume from the captured position minus the new followers; an unchanged effective own displacement retains its clock too (UltraListView.swift:529, :590, :598; AnimationController.swift:44, :162) |
+| a presented value as base plus one term per clock (`superpose`) | `ListAnimationModel.value`: the base track plus `positionLayerValue`, the sum of the `.positionY` keys with a `positionSource` (ListAnimation.swift:146-195) |
+| `residual`, `residual_exact` | `AnimationTrack.residual(multipliedBy:)` (ListAnimation.swift:138): `(from - to) · c` to 0 on the height's start and transition |
+| `coef common own s i` | `SizePositionGeometry.coefficient(source:row:from:to:ownPlacement:)` (SizePositionGeometry.swift:8): `common s` is `0` when the window anchors its top, `-[s < anchor]` otherwise, and the pinned secant for the anchor when it holds a pinned row; `own` is `placementOffset` at height 1 less at height 0 (UltraListView.swift:556) |
+| `secant`, `pinned` | the `pinsAnchorBottom` branch, with `half = visibleHeight / 2` (SizePositionGeometry.swift:10-15) |
+| `composed`, `composed_seam` | a row's position after a pass: `rowPositions`' settled place, its own move (`.positionY`), one follower per running height (`positionLayers`, UltraListView.swift:555-565) and the one layout layer every row gets (:574-584) |
+| `hs s`'s clock shared by its followers | `heightMotions` reads each height's installed origin, and `setPositionLayers` installs the followers with it (AnimationController.swift:131, :139-150, :262-268) |
+
+Swift tolerances the model drops: a coefficient within `1e-6` of 0 gets no
+follower (the model's term is that small), and heights within `1e-6` take
+the equal-heights branch of the secant.
 
 Position and size resumes use the same captured presentation frame. A size
 follower's captured contribution is its source's presented height residual
@@ -652,6 +661,12 @@ not established by `superpose`.
   its top with the common term `Σ common s · (h s - dst s)`; each source's
   share of that term is on the source's height timing, not the move's.
   `anchor_common`: `common s = -[s < anchor]` is `prefix_seam`'s form.
+- `residual_exact`: a follower that is a height's residual scaled by `c`,
+  on the height's clock, is `c` times the height's remaining change at every
+  time. `composed_seam`: rows composed as the list composes them (settled
+  place, own move, those followers, a shared layout layer) are apart by the
+  upper row's presented height plus the difference of their moves at every
+  time, for every height clock and every common coefficient.
 - `pinned_ends`, `pinned_left`, `pinned_right`: a pinned anchor's common
   coefficient is the chord of `max 0 (h - half) - h` from the old height to
   the new (or `0`/`-1` when they are equal). Both ends are exact, and on one
@@ -669,9 +684,14 @@ matrix covers Resize→Move, Move→Resize, same-row resize retargeting, Insert�
 the growing row itself moving, two independent sizes, a resize below the
 moved range, and Insert→(Move + Resize) where unrelated rows must retain the
 insertion's clock, interrupted at 0, 0.25, 0.5 and 0.75 seconds.
-The proofs assume that each group's endpoint relation holds; they do not prove
-the Swift's choice of anchor, pinned-boundary secant, remaining common layout
-offset, UIKit playback or generation callbacks.
+`composed_seam` holds for every choice of common coefficient and layout
+layer, so rows touch at every frame whichever anchor, pinned secant or
+layout offset the Swift picks, as long as adjacent rows' own moves agree and
+each follower plays on its height's clock. Where that common term puts the
+window (the anchor staying put, the pinned boundary) is the choice's, which
+`prefix_anchor` and the `pinned_*` theorems describe but no theorem shows is
+the Swift's intent. UIKit playback (that installed clocks are the model's)
+and generation callbacks are hypotheses, checked by the tests above.
 
 ## Pending scroll targets and readiness holds
 
@@ -873,6 +893,43 @@ inserted row, the nearest row on the anchor's side) is the list's choice and
 not modeled; the theorems hold for every choice. Member fades finishing is a
 hypothesis (`finished`).
 
+## Rubber banding and re-anchored drags at `2b33902`
+
+`Proofs/UltraProofs/List/Rubber.lean` models the rubber band and its
+inverse (ScrollMath.swift, unchanged since `b82d7b9`), the drag that uses
+them, and the re-anchor the list runs when a pass changes the edges during a
+drag. Swipe reveals use the same pair (SwipeReveal.swift at `76eab99`).
+
+| Model (`Proofs/UltraProofs/List/Rubber.lean`) | Swift |
+| --- | --- |
+| `band`, `rubber` | `ScrollMath.rubberBand` (ScrollMath.swift:25-31); `0 < r` stands for `range > ulpOfOne` |
+| `unband`, `unrubber` (`cap` is `1 - 1e-6`) | `ScrollMath.inverseRubberBand` (:32-38) |
+| `Drag`, `drag` | `ScrollAxis`'s `anchor`, `proposed`, `offset` and `drag(translation:)` (:58-70) |
+| `reanchor` | `ScrollAxis.reanchorDrag()` (:79-83), called by `UltraListView.applyChanges` after `setEdges` and `shift(by:)` when `absorbsEdgeChangeIntoOverscroll` (UltraListView.swift:495-497) |
+| `rubber_unrubber` with the swipe's edges | `SwipeRevealLayout.displayed` / `proposed` (SwipeReveal.swift:62-71), and the replayed drag's inferred anchor (GestureRecording.swift:41) |
+
+- `band_bounds`, `band_mono`: the shown overscroll is in `[0, range)` and
+  grows with the drag.
+- `rubber_unrubber`, `unrubber_rubber`: within the cap the two are inverse,
+  so catching a revealed row in motion, or replaying a recorded drag, starts
+  from what is shown.
+- `reanchor_no_jump`: after an edge change and the re-anchor, the drag's
+  current translation shows the offset shown before it, for any new edges,
+  provided the shifted offset is within `range * cap` of its new edge. The
+  next finger movement continues from there. `reanchor_idle`: with
+  unchanged edges a re-anchor is a no-op, so passes that re-anchor during a
+  drag never drift it.
+- `reanchor_capped`, `capped_jump`: when the shifted offset is farther than
+  `range * cap` past the new edge (an edge change larger than the viewport
+  under the finger), the next drag sample jumps to `range * cap` past it:
+  with a 400-point viewport and an offset 500 past the edge, by just over
+  100 points.
+
+The shift before the re-anchor (`ScrollAxis.shift(by:)`, :78) moves offset,
+anchor and proposed together, so the model's `Drag` is the state after it.
+Gesture delivery (that the next sample repeats the current translation when
+the finger has not moved) is outside the model.
+
 ## Theorems
 
 **Correctness**
@@ -951,10 +1008,12 @@ hypothesis (`finished`).
 - `ListFlight.flight_in_band`, `flight_rows_kept`: the flight stays in its
   covered band until the horizon, so rows it will show stay loaded.
 - `ListLayers.superpose`: motions on separate timings keep every linear
-  relation when each is its own additive layer. `common_seam`,
-  `position_top`: rows following every height above them touch at every
-  frame with any shared term. `kink_bound`: a pinned anchor's chord is off
+  relation when each is its own additive layer. `composed_seam`: rows the
+  list composes from settled places, moves, height followers and a shared
+  layout layer touch at every frame with any shared term. `kink_bound`: a pinned anchor's chord is off
   its boundary only across half the viewport, and by a stated bound.
+- `ListRubber.reanchor_no_jump`, `reanchor_idle`: an edge change during a
+  drag moves nothing under the finger, and re-anchoring never drifts it.
 - `ListDepartures.inv_run`, `no_cycle`, `weld_block`, `collect_empties`:
   departure blocks never ride in a cycle or ride a missing block, land on
   what they ride, and are all collected once their rows have faded.

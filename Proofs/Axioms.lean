@@ -226,6 +226,8 @@ open UltraProofs
 #print axioms ListLayers.pinned_kink
 #print axioms ListLayers.pinned_symm
 #print axioms ListLayers.kink_bound
+#print axioms ListLayers.residual_exact
+#print axioms ListLayers.composed_seam
 #print axioms ListDepartures.walk_sound
 #print axioms ListDepartures.no_cycle
 #print axioms ListDepartures.link_inv
@@ -240,3 +242,13 @@ open UltraProofs
 #print axioms ListDepartures.weld_row
 #print axioms ListDepartures.keeps_root
 #print axioms ListDepartures.collect_empties
+#print axioms ListRubber.band_bounds
+#print axioms ListRubber.band_mono
+#print axioms ListRubber.band_unband
+#print axioms ListRubber.unband_band
+#print axioms ListRubber.rubber_unrubber
+#print axioms ListRubber.unrubber_rubber
+#print axioms ListRubber.reanchor_no_jump
+#print axioms ListRubber.reanchor_idle
+#print axioms ListRubber.reanchor_capped
+#print axioms ListRubber.capped_jump

@@ -42,6 +42,11 @@ layer animations are.
   boundary `max 0 (h - half) - h` between the old and new heights. Both ends
   are exact; on one side of `half` every height is; across it the chord is
   above the boundary by at most `(half - lo)(hi - half) / (hi - lo)`.
+* `residual_exact`, `composed_seam`: a follower that is a height track's
+  residual scaled by its coefficient, on the height's clock, is the
+  coefficient times the height's remaining change; so rows composed of a
+  settled place, a move, those followers and a shared layout layer touch
+  at every frame up to their moves.
 -/
 
 namespace UltraProofs.ListLayers
@@ -386,5 +391,51 @@ theorem kink_bound {half lo hi a b x : Rat} (hl : lo ≤ half) (hh : half ≤ hi
     rw [e]
     exact ⟨Rat.mul_nonneg (by grind) (by grind),
       Rat.mul_le_mul_of_nonneg_left (by grind) (by grind)⟩
+
+/-! ## The list's composition -/
+
+/-- `AnimationTrack.residual(multipliedBy:)`: the height track's remaining
+change times `c`, on the height's own start and transition. -/
+def residual (h : Track) (c : Rat) : Track := ⟨h.generation, (h.src - h.dst) * c, 0, h.start, h.transition⟩
+
+/-- **A scaled follower is its coefficient times the height's remaining
+change**, at every time, whatever the curve. -/
+theorem residual_exact (C : Curves) (h : Track) (c time : Rat) :
+    (residual h c).value C time = c * (h.value C time - h.dst) := by
+  rw [lerp C, lerp C h, progress_timing C (a := residual h c) (b := h) rfl rfl time]
+  simp only [residual]; grind
+
+/-- Row `i`'s presented position as the list composes it at `time`: its
+settled place (its top plus `own i` times its settled height), its own move
+`m i`, one follower per height (source `s`'s residual with coefficient
+`coef common (own i) s i`), and the layout layer `L` every row carries. -/
+def composed (C : Curves) (Y : Rat) (hs : Nat → Track) (common own m : Nat → Rat) (L : Rat)
+    (n i : Nat) (time : Rat) : Rat :=
+  Y + pre (fun s => (hs s).dst) i + own i * (hs i).dst + m i + L +
+    pre (fun s => (residual (hs s) (coef common (own i) s i)).value C time) n
+
+theorem composed_position (C : Curves) (Y : Rat) (hs : Nat → Track) (common own m : Nat → Rat) (L : Rat)
+    (n i : Nat) (time : Rat) :
+    composed C Y hs common own m L n i time =
+      position (Y + L) (fun s => (hs s).dst) (fun s => (hs s).value C time) m common (own i) n i := by
+  have e : (fun s => (residual (hs s) (coef common (own i) s i)).value C time) =
+      fun s => coef common (own i) s i * ((hs s).value C time - (hs s).dst) := by
+    funext s; exact residual_exact C (hs s) _ time
+  simp only [composed, position, e]; grind
+
+/-- **Rows the list composes touch at every frame, up to their moves**: for
+adjacent loaded rows, row `i + 1`'s top (its position less `own` times its
+presented height) is row `i`'s top plus row `i`'s presented height plus the
+difference of their moves. That holds at every time, for every height
+clock, every common coefficient (anchor, pinned secant or none), and every
+layout layer they share. -/
+theorem composed_seam (C : Curves) (Y : Rat) (hs : Nat → Track) (common own m : Nat → Rat) (L : Rat)
+    {n i : Nat} (hi : i + 1 < n) (time : Rat) :
+    (composed C Y hs common own m L n (i + 1) time - own (i + 1) * (hs (i + 1)).value C time) -
+      (composed C Y hs common own m L n i time - own i * (hs i).value C time) =
+      (hs i).value C time + (m (i + 1) - m i) := by
+  rw [composed_position, composed_position, position_top _ _ _ _ _ _ hi,
+    position_top _ _ _ _ _ _ (Nat.lt_of_succ_lt hi)]
+  exact common_seam _ _ _ _ _ i
 
 end UltraProofs.ListLayers
