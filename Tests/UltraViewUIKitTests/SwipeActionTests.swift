@@ -331,5 +331,85 @@ private final class SwipeFixture {
         // The reveal pan fails at once for touches on these rows, so the list pan never waits.
         #expect(list.swipeActions.tap.isEnabled == false)
     }
+
+    /// Found by the chaos soak: a gesture that outlived its row's reveal opened
+    /// the row again without making it the revealed one.
+    @Test(arguments: ScrollEngineMode.allCases)
+    func closingARowMidGestureEndsTheGesturesHoldOnIt(mode: ScrollEngineMode) async throws {
+        let fixture = SwipeFixture(mode: mode)
+        let controller = fixture.controller
+        func openRows() -> [String] {
+            fixture.list.loadedIndexRange.compactMap { index in
+                abs(fixture.list.loadedItemView(at: index)?.layer.sublayerTransform.m41 ?? 0) > 0.5 ? fixture.list.items[index].identity : nil
+            }
+        }
+        // close() while the finger is down.
+        controller.simulateBegin("r2"); controller.simulateDrag(-60)
+        controller.close()
+        controller.simulateDrag(-90); controller.simulateRelease(velocity: -400)
+        await fixture.frames(0.8) { _ in }
+        #expect(controller.revealedIdentity == nil)
+        #expect(openRows().isEmpty)
+        // A VoiceOver action on the tracked row, then the gesture continues.
+        controller.simulateBegin("r3"); controller.simulateDrag(-60)
+        let view = try #require(fixture.view("r3"))
+        let archive = try #require(view.accessibilityCustomActions?.first { $0.name == "Archive" })
+        _ = archive.actionHandler?(archive)
+        controller.simulateDrag(-120); controller.simulateRelease(velocity: 0)
+        await fixture.frames(0.8) { _ in }
+        #expect(controller.revealedIdentity == nil && openRows().isEmpty)
+        // The row loses its actions mid-gesture.
+        controller.simulateBegin("r4"); controller.simulateDrag(-60)
+        fixture.log.rows[4].trailingSwipeActions = []; fixture.log.rows[4].leadingSwipeActions = []; fixture.log.rows[4].revision += 1
+        fixture.list.applyChanges(items: fixture.log.rows, transition: .none)
+        fixture.list.layoutIfNeeded()
+        controller.simulateDrag(-120); controller.simulateRelease(velocity: 0)
+        await fixture.frames(0.8) { _ in }
+        #expect(controller.revealedIdentity == nil && openRows().isEmpty)
+        #expect(fixture.log.performed == ["archive:r3"])
+    }
+
+    @Test(arguments: ScrollEngineMode.allCases)
+    func externalInputRevealsAndFullSwipesUnderTouchRules(mode: ScrollEngineMode) async throws {
+        let fixture = SwipeFixture(mode: mode)
+        let controller = fixture.controller
+        func send(_ phase: GestureRecording.Event.Phase, _ dx: Double, _ velocity: Double = 0, row: String) {
+            controller.receiveInput(.init(time: CACurrentMediaTime(), phase: phase, translation: .init(x: dx), velocity: .init(x: velocity)), row: row)
+        }
+        // Tracks one to one, then opens on release.
+        send(.touchDown, 0, row: "r2"); send(.began, -10, row: "r2")
+        for dx in stride(from: -20.0, through: -120, by: -20) { send(.changed, dx, row: "r2") }
+        #expect(controller.revealOffset("r2") == -120)
+        // A second gesture on another row is ignored while one tracks.
+        send(.began, -30, row: "r5")
+        #expect(controller.revealOffset("r5") == nil)
+        send(.ended, -120, 0, row: "r2")
+        await fixture.frames(0.8) { _ in }
+        #expect(controller.revealedIdentity == "r2")
+        #expect(abs(fixture.presentedOffset("r2") + 152) < 0.01)
+        // Rows without actions never begin; a moving list never begins either.
+        fixture.log.rows[7].trailingSwipeActions = []; fixture.log.rows[7].leadingSwipeActions = []; fixture.log.rows[7].revision += 1
+        fixture.list.applyChanges(items: fixture.log.rows, transition: .none)
+        send(.began, -40, row: "r7")
+        #expect(controller.revealOffset("r7") == nil && controller.revealedIdentity == "r2")
+        fixture.list.beginMomentum(velocity: 2000)
+        send(.began, -40, row: "r4")
+        #expect(controller.revealOffset("r4") == nil)
+        fixture.list.haltScrolling()
+        await fixture.frames(0.3) { _ in }
+        // A full swipe on another row closes the first and performs the edge action.
+        send(.began, -10, row: "r4")
+        #expect(controller.revealedIdentity == "r4")
+        for dx in stride(from: -60.0, through: -360, by: -60) { send(.changed, dx, row: "r4") }
+        send(.ended, -360, -800, row: "r4")
+        #expect(fixture.log.performed == ["delete:r4"])
+        await fixture.frames(0.8) { _ in }
+        #expect(controller.revealedIdentity == nil)
+        #expect(abs(fixture.presentedOffset("r2")) < 0.01)
+        // A cancel releases without velocity: a short reveal closes and nothing is performed.
+        send(.began, 10, row: "r3"); send(.changed, 30, row: "r3"); send(.cancelled, 30, 3000, row: "r3")
+        await fixture.frames(0.8) { _ in }
+        #expect(controller.revealedIdentity == nil && fixture.log.performed == ["delete:r4"])
+    }
 }
 #endif

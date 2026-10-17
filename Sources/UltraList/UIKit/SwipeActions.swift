@@ -68,10 +68,10 @@ public final class ListSwipeController: NSObject, UIGestureRecognizerDelegate {
     }
     var listIsMoving: Bool {
         guard let list else { return false }
-        if let platform = list.engine as? PlatformEngine { return platform.scroll.isDecelerating || platform.scroll.isDragging }
-        guard let physics = list.engine as? PhysicsEngine else { return false }
+        // The engine's own state covers replayed and programmatic momentum too.
+        if list.isDecelerating || list.isDragging || list.isScrollFlightActive { return true }
         // A forced pan caught moving content in this touch, whichever recognizer saw it first.
-        return physics.flightState != nil || physics.core.isDecelerating || physics.core.isDragging || physics.pan.forced
+        return (list.engine as? PhysicsEngine)?.pan.forced == true
     }
     /// A touch on moving content catches it. The list's pan takes that touch
     /// at once, which it can only do if no reveal is still pending.
@@ -105,22 +105,54 @@ public final class ListSwipeController: NSObject, UIGestureRecognizerDelegate {
         defer { MainThreadMonitor.shared.note("swipe pan \(phase) \((CACurrentMediaTime() - started) * 1000) ms") }
         let dx = pan.translation(in: list).x
         switch pan.state {
-        case .began:
-            haptics.prepare()
-            if let closing = registry.begin(candidate) { settle(closing, to: .closed, velocity: 0, animated: true) }
-            let reveal = catchReveal(candidate)
-            tracking = (candidate, reveal.map { proposed(for: $0.offset, reveal: $0) } ?? 0)
-            track(candidate, proposedOffset: tracking!.start + dx)
-        case .changed:
-            guard let tracking, tracking.identity == candidate else { return }
-            track(candidate, proposedOffset: tracking.start + dx)
-        case .ended, .cancelled:
-            guard let tracking, tracking.identity == candidate else { return }
-            self.tracking = nil
-            let velocity = pan.state == .cancelled ? 0 : pan.velocity(in: list).x
-            release(candidate, velocity: velocity)
+        case .began: beginTracking(candidate, dx: dx)
+        case .changed: continueTracking(candidate, dx: dx)
+        case .ended: endTracking(candidate, velocity: pan.velocity(in: list).x)
+        case .cancelled: endTracking(candidate, velocity: 0)
         default: break
         }
+    }
+    /// Feeds a recorded or shared horizontal gesture on the row `identity`
+    /// without synthesizing UIKit touches. Translation and velocity are along
+    /// the list's x axis, in points and points per second. A gesture begins
+    /// under a touch's rules: the row has actions or is revealed, and the list
+    /// is still. Input comes from one source at a time.
+    public func receiveInput(_ event: GestureRecording.Event, row identity: String) {
+        switch event.phase {
+        case .touchDown: break
+        case .began:
+            guard tracking == nil, !listIsMoving, currentRow(identity) != nil,
+                  hasActions(identity) || registry.active == identity else { return }
+            beginTracking(identity, dx: event.translation.x)
+        case .changed: continueTracking(identity, dx: event.translation.x)
+        case .ended: endTracking(identity, velocity: event.velocity.x)
+        case .cancelled: endTracking(identity, velocity: 0)
+        }
+    }
+    private func beginTracking(_ identity: String, dx: Double) {
+        haptics.prepare()
+        if let closing = registry.begin(identity) { settle(closing, to: .closed, velocity: 0, animated: true) }
+        let reveal = catchReveal(identity)
+        let start = reveal.map { proposed(for: $0.offset, reveal: $0) } ?? 0
+        tracking = (identity, start)
+        track(identity, proposedOffset: start + dx)
+    }
+    private func continueTracking(_ identity: String, dx: Double) {
+        guard let tracking = tracked(identity) else { return }
+        track(identity, proposedOffset: tracking.start + dx)
+    }
+    private func endTracking(_ identity: String, velocity: Double) {
+        guard tracked(identity) != nil else { return }
+        self.tracking = nil
+        release(identity, velocity: velocity)
+    }
+    /// The gesture on `identity`, while that row is still the revealed one.
+    /// Closing it (`close()`, an action, a reconcile) ends the gesture's hold
+    /// on it: later movement must not reveal a row the registry doesn't know.
+    private func tracked(_ identity: String) -> (identity: String, start: Double)? {
+        guard let tracking, tracking.identity == identity else { return nil }
+        guard registry.active == identity else { self.tracking = nil; return nil }
+        return tracking
     }
     @objc private func tapped() {
         guard tap.state == .ended, let identity = registry.active else { return }
@@ -495,12 +527,11 @@ public final class ListSwipeController: NSObject, UIGestureRecognizerDelegate {
     }
     func simulateDrag(_ dx: Double) {
         guard let tracking else { return }
-        track(tracking.identity, proposedOffset: tracking.start + dx)
+        continueTracking(tracking.identity, dx: dx)
     }
     func simulateRelease(velocity: Double) {
         guard let tracking else { return }
-        self.tracking = nil
-        release(tracking.identity, velocity: velocity)
+        endTracking(tracking.identity, velocity: velocity)
     }
     func simulateTap(button: Int?) {
         guard let identity = registry.active else { return }
