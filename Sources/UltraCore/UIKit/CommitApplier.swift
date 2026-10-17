@@ -97,19 +97,34 @@ extension UltraNode {
     /// Puts the children's views in `view` in order, after the node's own
     /// sublayers and below any non-node subviews (such as scroll
     /// indicators).
+    ///
+    /// Only views that are new or out of order are inserted: when a scroll
+    /// range moves, the rows that stay keep their place and only the rows
+    /// coming in are added.
     @MainActor
     private func order(_ children: [UltraNode], in view: UIView) {
         mountedChildren = children
         let wanted = children.compactMap(\.mountedView)
         let wantedSet = Set(wanted.map(ObjectIdentifier.init))
+        // The wanted views already in `view`, bottom to top.
         let current = view.subviews.filter { wantedSet.contains(ObjectIdentifier($0)) }
-        guard current.count != wanted.count || !zip(current, wanted).allSatisfy({ $0 === $1 }) else { return }
+        var moved = Set<ObjectIdentifier>()
+        var cursor = 0
         var previous: UIView?
         for child in wanted {
-            if let previous {
-                view.insertSubview(child, aboveSubview: previous)
+            while cursor < current.count, moved.contains(ObjectIdentifier(current[cursor])) {
+                cursor += 1
+            }
+            if cursor < current.count, current[cursor] === child {
+                // Above everything placed so far: already in order.
+                cursor += 1
             } else {
-                view.insertSubview(child, at: 0)
+                if let previous {
+                    view.insertSubview(child, aboveSubview: previous)
+                } else {
+                    view.insertSubview(child, at: 0)
+                }
+                moved.insert(ObjectIdentifier(child))
             }
             previous = child
         }
