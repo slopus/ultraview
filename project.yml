@@ -54,10 +54,10 @@ targets:
     templates: [PackageTests]
     sources:
       - path: Tests/UltraLayoutTests
-  UltraNodeTests:
+  UltraCoreTests:
     templates: [PackageTests]
     sources:
-      - path: Tests/UltraNodeTests
+      - path: Tests/UltraCoreTests
   UltraListTests:
     templates: [PackageTests]
     sources:
@@ -73,7 +73,7 @@ schemes:
       targets:
         UltraViewDemo: all
         UltraLayoutTests: [test]
-        UltraNodeTests: [test]
+        UltraCoreTests: [test]
         UltraListTests: [test]
         UltraViewUIKitTests: [test]
     run:
@@ -82,6 +82,6 @@ schemes:
       config: Debug
       targets:
         - UltraLayoutTests
-        - UltraNodeTests
+        - UltraCoreTests
         - UltraListTests
         - UltraViewUIKitTests

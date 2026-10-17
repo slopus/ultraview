@@ -7,15 +7,12 @@ only applies finished results. Layout is flexbox, computed by
 Native's View, Text and ScrollView model. A virtualized list with its own
 scroller instead of `UIScrollView` is planned on top of nodes.
 
-This is the bootstrap: the package, build setup, tests and a demo app work,
-but the modules hold placeholders.
-
-| Module        | What it is                                                         |
-| ------------- | ------------------------------------------------------------------ |
-| `UltraLayout` | Yoga flexbox behind a Swift API. Foundation only, tested on Linux. |
-| `UltraNode`   | Nodes: measured and laid out off the main thread.                  |
-| `UltraList`   | The list and its scroller. The math is tested on Linux.            |
-| `UltraView`   | Umbrella: `import UltraView` re-exports the three above.           |
+| Module        | What it is                                                                 |
+| ------------- | -------------------------------------------------------------------------- |
+| `UltraLayout` | Yoga flexbox behind a Swift API. Foundation only, tested on Linux.         |
+| `UltraCore`   | The node pipeline and the `UltraNode`, `UltraTextNode` and `UltraScrollNode` components. |
+| `UltraList`   | The list and its scroller (placeholder). The math is tested on Linux.      |
+| `UltraView`   | Umbrella: `import UltraView` re-exports the three above.                   |
 
 Requires iOS 26 and Swift 6.2 (Xcode 26).
 
@@ -30,18 +27,69 @@ Requires iOS 26 and Swift 6.2 (Xcode 26).
 ```swift
 import UltraView
 
-var row = LayoutStyle()
-row.flexDirection = .row
-row.gap = 8
-var tile = LayoutStyle()
-tile.flexGrow = 1
-let tree = Node(style: row, children: [Node(style: tile), Node(style: tile)])
+var card = Style()
+card.flexDirection = .row
+card.gap = 12
+card.padding = 16
+card.backgroundColor = .white
+card.borderRadius = 12
 
-// Any thread:
-let result = tree.layout(width: 320, height: 100)
-// Main thread, with views that mirror the tree:
-result.apply(to: containerView)
+let title = UltraTextNode(spans: [
+    TextSpan("Hello, ", style: TextStyle(fontWeight: .bold)),
+    TextSpan("world", style: TextStyle(color: .blue), onPress: { print("pressed") }),
+], textStyle: TextStyle(fontSize: 17), numberOfLines: 2)
+title.style.flex = 1
+
+var fill = Style()
+fill.flex = 1
+let root = UltraScrollNode(style: fill, children: [
+    UltraNode(style: card, children: [title]),
+])
+
+// Main thread: show it.
+let host = NodeHostView(rootNode: root)
+view.addSubview(host)
+
+// Any thread, any time later: change it.
+title.text = "Updated from a background queue"
 ```
+
+- `UltraNode` is a flexbox box: every Yoga property, background, per-side
+  border widths and colors, per-corner radii, opacity, transform, shadow,
+  `pointerEvents`, `hitSlop`, accessibility, and `onPress`, `onLongPress`,
+  `onPressIn`, `onPressOut`. Children: `addChild`, `insertChild`,
+  `removeChild`, `setChildren`.
+- `UltraTextNode` is styled text: nested `TextSpan`s that inherit their
+  parent's `TextStyle`, `numberOfLines` with `ellipsizeMode` (head, middle,
+  tail, clip), Dynamic Type with `allowFontScaling` and
+  `maxFontSizeMultiplier`, and pressable spans.
+- `UltraScrollNode` is a `UIScrollView` whose content is laid out by Yoga:
+  `contentContainerStyle`, `horizontal`, `contentInset`, indicators, paging,
+  `bounces`, `scrollEnabled`, `keyboardDismissMode`, `onScroll`,
+  `scrollTo(x:y:animated:)` and `scrollToEnd`. Only children near the
+  viewport keep views and bitmaps.
+
+Styles default to Yoga's: column direction, `flexShrink` 0, `alignContent`
+flex-start.
+
+### Threads
+
+A change to a node, from any thread, records the new value and schedules a
+pass. Changes made close together share one pass. The pass runs on a serial
+background queue: it runs Yoga over the tree, measures text with Core Text
+(as Yoga measure functions, keeping the layout for drawing), works out which
+nodes are near the screen, and draws the changed ones into bitmaps on a
+concurrent queue. It produces a commit: an immutable value listing only the
+nodes whose frame, properties or bitmap changed, plus views to create or
+remove. A newer pass supersedes a commit that hasn't been applied yet, and
+drawing for a node that changed again is thrown away.
+
+The main thread applies a commit in one Core Animation transaction: it
+creates and removes views, assigns frames, layer properties and bitmaps,
+and nothing else. Debug builds assert that no layout pass, text measurement
+or drawing runs on it, and `Diagnostics` counts them by thread. When a host
+first appears in a window, and when its size changes, it waits for the
+commit for its new state, so there is no blank frame.
 
 ## Building on Linux
 
@@ -64,6 +112,11 @@ brew install xcodegen
 xcodegen                       # writes UltraView.xcodeproj (not committed)
 open UltraView.xcodeproj       # scheme UltraViewDemo: run the demo, ⌘U for tests
 ```
+
+The demo has three tabs: Layout (flexbox, borders, text, presses), Feed
+(1,000 cards in a scroll node) and Stress (background threads changing
+nodes, with the main thread's cost per commit on screen). Launch it with
+`-screen layout`, `-screen feed` or `-screen stress` to open a given tab.
 
 From the command line:
 

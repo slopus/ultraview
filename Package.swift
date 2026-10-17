@@ -13,7 +13,9 @@ import PackageDescription
 //
 // Module layers, bottom to top:
 //   UltraLayout  Yoga flexbox behind a Swift API. Foundation only.
-//   UltraNode    nodes: measured and laid out off the main thread.
+//   UltraCore    the node pipeline and the UltraNode, UltraTextNode and
+//                UltraScrollNode components: measured, laid out and drawn
+//                off the main thread, applied on it.
 //   UltraList    the list and its own scroller, built on nodes.
 //   UltraView    umbrella that re-exports the three above.
 
@@ -39,16 +41,16 @@ let package = Package(
             dependencies: [.product(name: "yoga", package: "yoga")]
         ),
         .target(
-            name: "UltraNode",
+            name: "UltraCore",
             dependencies: ["UltraLayout"]
         ),
         .target(
             name: "UltraList",
-            dependencies: ["UltraLayout", "UltraNode"]
+            dependencies: ["UltraLayout", "UltraCore"]
         ),
         .target(
             name: "UltraView",
-            dependencies: ["UltraLayout", "UltraNode", "UltraList"]
+            dependencies: ["UltraLayout", "UltraCore", "UltraList"]
         ),
         .target(
             name: "UltraViewDemo",
@@ -59,8 +61,8 @@ let package = Package(
             dependencies: ["UltraLayout"]
         ),
         .testTarget(
-            name: "UltraNodeTests",
-            dependencies: ["UltraNode"]
+            name: "UltraCoreTests",
+            dependencies: ["UltraCore", "UltraLayout"]
         ),
         .testTarget(
             name: "UltraListTests",
