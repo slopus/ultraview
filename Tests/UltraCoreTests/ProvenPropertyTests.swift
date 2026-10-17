@@ -4,8 +4,7 @@ import Testing
 import UltraLayout
 
 /// Properties the formal model in `Proofs/` assumes or proves, checked
-/// against the pipeline. A known issue marks a case where the code doesn't
-/// have the property yet.
+/// against the pipeline.
 @Suite struct ProvenPropertyTests {
     /// Commit soundness assumes layout is a pure function of the tree: a
     /// tree laid out again after a change must get the frames a fresh
@@ -30,9 +29,7 @@ import UltraLayout
         fresh.pass()
         let expected = fresh.read { freshInner.shadow.frame }
         #expect(expected == CGRect(x: 20, y: 0, width: 80, height: 10))
-        withKnownIssue("Yoga's layout cache keeps the padding resolved against the old width") {
-            #expect(harness.read { inner.shadow.frame } == expected)
-        }
+        #expect(harness.read { inner.shadow.frame } == expected)
     }
 
     /// Text inside percentage padding: its inset, link regions and bitmap
@@ -62,9 +59,7 @@ import UltraLayout
         fresh.pass()
         let expected = fresh.read { freshLabel.shadow.sentProps?.text?.links }
         #expect(expected?.first?.rects.first?.minX == 40)
-        withKnownIssue("the stale padding keeps the old inset; evaluate also skips a node whose frame is unchanged") {
-            #expect(harness.read { resized.shadow.sentProps?.text?.links } == expected)
-        }
+        #expect(harness.read { resized.shadow.sentProps?.text?.links } == expected)
     }
 
     /// Interface states are computed from each node's parent. A node moved
@@ -93,9 +88,7 @@ import UltraLayout
         harness.pass()
 
         #expect(newParent.interfaceState == .all)
-        withKnownIssue("assignState follows the old parent's stale child list") {
-            #expect(moved.interfaceState == newParent.interfaceState)
-            #expect(harness.read { moved.shadow.isMounted })
-        }
+        #expect(moved.interfaceState == newParent.interfaceState)
+        #expect(harness.read { moved.shadow.isMounted })
     }
 }

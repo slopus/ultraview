@@ -20,8 +20,15 @@ import UltraLayout
         return commit
     }
 
-    @Test func onScreenWorkIsNowAndOffScreenMountsAreLaterParentsFirst() throws {
+    private func unmount(_ node: UltraNode, wasVisible: Bool) -> CommitEntry {
+        var entry = CommitEntry(kind: .unmount, node: node)
+        entry.isVisible = wasVisible
+        return entry
+    }
+
+    @Test func onScreenWorkIsNowAndOffScreenViewsAreLater() throws {
         let root = UltraNode(), shown = UltraNode(), ahead = UltraNode(), aheadChild = UltraNode(), other = UltraNode()
+        let leftScreen = UltraNode(), leftRange = UltraNode()
         var update = CommitEntry(kind: .update, node: other)
         update.frame = .zero
         var queue = CommitQueue()
@@ -31,14 +38,15 @@ import UltraLayout
             mount(ahead, parent: root, depth: 1, visible: false),
             update,
             mount(shown, parent: root, depth: 1, visible: true),
-            CommitEntry(kind: .unmount, node: UltraNode()),
+            unmount(leftScreen, wasVisible: true),
+            unmount(leftRange, wasVisible: false),
         ]))
 
         let taken = queue.takeTurn()
         let turn = try #require(taken)
-        #expect(turn.now.count == 4)
-        #expect(turn.now.contains { $0.node === root } && turn.now.contains { $0.node === shown })
-        #expect(same(turn.later.map(\.node), [ahead, aheadChild]))
+        #expect(Set(turn.now.map { ObjectIdentifier($0.node) }) == ids([root, other, shown, leftScreen]))
+        // Removals first, then creations parents first.
+        #expect(same(turn.later.map(\.node), [leftRange, ahead, aheadChild]))
         #expect(!queue.hasWork)
     }
 
@@ -80,9 +88,27 @@ import UltraLayout
         let takenAgain = queue.takeTurn()
         let second = try #require(takenAgain)
         #expect(second.generation == 2)
-        #expect(second.later.isEmpty)
-        #expect(second.now.first { $0.node === b }?.kind == .unmount)
+        #expect(same(second.later.map(\.node), [b]))
+        #expect(second.later.first?.kind == .unmount)
         #expect(second.now.first { $0.node === c }?.kind == .mount, "still a mount, now on screen")
+    }
+
+    @Test func deferredRemovalIsReplacedByANewerMount() throws {
+        let root = UltraNode(), row = UltraNode()
+        var queue = CommitQueue()
+        queue.add(commit(1, [unmount(row, wasVisible: false)]))
+        let taken = queue.takeTurn()
+        let first = try #require(taken)
+        #expect(first.now.isEmpty)
+        queue.putBack(first.later, of: first)
+
+        queue.add(commit(2, [mount(row, parent: root, depth: 1, visible: true)]))
+        let takenAgain = queue.takeTurn()
+        let second = try #require(takenAgain)
+        #expect(second.later.isEmpty)
+        #expect(second.now.count == 1)
+        #expect(second.now.first?.kind == .mount)
+        #expect(second.now.first?.parent === root)
     }
 }
 
@@ -195,5 +221,62 @@ import UltraLayout
         body.text = "Short"
         let size = await NodeMeasurement.measure(root, width: 200, environment: environment, measurer: CountingMeasurer())
         #expect(size == CGSize(width: 200, height: 79))
+    }
+}
+
+/// Results that must not depend on how the tree got to its state.
+@Suite struct IncrementalLayoutTests {
+    @Test func percentagePaddingMovesTextInsideAnUnchangedFrame() throws {
+        func label() -> UltraTextNode {
+            UltraTextNode(
+                spans: [TextSpan("ab"), TextSpan("cd", onPress: {})],
+                style: {
+                    var style = Style()
+                    style.width = 100
+                    style.height = 50
+                    style.paddingLeft = .percent(10)
+                    return style
+                }(),
+                textStyle: TextStyle(fontSize: 20)
+            )
+        }
+        let resized = label()
+        let harness = Harness(root: box({ $0.alignItems = .flexStart }, children: [resized]), width: 300)
+        harness.pass()
+        harness.update { $0.width = 200 }
+        let commit = try #require(harness.pass())
+        #expect(commit.entry(for: resized)?.frame == nil, "the frame stays")
+
+        let fresh = label()
+        let freshHarness = Harness(root: box({ $0.alignItems = .flexStart }, children: [fresh]), width: 200)
+        freshHarness.pass()
+        let expected = freshHarness.read { fresh.shadow.sentProps?.text?.links }
+        #expect(expected?.first?.rects.first?.minX == 40)
+        #expect(harness.read { resized.shadow.sentProps?.text?.links } == expected)
+        #expect(commit.entry(for: resized)?.contents?.contents != nil, "redrawn at the new inset")
+    }
+
+    @Test func aNodeMovedWhileItsOldParentChangesKeepsItsNewParentsState() throws {
+        let moved = box { $0.height = 10 }
+        let rows = (0..<100).map { _ in box { $0.height = 50 } }
+        rows[0].addChild(moved)
+        let scroll = UltraScrollNode(style: { var style = Style(); style.height = 100; return style }(), children: rows)
+        let newParent = box { $0.height = 20 }
+        let harness = Harness(root: box(children: [scroll, newParent]))
+        harness.pass()
+
+        // The move is seen by the pass through the new parent only: the old
+        // parent's mark comes after the pass started. In the same pass the
+        // old parent leaves every range.
+        newParent.addChild(moved)
+        rows[0].needsSync.store(false, ordering: .sequentiallyConsistent)
+        scroll.reportContentOffset(CGPoint(x: 0, y: 2000))
+        harness.pass()
+        rows[0].setNeedsSync()
+        harness.pass()
+
+        #expect(newParent.interfaceState == .all)
+        #expect(moved.interfaceState == .all)
+        #expect(harness.read { moved.shadow.isMounted && moved.shadow.parent === newParent })
     }
 }

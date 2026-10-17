@@ -28,9 +28,21 @@ public final class LayoutNode {
         didSet {
             if style != oldValue {
                 apply(style)
+                setHasPercentEdges(style.hasPercentEdges)
             }
         }
     }
+
+    // Yoga resolves percentage padding, margins and insets against the
+    // parent's size, but reuses a cached layout for a node whose own
+    // available size didn't change, keeping the old values. These track the
+    // nodes that have such edges, so a layout can find them and redo those
+    // whose parent changed size.
+    private var hasPercentEdges = false
+    /// Nodes in this subtree, itself included, with percentage edges.
+    private var percentEdgeNodes = 0
+    /// The parent's content size the edges were last resolved against.
+    private var percentBase: CGSize?
 
     /// Sizes a leaf from its content, for example text. A node with a measure
     /// function can't have children. Call `markDirty()` when the content
@@ -66,6 +78,7 @@ public final class LayoutNode {
         self.config = config
         YGNodeSetContext(yogaNode, Unmanaged.passUnretained(self).toOpaque())
         apply(style)
+        setHasPercentEdges(style.hasPercentEdges)
         for child in children {
             addChild(child)
         }
@@ -91,6 +104,12 @@ public final class LayoutNode {
         YGNodeInsertChild(yogaNode, child.yogaNode, index)
         children.insert(child, at: index)
         child.parent = self
+        child.percentBase = nil
+        addPercentEdgeNodes(child.percentEdgeNodes)
+        if child.hasPercentEdges {
+            // Its cached layout was resolved against another parent.
+            child.markLayoutDirty()
+        }
     }
 
     public func removeChild(_ child: LayoutNode) {
@@ -98,6 +117,7 @@ public final class LayoutNode {
         YGNodeRemoveChild(yogaNode, child.yogaNode)
         children.remove(at: index)
         child.parent = nil
+        addPercentEdgeNodes(-child.percentEdgeNodes)
     }
 
     public func removeFromParent() {
@@ -106,10 +126,13 @@ public final class LayoutNode {
 
     public func removeAllChildren() {
         YGNodeRemoveAllChildren(yogaNode)
+        var removed = 0
         for child in children {
             child.parent = nil
+            removed += child.percentEdgeNodes
         }
         children.removeAll()
+        addPercentEdgeNodes(-removed)
     }
 
     // MARK: Computing
@@ -121,6 +144,11 @@ public final class LayoutNode {
         direction: LayoutStyle.Direction = .leftToRight
     ) {
         YGNodeCalculateLayout(yogaNode, Yoga.float(width), Yoga.float(height), direction.yoga)
+        // Redo the nodes whose percentage edges went stale. Their new
+        // edges can resize their parents, so repeat, a few times at most.
+        for _ in 0..<3 where percentEdgeNodes > 0 && invalidateStalePercentEdges() {
+            YGNodeCalculateLayout(yogaNode, Yoga.float(width), Yoga.float(height), direction.yoga)
+        }
     }
 
     /// Tells Yoga the measured content changed. Only for nodes with a measure
@@ -140,6 +168,69 @@ public final class LayoutNode {
     public var hasNewLayout: Bool {
         get { YGNodeGetHasNewLayout(yogaNode) }
         set { YGNodeSetHasNewLayout(yogaNode, newValue) }
+    }
+
+    // MARK: Percentage edges
+
+    private func setHasPercentEdges(_ value: Bool) {
+        guard value != hasPercentEdges else { return }
+        hasPercentEdges = value
+        percentBase = nil
+        addPercentEdgeNodes(value ? 1 : -1)
+    }
+
+    private func addPercentEdgeNodes(_ count: Int) {
+        guard count != 0 else { return }
+        var node: LayoutNode? = self
+        while let current = node {
+            current.percentEdgeNodes += count
+            node = current.parent
+        }
+    }
+
+    /// Marks dirty the nodes whose parent's content size changed since
+    /// their percentage edges were resolved. Returns whether it marked any.
+    private func invalidateStalePercentEdges() -> Bool {
+        var marked = false
+        if hasPercentEdges, let parent {
+            let base = parent.contentSize
+            if let old = percentBase, old != base {
+                markLayoutDirty()
+                marked = true
+            }
+            percentBase = base
+        }
+        for child in children where child.percentEdgeNodes > 0 {
+            if child.invalidateStalePercentEdges() {
+                marked = true
+            }
+        }
+        return marked
+    }
+
+    /// The size inside the padding and border, which children's
+    /// percentages resolve against.
+    private var contentSize: CGSize {
+        let size = frame.size
+        let padding = resolvedPadding
+        let border = resolvedBorder
+        return CGSize(
+            width: size.width - padding.left - padding.right - border.left - border.right,
+            height: size.height - padding.top - padding.bottom - border.top - border.bottom
+        )
+    }
+
+    /// Makes Yoga lay this node out again. Its C API only dirties nodes
+    /// with a measure function directly; any other node is dirtied by a
+    /// style change, so one is made and undone.
+    private func markLayoutDirty() {
+        if measureFunction != nil {
+            YGNodeMarkDirty(yogaNode)
+            return
+        }
+        let ratio = YGNodeStyleGetAspectRatio(yogaNode)
+        YGNodeStyleSetAspectRatio(yogaNode, ratio.isNaN ? 1 : .nan)
+        YGNodeStyleSetAspectRatio(yogaNode, ratio)
     }
 
     // MARK: Results
