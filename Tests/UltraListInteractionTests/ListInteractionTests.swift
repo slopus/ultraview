@@ -15,13 +15,19 @@ final class ListInteractionTests: XCTestCase {
         }
     }
     @MainActor func testRecordPublicGestures() throws {
+        try recordGestures(["slow-drag", "medium-flick", "into-bottom", "overscroll"])
+    }
+    @MainActor func testRecordEdgeFlick() throws {
+        try recordGestures(["into-bottom"])
+    }
+    @MainActor private func recordGestures(_ fixtures: [String]) throws {
         let app = XCUIApplication()
         app.launchArguments = ["-screen", "lists", "-listScreen", "record"]
         app.launch()
         let canvas = app.scrollViews["gestureCanvas"]
         XCTAssertTrue(canvas.waitForExistence(timeout: 10))
         let name = app.textFields["recordingName"]
-        for fixture in ["slow-drag", "medium-flick", "into-bottom", "overscroll"] {
+        for fixture in fixtures {
             name.tap()
             if let value = name.value as? String { name.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: value.count)) }
             name.typeText(fixture)

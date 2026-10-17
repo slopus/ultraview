@@ -1,0 +1,1238 @@
+{
+  "edges" : {
+    "maximum" : 7409,
+    "minimum" : 0
+  },
+  "events" : [
+    {
+      "phase" : "began",
+      "time" : 0.8205302916667279,
+      "translation" : {
+        "x" : 0,
+        "y" : 0
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : -277.33333333465146
+      }
+    },
+    {
+      "phase" : "changed",
+      "time" : 0.837155583333697,
+      "translation" : {
+        "x" : 0,
+        "y" : -11.66666666666606
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : -652.0000000094951
+      }
+    },
+    {
+      "phase" : "changed",
+      "time" : 0.8537641250004526,
+      "translation" : {
+        "x" : 0,
+        "y" : -23.66666666666606
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : -704.0000000102154
+      }
+    },
+    {
+      "phase" : "changed",
+      "time" : 0.8704647916665635,
+      "translation" : {
+        "x" : 0,
+        "y" : -36.66666666666606
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : -732.0000000021391
+      }
+    },
+    {
+      "phase" : "changed",
+      "time" : 0.8871103750007023,
+      "translation" : {
+        "x" : 0,
+        "y" : -49.66666666666606
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : -779.999999977299
+      }
+    },
+    {
+      "phase" : "changed",
+      "time" : 0.9037754166665763,
+      "translation" : {
+        "x" : 0,
+        "y" : -63.33333333333303
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : -788.0000000114705
+      }
+    },
+    {
+      "phase" : "changed",
+      "time" : 0.9204519166669343,
+      "translation" : {
+        "x" : 0,
+        "y" : -77
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : -820.0000000030013
+      }
+    },
+    {
+      "phase" : "changed",
+      "time" : 0.9370745833339242,
+      "translation" : {
+        "x" : 0,
+        "y" : -91
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : -823.9999999762076
+      }
+    },
+    {
+      "phase" : "changed",
+      "time" : 0.953797791667057,
+      "translation" : {
+        "x" : 0,
+        "y" : -105.33333333333303
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : -844.0000000122782
+      }
+    },
+    {
+      "phase" : "changed",
+      "time" : 0.9714629999998579,
+      "translation" : {
+        "x" : 0,
+        "y" : -119.66666666666606
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : -860.0000000124965
+      }
+    },
+    {
+      "phase" : "changed",
+      "time" : 0.9880752916669735,
+      "translation" : {
+        "x" : 0,
+        "y" : -148.33333333333303
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : -861.7437355763507
+      }
+    },
+    {
+      "phase" : "changed",
+      "time" : 1.0074929166667062,
+      "translation" : {
+        "x" : 0,
+        "y" : -162.66666666666606
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : -863.5904083206449
+      }
+    },
+    {
+      "phase" : "changed",
+      "time" : 1.02062345833383,
+      "translation" : {
+        "x" : 0,
+        "y" : -176.66666666666606
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : -842.4618642233685
+      }
+    },
+    {
+      "phase" : "changed",
+      "time" : 1.039616833333639,
+      "translation" : {
+        "x" : 0,
+        "y" : -190.66666666666606
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : -840.0000000030559
+      }
+    },
+    {
+      "phase" : "changed",
+      "time" : 1.0544746250006938,
+      "translation" : {
+        "x" : 0,
+        "y" : -204.66666666666606
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : -840.000419976745
+      }
+    },
+    {
+      "phase" : "changed",
+      "time" : 1.0714415833335806,
+      "translation" : {
+        "x" : 0,
+        "y" : -218.33333333333303
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : -836.001270017824
+      }
+    },
+    {
+      "phase" : "changed",
+      "time" : 1.0877092500004437,
+      "translation" : {
+        "x" : 0,
+        "y" : -231.33333333333303
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : -811.9983600153755
+      }
+    },
+    {
+      "phase" : "changed",
+      "time" : 1.104727833333527,
+      "translation" : {
+        "x" : 0,
+        "y" : -244.33333333333303
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : -780.0000000028376
+      }
+    },
+    {
+      "phase" : "changed",
+      "time" : 1.1212597916673985,
+      "translation" : {
+        "x" : 0,
+        "y" : -256.66666666666606
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : -771.999999977179
+      }
+    },
+    {
+      "phase" : "changed",
+      "time" : 1.1394389166671317,
+      "translation" : {
+        "x" : 0,
+        "y" : -268.66666666666606
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : -736.0000000106957
+      }
+    },
+    {
+      "phase" : "changed",
+      "time" : 1.1546202916670154,
+      "translation" : {
+        "x" : 0,
+        "y" : -279.66666666666606
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : -708.0000000030996
+      }
+    },
+    {
+      "phase" : "changed",
+      "time" : 1.1734506250004415,
+      "translation" : {
+        "x" : 0,
+        "y" : -289.66666666666606
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : -647.9999999806168
+      }
+    },
+    {
+      "phase" : "changed",
+      "time" : 1.1879507500007094,
+      "translation" : {
+        "x" : 0,
+        "y" : -298.33333333333303
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : -584.000000008502
+      }
+    },
+    {
+      "phase" : "changed",
+      "time" : 1.2054159166673344,
+      "translation" : {
+        "x" : 0,
+        "y" : -305
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : -496.00000000723594
+      }
+    },
+    {
+      "phase" : "ended",
+      "time" : 1.2386607083335548,
+      "translation" : {
+        "x" : 0,
+        "y" : -305
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : -496.00000000723594
+      }
+    }
+  ],
+  "frames" : [
+    {
+      "dragging" : true,
+      "offset" : 6970.666666666667,
+      "time" : 0.8370887083337948,
+      "translation" : {
+        "x" : 0,
+        "y" : -11.66666666666606
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : -652.0000000094951
+      }
+    },
+    {
+      "dragging" : true,
+      "offset" : 6982.666666666667,
+      "time" : 0.8537197916666628,
+      "translation" : {
+        "x" : 0,
+        "y" : -23.66666666666606
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : -704.0000000102154
+      }
+    },
+    {
+      "dragging" : true,
+      "offset" : 6995.666666666667,
+      "time" : 0.8704155833338518,
+      "translation" : {
+        "x" : 0,
+        "y" : -36.66666666666606
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : -732.0000000021391
+      }
+    },
+    {
+      "dragging" : true,
+      "offset" : 7008.666666666667,
+      "time" : 0.8870732916666384,
+      "translation" : {
+        "x" : 0,
+        "y" : -49.66666666666606
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : -779.999999977299
+      }
+    },
+    {
+      "dragging" : true,
+      "offset" : 7022.333333333333,
+      "time" : 0.9037278333335053,
+      "translation" : {
+        "x" : 0,
+        "y" : -63.33333333333303
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : -788.0000000114705
+      }
+    },
+    {
+      "dragging" : true,
+      "offset" : 7036,
+      "time" : 0.9204009166669493,
+      "translation" : {
+        "x" : 0,
+        "y" : -77
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : -820.0000000030013
+      }
+    },
+    {
+      "dragging" : true,
+      "offset" : 7050,
+      "time" : 0.9370312083337922,
+      "translation" : {
+        "x" : 0,
+        "y" : -91
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : -823.9999999762076
+      }
+    },
+    {
+      "dragging" : true,
+      "offset" : 7064.333333333333,
+      "time" : 0.9537488750002012,
+      "translation" : {
+        "x" : 0,
+        "y" : -105.33333333333303
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : -844.0000000122782
+      }
+    },
+    {
+      "dragging" : true,
+      "offset" : 7078.666666666667,
+      "time" : 0.9712538750000022,
+      "translation" : {
+        "x" : 0,
+        "y" : -119.66666666666606
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : -860.0000000124965
+      }
+    },
+    {
+      "dragging" : true,
+      "offset" : 7107.333333333333,
+      "time" : 0.98790045833357,
+      "translation" : {
+        "x" : 0,
+        "y" : -148.33333333333303
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : -861.7437355763507
+      }
+    },
+    {
+      "dragging" : true,
+      "offset" : 7121.666666666667,
+      "time" : 1.0073211666667703,
+      "translation" : {
+        "x" : 0,
+        "y" : -162.66666666666606
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : -863.5904083206449
+      }
+    },
+    {
+      "dragging" : true,
+      "offset" : 7135.666666666667,
+      "time" : 1.0205306249999921,
+      "translation" : {
+        "x" : 0,
+        "y" : -176.66666666666606
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : -842.4618642233685
+      }
+    },
+    {
+      "dragging" : true,
+      "offset" : 7149.666666666667,
+      "time" : 1.0394467916667054,
+      "translation" : {
+        "x" : 0,
+        "y" : -190.66666666666606
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : -840.0000000030559
+      }
+    },
+    {
+      "dragging" : true,
+      "offset" : 7163.666666666667,
+      "time" : 1.0543781666665382,
+      "translation" : {
+        "x" : 0,
+        "y" : -204.66666666666606
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : -840.000419976745
+      }
+    },
+    {
+      "dragging" : true,
+      "offset" : 7177.333333333333,
+      "time" : 1.0713591250005265,
+      "translation" : {
+        "x" : 0,
+        "y" : -218.33333333333303
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : -836.001270017824
+      }
+    },
+    {
+      "dragging" : true,
+      "offset" : 7190.333333333333,
+      "time" : 1.0876492500001405,
+      "translation" : {
+        "x" : 0,
+        "y" : -231.33333333333303
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : -811.9983600153755
+      }
+    },
+    {
+      "dragging" : true,
+      "offset" : 7203.333333333333,
+      "time" : 1.104630458333304,
+      "translation" : {
+        "x" : 0,
+        "y" : -244.33333333333303
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : -780.0000000028376
+      }
+    },
+    {
+      "dragging" : true,
+      "offset" : 7215.666666666667,
+      "time" : 1.1210576250005033,
+      "translation" : {
+        "x" : 0,
+        "y" : -256.66666666666606
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : -771.999999977179
+      }
+    },
+    {
+      "dragging" : true,
+      "offset" : 7227.666666666667,
+      "time" : 1.139250666667067,
+      "translation" : {
+        "x" : 0,
+        "y" : -268.66666666666606
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : -736.0000000106957
+      }
+    },
+    {
+      "dragging" : true,
+      "offset" : 7238.666666666667,
+      "time" : 1.1544320833336315,
+      "translation" : {
+        "x" : 0,
+        "y" : -279.66666666666606
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : -708.0000000030996
+      }
+    },
+    {
+      "dragging" : true,
+      "offset" : 7248.666666666667,
+      "time" : 1.1732587916667399,
+      "translation" : {
+        "x" : 0,
+        "y" : -289.66666666666606
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : -647.9999999806168
+      }
+    },
+    {
+      "dragging" : true,
+      "offset" : 7257.333333333333,
+      "time" : 1.1877767500000118,
+      "translation" : {
+        "x" : 0,
+        "y" : -298.33333333333303
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : -584.000000008502
+      }
+    },
+    {
+      "dragging" : true,
+      "offset" : 7264,
+      "time" : 1.2052495416673992,
+      "translation" : {
+        "x" : 0,
+        "y" : -305
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : -496.00000000723594
+      }
+    },
+    {
+      "dragging" : false,
+      "offset" : 7273.333333333333,
+      "time" : 1.2384461666670177,
+      "translation" : {
+        "x" : 0,
+        "y" : -305
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : -496.00000000723594
+      }
+    },
+    {
+      "dragging" : false,
+      "offset" : 7281,
+      "time" : 1.2554153333339855,
+      "translation" : {
+        "x" : 0,
+        "y" : -305
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : 0
+      }
+    },
+    {
+      "dragging" : false,
+      "offset" : 7289.666666666667,
+      "time" : 1.2714031250006883,
+      "translation" : {
+        "x" : 0,
+        "y" : -305
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : 0
+      }
+    },
+    {
+      "dragging" : false,
+      "offset" : 7298,
+      "time" : 1.287082833333443,
+      "translation" : {
+        "x" : 0,
+        "y" : -305
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : 0
+      }
+    },
+    {
+      "dragging" : false,
+      "offset" : 7306.333333333333,
+      "time" : 1.3052277083334047,
+      "translation" : {
+        "x" : 0,
+        "y" : -305
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : 0
+      }
+    },
+    {
+      "dragging" : false,
+      "offset" : 7314,
+      "time" : 1.3221565000003466,
+      "translation" : {
+        "x" : 0,
+        "y" : -305
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : 0
+      }
+    },
+    {
+      "dragging" : false,
+      "offset" : 7321.666666666667,
+      "time" : 1.3370678750006846,
+      "translation" : {
+        "x" : 0,
+        "y" : -305
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : 0
+      }
+    },
+    {
+      "dragging" : false,
+      "offset" : 7329,
+      "time" : 1.3537677916665416,
+      "translation" : {
+        "x" : 0,
+        "y" : -305
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : 0
+      }
+    },
+    {
+      "dragging" : false,
+      "offset" : 7336,
+      "time" : 1.3720012083340407,
+      "translation" : {
+        "x" : 0,
+        "y" : -305
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : 0
+      }
+    },
+    {
+      "dragging" : false,
+      "offset" : 7342.666666666667,
+      "time" : 1.388806083333293,
+      "translation" : {
+        "x" : 0,
+        "y" : -305
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : 0
+      }
+    },
+    {
+      "dragging" : false,
+      "offset" : 7349.333333333333,
+      "time" : 1.4051448333339067,
+      "translation" : {
+        "x" : 0,
+        "y" : -305
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : 0
+      }
+    },
+    {
+      "dragging" : false,
+      "offset" : 7355.666666666667,
+      "time" : 1.422130666666817,
+      "translation" : {
+        "x" : 0,
+        "y" : -305
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : 0
+      }
+    },
+    {
+      "dragging" : false,
+      "offset" : 7362,
+      "time" : 1.4380318749999788,
+      "translation" : {
+        "x" : 0,
+        "y" : -305
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : 0
+      }
+    },
+    {
+      "dragging" : false,
+      "offset" : 7368,
+      "time" : 1.4554811250000057,
+      "translation" : {
+        "x" : 0,
+        "y" : -305
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : 0
+      }
+    },
+    {
+      "dragging" : false,
+      "offset" : 7373.666666666667,
+      "time" : 1.4704440833338595,
+      "translation" : {
+        "x" : 0,
+        "y" : -305
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : 0
+      }
+    },
+    {
+      "dragging" : false,
+      "offset" : 7379.333333333333,
+      "time" : 1.4871261666667124,
+      "translation" : {
+        "x" : 0,
+        "y" : -305
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : 0
+      }
+    },
+    {
+      "dragging" : false,
+      "offset" : 7384.666666666667,
+      "time" : 1.5054918750001889,
+      "translation" : {
+        "x" : 0,
+        "y" : -305
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : 0
+      }
+    },
+    {
+      "dragging" : false,
+      "offset" : 7390,
+      "time" : 1.5221382500003529,
+      "translation" : {
+        "x" : 0,
+        "y" : -305
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : 0
+      }
+    },
+    {
+      "dragging" : false,
+      "offset" : 7395,
+      "time" : 1.5381552500002726,
+      "translation" : {
+        "x" : 0,
+        "y" : -305
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : 0
+      }
+    },
+    {
+      "dragging" : false,
+      "offset" : 7400,
+      "time" : 1.555489916667284,
+      "translation" : {
+        "x" : 0,
+        "y" : -305
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : 0
+      }
+    },
+    {
+      "dragging" : false,
+      "offset" : 7404.666666666667,
+      "time" : 1.5718511666673294,
+      "translation" : {
+        "x" : 0,
+        "y" : -305
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : 0
+      }
+    },
+    {
+      "dragging" : false,
+      "offset" : 7409.333333333333,
+      "time" : 1.5888402500004304,
+      "translation" : {
+        "x" : 0,
+        "y" : -305
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : 0
+      }
+    },
+    {
+      "dragging" : false,
+      "offset" : 7413,
+      "time" : 1.6045877083333835,
+      "translation" : {
+        "x" : 0,
+        "y" : -305
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : 0
+      }
+    },
+    {
+      "dragging" : false,
+      "offset" : 7415.333333333333,
+      "time" : 1.6209514583333657,
+      "translation" : {
+        "x" : 0,
+        "y" : -305
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : 0
+      }
+    },
+    {
+      "dragging" : false,
+      "offset" : 7417,
+      "time" : 1.6382242500003485,
+      "translation" : {
+        "x" : 0,
+        "y" : -305
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : 0
+      }
+    },
+    {
+      "dragging" : false,
+      "offset" : 7417.666666666667,
+      "time" : 1.6551324166666745,
+      "translation" : {
+        "x" : 0,
+        "y" : -305
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : 0
+      }
+    },
+    {
+      "dragging" : false,
+      "offset" : 7418,
+      "time" : 1.672124624999924,
+      "translation" : {
+        "x" : 0,
+        "y" : -305
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : 0
+      }
+    },
+    {
+      "dragging" : false,
+      "offset" : 7417.666666666667,
+      "time" : 1.7039657916666329,
+      "translation" : {
+        "x" : 0,
+        "y" : -305
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : 0
+      }
+    },
+    {
+      "dragging" : false,
+      "offset" : 7417.333333333333,
+      "time" : 1.722069041667055,
+      "translation" : {
+        "x" : 0,
+        "y" : -305
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : 0
+      }
+    },
+    {
+      "dragging" : false,
+      "offset" : 7416.666666666667,
+      "time" : 1.7376715000000331,
+      "translation" : {
+        "x" : 0,
+        "y" : -305
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : 0
+      }
+    },
+    {
+      "dragging" : false,
+      "offset" : 7416.333333333333,
+      "time" : 1.755486000000019,
+      "translation" : {
+        "x" : 0,
+        "y" : -305
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : 0
+      }
+    },
+    {
+      "dragging" : false,
+      "offset" : 7415.666666666667,
+      "time" : 1.7721436250003535,
+      "translation" : {
+        "x" : 0,
+        "y" : -305
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : 0
+      }
+    },
+    {
+      "dragging" : false,
+      "offset" : 7415,
+      "time" : 1.787291458334039,
+      "translation" : {
+        "x" : 0,
+        "y" : -305
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : 0
+      }
+    },
+    {
+      "dragging" : false,
+      "offset" : 7414.333333333333,
+      "time" : 1.805521583333757,
+      "translation" : {
+        "x" : 0,
+        "y" : -305
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : 0
+      }
+    },
+    {
+      "dragging" : false,
+      "offset" : 7414,
+      "time" : 1.821874958333865,
+      "translation" : {
+        "x" : 0,
+        "y" : -305
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : 0
+      }
+    },
+    {
+      "dragging" : false,
+      "offset" : 7413.333333333333,
+      "time" : 1.8387709583339529,
+      "translation" : {
+        "x" : 0,
+        "y" : -305
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : 0
+      }
+    },
+    {
+      "dragging" : false,
+      "offset" : 7413,
+      "time" : 1.853781541666649,
+      "translation" : {
+        "x" : 0,
+        "y" : -305
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : 0
+      }
+    },
+    {
+      "dragging" : false,
+      "offset" : 7412.333333333333,
+      "time" : 1.870901708333804,
+      "translation" : {
+        "x" : 0,
+        "y" : -305
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : 0
+      }
+    },
+    {
+      "dragging" : false,
+      "offset" : 7412,
+      "time" : 1.8887940416670972,
+      "translation" : {
+        "x" : 0,
+        "y" : -305
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : 0
+      }
+    },
+    {
+      "dragging" : false,
+      "offset" : 7411.666666666667,
+      "time" : 1.9055275416667428,
+      "translation" : {
+        "x" : 0,
+        "y" : -305
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : 0
+      }
+    },
+    {
+      "dragging" : false,
+      "offset" : 7411.333333333333,
+      "time" : 1.9221098750003875,
+      "translation" : {
+        "x" : 0,
+        "y" : -305
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : 0
+      }
+    },
+    {
+      "dragging" : false,
+      "offset" : 7411,
+      "time" : 1.9380485416668307,
+      "translation" : {
+        "x" : 0,
+        "y" : -305
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : 0
+      }
+    },
+    {
+      "dragging" : false,
+      "offset" : 7410.666666666667,
+      "time" : 1.9554266666673357,
+      "translation" : {
+        "x" : 0,
+        "y" : -305
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : 0
+      }
+    },
+    {
+      "dragging" : false,
+      "offset" : 7410.333333333333,
+      "time" : 1.9872146249999787,
+      "translation" : {
+        "x" : 0,
+        "y" : -305
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : 0
+      }
+    },
+    {
+      "dragging" : false,
+      "offset" : 7410,
+      "time" : 2.0220832083332425,
+      "translation" : {
+        "x" : 0,
+        "y" : -305
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : 0
+      }
+    },
+    {
+      "dragging" : false,
+      "offset" : 7409.666666666667,
+      "time" : 2.0554465833338327,
+      "translation" : {
+        "x" : 0,
+        "y" : -305
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : 0
+      }
+    },
+    {
+      "dragging" : false,
+      "offset" : 7409.333333333333,
+      "time" : 2.1056412500001898,
+      "translation" : {
+        "x" : 0,
+        "y" : -305
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : 0
+      }
+    },
+    {
+      "dragging" : false,
+      "offset" : 7409,
+      "time" : 2.1060878333337314,
+      "translation" : {
+        "x" : 0,
+        "y" : -305
+      },
+      "velocity" : {
+        "x" : 0,
+        "y" : 0
+      }
+    }
+  ],
+  "indirect" : false,
+  "initialOffset" : 6959,
+  "name" : "into-bottom",
+  "scale" : 3,
+  "viewport" : 591
+}

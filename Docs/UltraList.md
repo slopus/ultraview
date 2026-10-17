@@ -165,6 +165,26 @@ animation compilation. Interaction tests exercise the demo and export public
 gesture observations. Device timings distinguish callback gaps from render-server
 playback; a smooth screenshot cannot establish frame-time performance.
 
+Public simulator recordings run through both frame and event replay. The finite
+edge recording crosses its edge and returns exactly to it. Maximum offset
+differences, in points, are:
+
+| Gesture | Frame replay | Event replay | Limit |
+|---|---:|---:|---:|
+| Slow drag | < 0.001 | < 0.001 | 1 |
+| Medium flick | 1.334 | 1.334 | 3 |
+| Flick into bottom | 1.334 | 1.334 | 3 |
+| Outward overscroll | 1.667 | 1.667 | 4 |
+
+The demo's optional `-listProbe YES` script writes timing JSON to its Documents
+directory. It reports display callback intervals separately from busy run-loop
+turns, counts callback hitches above 1.5 frame periods, and records any layout,
+text measurement or drawing performed on main. `-listKeyboardProbe YES` adds
+keyboard show, send and dismissal to the chat script. `-listStall YES` injects a
+120 ms stall into the feed during momentum, to validate the detector and compare
+render-server playback with a delayed sampler. These probes use only their own
+application and require no UI automation settings.
+
 The Xcode app target is `UltraViewDemoApp`, distinct from the SwiftPM demo library.
 The shared scheme is `UltraViewDemo`. `DEMO_BUNDLE_ID` overrides only the app's
 bundle identifier so independent test runners retain their own identities.

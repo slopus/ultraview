@@ -40,7 +40,14 @@ final class ListChatController: UIViewController {
                 let delay = UserDefaults.standard.double(forKey: "listProbeDelay")
                 try? await Task.sleep(for: .seconds(delay > 0 ? delay : 2)); self?.beginStreaming()
                 try? await Task.sleep(for: .seconds(1)); self?.list.beginMomentum(velocity: 3500)
-                try? await Task.sleep(for: .seconds(7)); self?.monitor.finish()
+                if UserDefaults.standard.bool(forKey: "listKeyboardProbe") {
+                    try? await Task.sleep(for: .seconds(2)); self?.composer.becomeFirstResponder()
+                    try? await Task.sleep(for: .seconds(1))
+                    self?.composer.text = "A reply during streaming"; self?.sendMessage()
+                    try? await Task.sleep(for: .seconds(1)); self?.composer.resignFirstResponder()
+                    try? await Task.sleep(for: .seconds(3))
+                } else { try? await Task.sleep(for: .seconds(7)) }
+                self?.monitor.finish()
             }
         }
     }
@@ -76,24 +83,46 @@ final class ListFrameMonitor: NSObject {
     private var link: CADisplayLink?
     private var previous: Double?
     private var gaps: [Double] = []
+    private var ownsMainMonitor = false
+    private var initialMainWork = 0
+    private var hitches = 0
+    private var framePeriod = 1000.0 / 60
     private let name: String
     init(name: String) { self.name = name }
     static func stallForProbe() { Thread.sleep(forTimeInterval: 0.12) }
     func start() {
-        link?.invalidate(); gaps.removeAll(); previous = nil
-        let link = CADisplayLink(target: self, selector: #selector(tick))
+        link?.invalidate(); gaps.removeAll(); previous = nil; hitches = 0
+        initialMainWork = Diagnostics.shared.counts.mainThreadWork
+        if !MainThreadMonitor.shared.isRunning {
+            MainThreadMonitor.shared.start(phase: "list-\(name)"); ownsMainMonitor = true
+        }
+        let link = CADisplayLink(target: self, selector: #selector(tick(_:)))
         link.preferredFrameRateRange = .init(minimum: 60, maximum: 60, preferred: 60)
         link.add(to: .main, forMode: .common); self.link = link
     }
-    @objc private func tick() {
+    @objc private func tick(_ link: CADisplayLink) {
         let time = CACurrentMediaTime()
-        if let previous { gaps.append((time - previous) * 1000) }
+        framePeriod = (link.targetTimestamp - link.timestamp) * 1000
+        if let previous {
+            let gap = (time - previous) * 1000
+            gaps.append(gap)
+            if gap > framePeriod * 1.5 { hitches += 1 }
+        }
         previous = time
     }
     func finish() {
         guard link != nil else { return }
         link?.invalidate(); link = nil
-        let document: [String: Any] = ["screen": name, "samples": gaps.count, "maximumMainGapMilliseconds": gaps.max() ?? 0, "gapsAbove16_7": gaps.filter { $0 > 16.7 }.count, "missedFramesAbove25": gaps.filter { $0 > 25 }.count, "injectedStall": UserDefaults.standard.bool(forKey: "listStall")]
+        if ownsMainMonitor { MainThreadMonitor.shared.stop(); ownsMainMonitor = false }
+        var document: [String: Any] = ["screen": name, "samples": gaps.count, "maximumMainGapMilliseconds": gaps.max() ?? 0, "gapsAbove16_7": gaps.filter { $0 > 16.7 }.count, "missedFramesAbove25": gaps.filter { $0 > 25 }.count, "injectedStall": UserDefaults.standard.bool(forKey: "listStall"), "mainThreadLayoutTextDrawOperations": Diagnostics.shared.counts.mainThreadWork - initialMainWork]
+        document["callbackHitches"] = hitches; document["targetFrameMilliseconds"] = framePeriod
+        document["keyboardProbe"] = UserDefaults.standard.bool(forKey: "listKeyboardProbe")
+        if let summary = MainThreadMonitor.shared.summaries.first(where: { $0.phase == "list-\(name)" }) {
+            document["maximumBusyTurnMilliseconds"] = summary.maxTurnMilliseconds
+            document["p99BusyTurnMilliseconds"] = summary.p99TurnMilliseconds
+            document["busyTurnsAbove16_7"] = summary.stalls
+            document["stalls"] = MainThreadMonitor.shared.stalls.map { ["milliseconds": $0.milliseconds, "at": $0.startTime, "notes": $0.notes] as [String: Any] }
+        }
         if let data = try? JSONSerialization.data(withJSONObject: document, options: [.prettyPrinted, .sortedKeys]), let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
             try? data.write(to: url.appendingPathComponent("list-\(name)-timing.json"))
             print("LIST-TIMING \(String(data: data, encoding: .utf8) ?? "")")

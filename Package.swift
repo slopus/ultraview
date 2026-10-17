@@ -66,7 +66,8 @@ let package = Package(
         ),
         .testTarget(
             name: "UltraListTests",
-            dependencies: ["UltraList", "UltraLayout"]
+            dependencies: ["UltraList", "UltraLayout"],
+            resources: [.copy("Fixtures")]
         ),
         .testTarget(
             // Needs UIKit. Compiles to nothing on Linux; runs in the iOS

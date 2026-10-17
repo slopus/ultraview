@@ -34,15 +34,15 @@ final class GestureRecorderController: UIViewController, UIScrollViewDelegate {
         view.endEditing(true)
         let fixture = name.text ?? "gesture"
         let maximum = 8000 - scroll.bounds.height
-        scroll.setContentOffset(.init(x: 0, y: fixture == "into-bottom" ? maximum - 600 : fixture == "overscroll" ? maximum : 0), animated: false)
+        scroll.setContentOffset(.init(x: 0, y: fixture == "into-bottom" ? maximum - 450 : fixture == "overscroll" ? maximum : 0), animated: false)
         start = CACurrentMediaTime()
-        recording = .init(name: name.text ?? "gesture", viewport: scroll.bounds.height, edges: .init(minimum: 0, maximum: 8000 - scroll.bounds.height), scale: traitCollection.displayScale)
+        recording = .init(name: name.text ?? "gesture", viewport: scroll.bounds.height, edges: .init(minimum: 0, maximum: 8000 - scroll.bounds.height), scale: traitCollection.displayScale, initialOffset: scroll.contentOffset.y)
         record.setTitle("Recording", for: .normal)
     }
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         guard recording != nil else { return }
         let pan = scroll.panGestureRecognizer, tr = pan.translation(in: scroll), velocity = pan.velocity(in: scroll)
-        recording?.frames.append(.init(time: CACurrentMediaTime() - start, offset: scroll.contentOffset.y, dragging: scroll.isDragging, translation: .init(x: tr.x, y: tr.y), velocity: .init(x: velocity.x, y: velocity.y)))
+        recording?.frames.append(.init(time: CACurrentMediaTime() - start, offset: scroll.contentOffset.y, dragging: pan.state == .began || pan.state == .changed, translation: .init(x: tr.x, y: tr.y), velocity: .init(x: velocity.x, y: velocity.y)))
     }
     @objc private func panChanged() {
         guard recording != nil else { return }

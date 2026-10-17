@@ -63,6 +63,10 @@ targets:
     templates: [PackageTests]
     sources:
       - path: Tests/UltraListTests
+        excludes: [Fixtures]
+      - path: Tests/UltraListTests/Fixtures
+        type: folder
+        buildPhase: resources
   UltraViewUIKitTests:
     # Needs UIKit; runs only here, in the simulator.
     templates: [PackageTests]
