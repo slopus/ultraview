@@ -48,7 +48,7 @@ final class ListInteractionTests: XCTestCase {
 
     @MainActor func testFeedMutationsAndChatKeyboard() {
         let app = XCUIApplication()
-        app.launchArguments = ["-screen", "lists", "-listScreen", "feed"]
+        app.launchArguments = ["-screen", "lists", "-listScreen", "feed", "-listHostProbe", "YES"]
         app.launch()
         XCTAssertTrue(app.buttons["Insert"].waitForExistence(timeout: 10))
         for title in ["Insert", "Move", "Delete", "5,000", "Top"] { app.buttons[title].tap() }
@@ -58,6 +58,11 @@ final class ListInteractionTests: XCTestCase {
         composer.tap(); composer.typeText("A message during streaming")
         app.buttons["Send"].tap()
         XCTAssertTrue(app.buttons["Stream"].exists)
+        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35))
+        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7))
+        start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.1)
+        let hidden = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: app.keyboards.firstMatch)
+        XCTAssertEqual(XCTWaiter.wait(for: [hidden], timeout: 5), .completed)
         let screenshot = XCTAttachment(screenshot: app.screenshot()); screenshot.lifetime = .keepAlways
         add(screenshot)
     }

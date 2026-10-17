@@ -34,7 +34,8 @@ final class PerfRun {
     }
 
     func run() async {
-        let screens = DemoScreen.allCases
+        // List scenarios have their own streaming, keyboard and timing probes.
+        let screens = DemoScreen.allCases.filter { $0 != .lists }
         await pause(1.5)
 
         for screen in screens where screen != DemoScreen.initial {
@@ -183,6 +184,9 @@ final class PerfRun {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         let json = (try? encoder.encode(result)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+        if let directory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
+            try? Data(json.utf8).write(to: directory.appendingPathComponent("performance.json"))
+        }
         print("PERF-RESULT \(json)")
         for phase in summaries {
             print(String(

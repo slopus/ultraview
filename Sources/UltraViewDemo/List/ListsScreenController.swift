@@ -53,12 +53,13 @@ struct DemoListRow: ListRow {
     var inverted = false
     var pinsToBottomEdge = false
     var section: String?
+    var extraAttachments: [String: any ListAttachment] = [:]
     private let storage = DemoRowStorage()
     init(identity: String, revision: UInt64 = 0, title: String, body: String, height: Double, tint: UIColor = .systemIndigo, inverted: Bool = false, pinsToBottomEdge: Bool = false, section: String? = nil) {
         self.identity = identity; self.revision = revision; self.title = title; self.body = body; self.height = height
         self.tint = tint; self.inverted = inverted; self.pinsToBottomEdge = pinsToBottomEdge; self.section = section
     }
-    var attachments: [String: any ListAttachment] { section.map { ["section": DemoListHeader(title: $0)] } ?? [:] }
+    var attachments: [String: any ListAttachment] { extraAttachments.merging(section.map { ["section": DemoListHeader(title: $0) as any ListAttachment] } ?? [:]) { first, _ in first } }
     var measuresAsynchronously: Bool { true }
     private var nodeRow: NodeRow {
         if let row = storage.row, storage.revision == revision { return row }
@@ -100,6 +101,7 @@ struct DemoListHeader: ListAttachment {
 @MainActor
 final class DemoHeaderView: ListAttachmentView {
     var title = "" { didSet { text?.text = title } }
+    var inverted = false
     private var text: UltraTextNode?
     private var host: NodeHostView?
     override init(frame: CGRect) {
@@ -117,6 +119,7 @@ final class DemoHeaderView: ListAttachmentView {
             let host = NodeHostView(rootNode: root)
             addSubview(host); self.host = host; self.text = text
         }
+        host?.transform = inverted ? .init(scaleX: 1, y: -1) : .identity
         host?.frame = bounds; host?.prepare(size: bounds.size)
     }
 }

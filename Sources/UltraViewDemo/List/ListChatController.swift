@@ -7,10 +7,16 @@ import os
 final class ListChatController: UIViewController {
     let list: UltraListView
     private let composer = UITextField(), send = UIButton(type: .system), stream = UIButton(type: .system)
+    private let composerBar = UIStackView()
     private var rows: [DemoListRow] = []
     private var nextID = 100
     private var streaming: Task<Void, Never>?
     private let monitor = ListFrameMonitor(name: "chat")
+    private var dragging = false
+    private var dismissingKeyboardOnDrag = false
+    private var composerInset = 0.0
+    private var keyboardTransition: ListTransition?
+    private var hostProbe: Bool { UserDefaults.standard.bool(forKey: "listHostProbe") }
     init(mode: ScrollEngineMode) { list = UltraListView(engineMode: mode); super.init(nibName: nil, bundle: nil) }
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
     override func viewDidLoad() {
@@ -22,44 +28,90 @@ final class ListChatController: UIViewController {
             let body = index == 0 ? "Tap Stream to watch this reply grow while the conversation stays in place." : "Message \(60 - index). The list keeps only the nearby conversation loaded."
             let height: Double = 92 + Double(index % 3) * 24
             let tint: UIColor = index % 2 == 0 ? .systemIndigo : .systemTeal
-            return DemoListRow(identity: "message-\(index)", title: title, body: body, height: height, tint: tint, inverted: true)
+            var row = DemoListRow(identity: "message-\(index)", title: title, body: body, height: height, tint: tint, inverted: true)
+            if hostProbe { row.extraAttachments = headers(group: index / 5, sender: title) }
+            return row
         }
         composer.placeholder = "Message"; composer.borderStyle = .roundedRect; composer.accessibilityIdentifier = "composer"
         send.setTitle("Send", for: .normal); send.addTarget(self, action: #selector(sendMessage), for: .touchUpInside)
         stream.setTitle("Stream", for: .normal); stream.addTarget(self, action: #selector(beginStreaming), for: .touchUpInside)
-        let bar = UIStackView(arrangedSubviews: [composer, stream, send]); bar.spacing = 8
-        for v in [list, bar] { v.translatesAutoresizingMaskIntoConstraints = false; view.addSubview(v) }
+        for control in [composer, stream, send] { composerBar.addArrangedSubview(control) }; composerBar.spacing = 8
+        for v in [list, composerBar] { v.translatesAutoresizingMaskIntoConstraints = false; view.addSubview(v) }
         NSLayoutConstraint.activate([
-            list.topAnchor.constraint(equalTo: view.topAnchor), list.leadingAnchor.constraint(equalTo: view.leadingAnchor), list.trailingAnchor.constraint(equalTo: view.trailingAnchor), list.bottomAnchor.constraint(equalTo: bar.topAnchor, constant: -8),
-            bar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12), bar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12), bar.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor, constant: -8), bar.heightAnchor.constraint(equalToConstant: 44),
+            list.topAnchor.constraint(equalTo: view.topAnchor), list.leadingAnchor.constraint(equalTo: view.leadingAnchor), list.trailingAnchor.constraint(equalTo: view.trailingAnchor), list.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            composerBar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12), composerBar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12), composerBar.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor, constant: -8), composerBar.heightAnchor.constraint(equalToConstant: 44),
         ])
         list.applyChanges(items: rows)
-        list.willBeginDragging = { [weak self] in self?.composer.resignFirstResponder() }
+        list.willBeginDragging = { [weak self] in
+            guard let self else { return }
+            dragging = true; dismissingKeyboardOnDrag = composer.isFirstResponder
+            if dismissingKeyboardOnDrag { composer.resignFirstResponder() }
+        }
+        list.didEndDragging = { [weak self] in self?.dragging = false; self?.dismissingKeyboardOnDrag = false }
+        list.shouldStopScrolling = { [weak self] _ in self?.dismissingKeyboardOnDrag == true }
+        NotificationCenter.default.addObserver(self, selector: #selector(keyboardWillChange(_:)), name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
         monitor.start()
         if UserDefaults.standard.bool(forKey: "listProbe") {
             Task { [weak self] in
                 let delay = UserDefaults.standard.double(forKey: "listProbeDelay")
                 try? await Task.sleep(for: .seconds(delay > 0 ? delay : 2)); self?.beginStreaming()
-                try? await Task.sleep(for: .seconds(1)); self?.list.beginMomentum(velocity: 3500)
+                try? await Task.sleep(for: .seconds(1))
+                if self?.hostProbe == true { self?.recordHostState("stream-pin") }
+                else { self?.list.beginMomentum(velocity: 3500) }
                 if UserDefaults.standard.bool(forKey: "listKeyboardProbe") {
                     try? await Task.sleep(for: .seconds(2))
                     self?.monitor.measureAction("keyboard-show") { self?.composer.becomeFirstResponder() }
                     try? await Task.sleep(for: .seconds(1))
+                    self?.recordHostState("after-keyboard-show")
                     self?.monitor.measureAction("keyboard-fill-composer") { self?.composer.text = "A reply during streaming" }
                     self?.sendMessage()
                     try? await Task.sleep(for: .seconds(1))
+                    self?.recordHostState("after-send")
                     self?.monitor.measureAction("keyboard-dismiss") { self?.composer.resignFirstResponder() }
                     try? await Task.sleep(for: .seconds(3))
+                    self?.recordHostState("after-keyboard-dismiss")
                 } else { try? await Task.sleep(for: .seconds(7)) }
                 self?.monitor.finish()
             }
         }
     }
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        let inset = max(0, view.bounds.maxY - composerBar.frame.minY + 8)
+        guard abs(inset - composerInset) > 0.5 else { return }
+        composerInset = inset
+        let transition = dragging ? ListTransition.immediate : keyboardTransition ?? .immediate
+        keyboardTransition = nil
+        list.applyChanges(newInsets: .init(top: inset), compensatesInsetChange: !dragging, transition: transition)
+    }
+    @objc private func keyboardWillChange(_ notification: Notification) {
+        guard view.window != nil, let duration = notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double else { return }
+        let raw = (notification.userInfo?[UIResponder.keyboardAnimationCurveUserInfoKey] as? Int) ?? 0
+        let curve: ListCurve
+        switch raw {
+        case 1: curve = .easeIn
+        case 2: curve = .bezier(0, 0, 0.58, 1)
+        case 3: curve = .linear
+        default: curve = .easeInOut
+        }
+        keyboardTransition = .init(duration: duration, curve: curve)
+    }
+    private func headers(group: Int, sender: String) -> [String: any ListAttachment] {
+        ["date": ChatHeader(group: group, title: group < 0 ? "Now" : "Today", isSender: false), "sender": ChatHeader(group: group, title: sender, isSender: true)]
+    }
+    private func recordHostState(_ name: String) {
+        guard hostProbe else { return }
+        let rects = list.loadedAttachmentViews.map { $0.convert($0.bounds, to: list) }
+        monitor.recordState(name, values: ["inset": composerInset, "pinHeld": list.holdsPinnedRow, "pinStrict": list.isStrictlyPinnedToBottomEdge, "attachmentCount": rects.count, "attachmentsFinite": rects.allSatisfy { $0.minY.isFinite && $0.maxY.isFinite }])
+    }
     override func viewDidDisappear(_ animated: Bool) { super.viewDidDisappear(animated); streaming?.cancel(); monitor.finish() }
     @objc private func sendMessage() {
         nextID += 1
         let body = monitor.measureAction("send-read-composer") { composer.text?.isEmpty == false ? composer.text! : "A new message" }
-        rows.insert(.init(identity: "sent-\(nextID)", title: "You", body: body, height: 100, tint: .systemIndigo, inverted: true), at: 0)
+        if let pinned = rows.firstIndex(where: \.pinsToBottomEdge) { rows[pinned].pinsToBottomEdge = false }
+        var row = DemoListRow(identity: "sent-\(nextID)", title: "You", body: body, height: 100, tint: .systemIndigo, inverted: true)
+        if hostProbe { row.extraAttachments = headers(group: -1, sender: "You") }
+        rows.insert(row, at: 0)
         monitor.measureAction("send-clear-composer") { composer.text = "" }
         monitor.measureAction("send-apply-list") { list.applyChanges(items: rows, scrollTo: .init(index: 0), animatesInsertions: false, transition: .easeInOut(0.3)) }
         monitor.measureAction("send-insert-animation") { list.animateInsertedBlock(identities: [rows[0].identity], from: .top) }
@@ -68,8 +120,12 @@ final class ListChatController: UIViewController {
         streaming?.cancel()
         nextID += 1
         let id = "stream-\(nextID)"
-        rows.insert(.init(identity: id, title: "Assistant · streaming", body: "A reply", height: 84, tint: .systemTeal, inverted: true), at: 0)
-        list.applyChanges(items: rows, scrollTo: .init(index: 0), transition: .easeInOut(0.3))
+        var row = DemoListRow(identity: id, title: "Assistant · streaming", body: "A reply", height: hostProbe ? 420 : 84, tint: .systemTeal, inverted: true, pinsToBottomEdge: hostProbe)
+        if hostProbe { row.extraAttachments = headers(group: -1, sender: "Assistant") }
+        rows.insert(row, at: 0)
+        let visibleHeight = max(0, list.bounds.height - composerInset)
+        let target = hostProbe ? ListScrollTarget(index: 0, resolve: { height, _ in visibleHeight + max(0, height - visibleHeight / 2) - height }) : ListScrollTarget(index: 0)
+        list.applyChanges(items: rows, scrollTo: target, transition: .easeInOut(0.3))
         streaming = Task { [weak self] in
             for token in 1...40 {
                 try? await Task.sleep(for: .milliseconds(100))
@@ -80,6 +136,26 @@ final class ListChatController: UIViewController {
                 list.applyChanges(items: rows, anchorMode: .preserveVisibleContent, transition: .easeInOut(0.2))
             }
         }
+    }
+}
+
+@MainActor
+private struct ChatHeader: ListAttachment {
+    let group: Int
+    let title: String
+    let isSender: Bool
+    var edge: BoundaryEdge { .bottom }
+    var reservesSpace: Bool { !isSender }
+    var stackingGroup: String? { isSender ? "sender" : "date" }
+    var yieldsTo: String? { isSender ? "date" : nil }
+    var yieldGap: Double { 32 }
+    func makeView() -> ListAttachmentView { DemoHeaderView() }
+    func apply(to view: ListAttachmentView, transition: ListTransition) {
+        (view as? DemoHeaderView)?.title = title; (view as? DemoHeaderView)?.inverted = true
+    }
+    func combines(with other: any ListAttachment) -> Bool {
+        guard let other = other as? ChatHeader else { return false }
+        return group == other.group && title == other.title && isSender == other.isSender
     }
 }
 
@@ -108,6 +184,10 @@ final class ListFrameMonitor: NSObject {
             actions.append(["name": name.description, "at": start - startedAt, "milliseconds": (CACurrentMediaTime() - start) * 1000])
         }
         return action()
+    }
+    func recordState(_ name: String, values: [String: Any]) {
+        var state = values; state["name"] = name; state["at"] = CACurrentMediaTime() - startedAt
+        actions.append(state)
     }
     func start() {
         link?.invalidate(); gaps.removeAll(); previous = nil; hitches = 0

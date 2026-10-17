@@ -197,7 +197,7 @@ bundle identifier so independent test runners retain their own identities.
 
 | Area | Implemented | Deferred or not yet validated |
 |---|---|---|
-| Keyboard | Chat composer follows the keyboard layout guide; beginning a drag dismisses it. Scripted show, fill, send and dismiss actions export separate timings and public signpost intervals. | Continuous interactive dismissal and host-specific inset animation policy. Device cold-entry and keyboard turns currently exceed 16.7 ms; attribution and final measurement remain pending. |
+| Keyboard | The composer follows the keyboard layout guide. The inverted list receives the occlusion as its top inset, follows the keyboard transition, and suppresses inset compensation and release momentum during drag dismissal. Scripted actions export separate timings and public signpost intervals. | Continuous interactive dismissal. Device cold entry and UIKit keyboard/input work exceed 16.7 ms; measured limits are described below. |
 | Accessibility | Hosted nodes apply accessibility properties; text nodes publish labels and static-text traits. Viewport-sized scroll actions follow screen direction, including inverted lists. Logical row focus survives virtualization and returns to a recreated descendant when available. | Physical VoiceOver interaction coverage, including custom accessibility-element containers. |
 | Node row revisions | Ready content remains visible until the newest replacement applies its visible commit; superseded candidates are discarded. | Node-internal property and text animations. Custom row hosts receive the pass transition; the default bridge animates its outer row geometry. |
 | Trackpad | Continuous indirect pan input has its own drag baseline and rubber-band coefficient. The physics model supports indirect replay. | Physical trackpad parity, indirect recording fixtures and discrete wheel input. The committed public gesture fixtures use direct touch. |
@@ -208,3 +208,18 @@ The timing probes count layout, text measurement and drawing on main separately
 from busy turns. Zero such operations does not imply that all UIKit input or
 view-application work meets a frame budget. Report the measured maximum and p99
 turns alongside the action timings when evaluating the keyboard scenario.
+
+Add `-listHostProbe YES` to the keyboard probe to combine a streaming pin with
+reserving date headers and partner-yielding sender headers. Its exported states
+record pin placement, inset changes and attachment geometry before and after
+keyboard/send/dismissal. Sending releases the streaming pin deliberately.
+
+A profiled iPhone 12 baseline measured keyboard show at 120.17 ms, filling the
+field at 31.95 ms, clearing it at 84.12 ms, list application at 0.199 ms and the
+insertion animation setup at 0.033 ms. Samples place the input stalls in UIKit's
+responder, text-field, selection and keyboard task machinery. A later 235.73 ms
+busy turn coincided with a system scene snapshot and trait/commit work; one of
+84 main-thread samples in that interval included list application. Sampling
+weights are CPU observations, not a complete breakdown of wall time. The probe
+recorded zero layout, text measurement or drawing operations on main. These
+results do not establish a one-frame guarantee for system keyboard work.
