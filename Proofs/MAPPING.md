@@ -139,6 +139,8 @@ When the Swift changes, re-check the rows whose files changed.
   per pass are structural in the Swift and not modeled further.
 - Within one pass, the model sees the net change of a node's interface
   state; a mount and unmount of the same node in one pass is not modeled.
+- `setNeedsPass` on the main thread hops through the main queue before
+  enqueueing on the layout queue; the model folds the hop into the enqueue.
 
 ## Findings (Swift at `22e6866` against the optimal model)
 
