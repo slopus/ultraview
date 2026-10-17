@@ -210,6 +210,32 @@ final class SwipeInteractionTests: XCTestCase {
         }
     }
 
+    /// A touch catches a moving list, so a swipe never starts mid-fling; the
+    /// demo applies the delete with momentum in flight, or while the row below resizes.
+    @MainActor func testFullSwipeDeleteWhileTheListMoves() throws {
+        for engine in engines {
+            for stress in ["fling", "resize"] {
+                let app = launch("feed", engine: engine, extra: ["-listSwipeStress", stress])
+                let label = "\(stress) \(engine)"
+                let row = try frame(app, "1"), anchor = try feedAnchor(app)
+                drag(app, from: .init(x: row.maxX - 15, y: row.midY), to: .init(x: row.minX + 15, y: row.midY), speed: 1500)
+                settle(1.5)
+                let state = try probe(app)
+                let keys = ["seamError", "neighborDrift", "offscreenDrift", "ghostFrames", "ghostButtonDetach", "turnP99", "turnMax", "mainThreadWork", "departureTrace"]
+                let data = try JSONSerialization.data(withJSONObject: state.filter { keys.contains($0.key) }, options: [.sortedKeys])
+                print("Swipe stress \(label): \(String(decoding: data, as: UTF8.self))")
+                XCTAssertEqual(state["performed"] as? [String], ["delete:1"], label)
+                XCTAssertGreaterThan(state["ghostFrames"] as? Int ?? 0, 5, label)
+                XCTAssertLessThanOrEqual(state["seamError"] as? Double ?? 1000, 0.5, "\(label): \(state["worstSeam"] ?? "")")
+                XCTAssertLessThanOrEqual(state["neighborDrift"] as? Double ?? 1000, 0.5, "\(label): \(state["worstDrift"] ?? "")")
+                XCTAssertLessThanOrEqual(state["ghostButtonDetach"] as? Double ?? 1000, 0.5, label)
+                XCTAssertEqual(state["mainThreadWork"] as? Int, 0, label)
+                if stress == "fling" { XCTAssertNotEqual(try feedAnchor(app).0, anchor.0, "\(label): the fling didn't move the feed") }
+                app.terminate()
+            }
+        }
+    }
+
     @MainActor func testChatSwipesWorkWithTheKeyboardUp() throws {
         for engine in engines {
             let app = launch("chat", engine: engine)

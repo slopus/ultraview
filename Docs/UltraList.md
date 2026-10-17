@@ -500,7 +500,8 @@ departing row against its neighbours on every frame. The demo's
 - diagonal drags each way;
 - a tap during a carousel fling;
 - reveal followed by a tap elsewhere, and reveal followed by a vertical scroll;
-- a full-swipe delete;
+- a full-swipe delete, also with momentum in flight and while the row below
+  resizes (`-listSwipeStress fling|resize`);
 - the chat with the keyboard up.
 
 On an iPhone 17 Pro simulator (Debug) these interactions ran with zero layout,
@@ -512,7 +513,12 @@ row and its neighbours was 0.005 point; the buttons stayed attached within
 of roughly 30–50 ms: `applyChanges` diffs the whole collection on main in
 26–40 ms and the demo rebuilds its item array in 2–6 ms. That cost belongs to
 collection diffing and scales with the row count; the chat's delete turn is
-about 11 ms.
+about 11 ms. Under the fling and resize stress the collapse stays within
+0.001 point of both neighbours. Rows that mount below the screen while the
+list is still carrying rows up are placed at their final frames, up to the
+deleted height away from the row above, until the carry ends; the probe
+reports this separately as off-screen drift. The resize stress diffs the
+whole feed every 200 ms, so its own turns, not the swipe, set its p99.
 
 The Xcode app target is `UltraViewDemoApp`, distinct from the SwiftPM demo library.
 The shared scheme is `UltraViewDemo`. `DEMO_BUNDLE_ID` overrides only the app's

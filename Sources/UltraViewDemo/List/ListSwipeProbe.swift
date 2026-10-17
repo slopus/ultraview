@@ -31,11 +31,18 @@ final class ListSwipeProbe: NSObject {
         var gapAbove: Double
         var gapBelow: Double
         var deadline: Double
+        var above: String?
+        var below: String?
     }
+    /// The first departure, per frame: seconds since removal, ghost top and height, the
+    /// bottom of the row above and the top of the row below, all in the visible content space.
+    private var departureTrace: [[Double]] = []
     private var departures: [Departure] = []
     private var deleteFrames = 0, ghostFrames = 0
     private var maximumNeighborDrift = 0.0, maximumSeamError = 0.0, maximumGhostButtonDetach = 0.0
     private var worstSeam: [String: Double] = [:]
+    private var worstDrift: [String: Any] = [:]
+    private var maximumOffscreenDrift = 0.0
     /// Turns that ran while a finger or an animation moved rows, buttons or a carousel.
     private var turns: [Double] = []
     private var allTurns = 0
@@ -96,10 +103,11 @@ final class ListSwipeProbe: NSObject {
         guard let list, let index = list.loadedIndexRange.first(where: { list.items[$0].identity == identity }),
               let view = list.loadedItemView(at: index) else { return }
         let rect = modelRect(view)
-        let neighbours = rows(excluding: identity).map { modelRect($0.view) }
-        let above = neighbours.filter { $0.maxY <= rect.minY + 0.5 }.map(\.maxY).max()
-        let below = neighbours.filter { $0.minY >= rect.maxY - 0.5 }.map(\.minY).min()
-        departures.append(.init(view: view, identity: identity, gapAbove: above.map { rect.minY - $0 } ?? 0, gapBelow: below.map { $0 - rect.maxY } ?? 0, deadline: CACurrentMediaTime() + 0.8))
+        let neighbours = rows(excluding: identity).map { ($0.identity, modelRect($0.view)) }
+        let above = neighbours.filter { $0.1.maxY <= rect.minY + 0.5 }.max { $0.1.maxY < $1.1.maxY }
+        let below = neighbours.filter { $0.1.minY >= rect.maxY - 0.5 }.min { $0.1.minY < $1.1.minY }
+        departures.append(.init(view: view, identity: identity, gapAbove: above.map { rect.minY - $0.1.maxY } ?? 0, gapBelow: below.map { $0.1.minY - rect.maxY } ?? 0,
+                                deadline: CACurrentMediaTime() + 0.8, above: above?.0, below: below?.0))
     }
 
     private var space: CALayer? { list.map { $0.contentView.layer.presentation() ?? $0.contentView.layer } }
@@ -108,7 +116,13 @@ final class ListSwipeProbe: NSObject {
         return view.layer.convert(view.layer.bounds, to: list.contentView.layer)
     }
     private func presentedRect(_ view: UIView) -> CGRect? {
-        guard let space, let layer = view.layer.presentation() else { return nil }
+        guard let list, let space, let layer = view.layer.presentation() else { return nil }
+        // A container the list made this turn has no presentation yet; converting through it reads stale geometry.
+        var ancestor = view.layer.superlayer
+        while let current = ancestor, current !== list.contentView.layer {
+            guard current.presentation() != nil else { return nil }
+            ancestor = current.superlayer
+        }
         return layer.convert(layer.bounds, to: space)
     }
     private func rows(excluding identity: String? = nil) -> [(identity: String, view: ListRowView)] {
@@ -188,8 +202,14 @@ final class ListSwipeProbe: NSObject {
             guard let ghost = departure.view, let ghostRect = presentedRect(ghost) else { continue }
             deleteFrames += 1
             if let detach = buttonDetach(ghost) { maximumGhostButtonDetach = max(maximumGhostButtonDetach, detach.error) }
-            let survivors = rows(excluding: departure.identity).compactMap { row -> (model: CGRect, shown: CGRect)? in
-                presentedRect(row.view).map { (modelRect(row.view), $0) }
+            if departure.identity == removed.first {
+                let origin = (list.contentView.layer.presentation() ?? list.contentView.layer).bounds.minY
+                func shown(_ identity: String?) -> CGRect? { rows().first { $0.identity == identity }.flatMap { presentedRect($0.view) } }
+                departureTrace.append([now - departure.deadline + 0.8, ghostRect.minY - origin, ghostRect.height,
+                                       (shown(departure.above)?.maxY ?? .nan) - origin, (shown(departure.below)?.minY ?? .nan) - origin].map { ($0 * 100).rounded() / 100 })
+            }
+            let survivors = rows(excluding: departure.identity).compactMap { row -> (identity: String, model: CGRect, shown: CGRect)? in
+                presentedRect(row.view).map { (row.identity, modelRect(row.view), $0) }
             }.sorted { $0.shown.minY < $1.shown.minY }
             for (a, b) in zip(survivors, survivors.dropFirst()) {
                 let straddles = ghostRect.midY > a.shown.midY && ghostRect.midY < b.shown.midY
@@ -203,7 +223,16 @@ final class ListSwipeProbe: NSObject {
                         worstSeam = ["above": above, "below": below, "ghostTop": ghostRect.minY, "ghostHeight": ghostRect.height, "previousBottom": a.shown.maxY, "nextTop": b.shown.minY]
                     }
                 } else if !straddles {
-                    maximumNeighborDrift = max(maximumNeighborDrift, abs(shownGap - (b.model.minY - a.model.maxY)))
+                    let drift = abs(shownGap - (b.model.minY - a.model.maxY))
+                    // Only seams on screen count; rows in the preload band are reported separately.
+                    let viewport = (list.contentView.layer.presentation() ?? list.contentView.layer).bounds
+                    let visible = a.shown.maxY < viewport.maxY && b.shown.minY > viewport.minY
+                    if !visible { maximumOffscreenDrift = max(maximumOffscreenDrift, drift) }
+                    else if drift > maximumNeighborDrift {
+                        maximumNeighborDrift = drift
+                        worstDrift = ["above": a.identity, "below": b.identity, "shownGap": shownGap, "modelGap": b.model.minY - a.model.maxY,
+                                      "seamY": a.shown.maxY - viewport.minY, "sinceRemoval": now - departure.deadline + 0.8]
+                    }
                 }
             }
         }
@@ -228,7 +257,7 @@ final class ListSwipeProbe: NSObject {
             "revealed": list.swipeActions.revealedIdentity ?? "", "revealFrames": revealFrames,
             "maximumRevealOffset": maximumRevealOffset, "buttonDetach": maximumButtonDetach,
             "deleteFrames": deleteFrames, "ghostFrames": ghostFrames, "neighborDrift": maximumNeighborDrift,
-            "seamError": maximumSeamError, "ghostButtonDetach": maximumGhostButtonDetach, "worstSeam": worstSeam,
+            "seamError": maximumSeamError, "ghostButtonDetach": maximumGhostButtonDetach, "worstSeam": worstSeam, "worstDrift": worstDrift, "offscreenDrift": maximumOffscreenDrift, "departureTrace": departureTrace.map { $0.map { $0.isNaN ? -9999 : $0 } },
             "carousels": carousels, "rowFrames": rowFrames, "hostActions": hostActions,
             "rawTurnP99": rawTurns.isEmpty ? 0 : rawTurns.sorted()[Int(Double(rawTurns.count - 1) * 0.99)], "selections": DemoSelections.events, "carouselTouches": DemoSelections.carouselTouches, "turns": sorted.count,
             "turnP99": sorted.isEmpty ? 0 : sorted[Int(Double(sorted.count - 1) * 0.99)], "turnMax": sorted.last ?? 0,

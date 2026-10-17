@@ -175,6 +175,10 @@ final class LargeListController: UIViewController, ListChaosRowHost {
     private let monitor = ListFrameMonitor(name: "feed")
     private var carousels: [String: DemoCarouselRow] = [:]
     private var swipeProbe: ListSwipeProbe?
+    /// Opt-in: "fling" applies a swipe delete with momentum in flight, "resize" during a neighbour's resize.
+    private let swipeStress = UserDefaults.standard.string(forKey: "listSwipeStress")
+    private var stressTimer: Timer?
+    private var stressTall = false
     var chaosRows: [DemoListRow] { get { rows } set { rows = newValue } }
     init(mode: ScrollEngineMode) { list = UltraListView(engineMode: mode); super.init(nibName: nil, bundle: nil) }
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
@@ -210,6 +214,7 @@ final class LargeListController: UIViewController, ListChaosRowHost {
         }
         list.applyChanges(items: displayed)
         if UserDefaults.standard.bool(forKey: "listSwipeProbe") { swipeProbe = ListSwipeProbe(owner: view, list: list) }
+        if swipeStress == "resize" { startResizeStress() }
         monitor.start()
         if UserDefaults.standard.bool(forKey: "listProbe") {
             Task { [weak self] in
@@ -260,8 +265,29 @@ final class LargeListController: UIViewController, ListChaosRowHost {
         guard let index = rows.firstIndex(where: { $0.identity == identity }) else { return }
         swipeProbe?.willRemove(identity, action: action)
         rows.remove(at: index)
+        if swipeStress == "fling" {
+            // The removal applies on the next turn, with momentum toward the end in flight.
+            list.beginMomentum(velocity: 1500)
+            DispatchQueue.main.async { [weak self] in self?.applyRemoval() }
+        } else { applyRemoval() }
+        if stressTimer != nil {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in self?.stressTimer?.invalidate(); self?.stressTimer = nil }
+        }
+    }
+    private func applyRemoval() {
         let items = swipeProbe?.measure("buildItems") { displayed } ?? displayed
         if let swipeProbe { swipeProbe.measure("applyChanges") { list.applyChanges(items: items) } } else { list.applyChanges(items: items) }
+    }
+    /// Keeps a resize of row 2 in flight, so a swipe deletes its neighbour mid-resize.
+    private func startResizeStress() {
+        stressTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, let index = self.rows.firstIndex(where: { $0.identity == "2" }) else { return }
+                self.stressTall.toggle()
+                self.rows[index].height = self.stressTall ? 220 : 136; self.rows[index].revision += 1
+                self.list.applyChanges(items: self.displayed)
+            }
+        }
     }
     private func togglePin(_ identity: String) {
         guard let index = rows.firstIndex(where: { $0.identity == identity }) else { return }
@@ -275,7 +301,7 @@ final class LargeListController: UIViewController, ListChaosRowHost {
         list.applyChanges(items: displayed)
     }
     @objc private func insertRows() { counter += 1; rows.insert(withSwipeActions(.init(identity: String(counter), title: "Inserted \(counter)", body: "A new row in the visible window.", height: 112, tint: .systemGreen)), at: min(visibleIndex + 1, rows.count)); list.applyChanges(items: displayed) }
-    override func viewDidDisappear(_ animated: Bool) { super.viewDidDisappear(animated); monitor.finish() }
+    override func viewDidDisappear(_ animated: Bool) { super.viewDidDisappear(animated); monitor.finish(); stressTimer?.invalidate(); stressTimer = nil }
     @objc private func deleteRows() { if !rows.isEmpty { rows.remove(at: min(visibleIndex + 1, rows.count - 1)); list.applyChanges(items: displayed) } }
     @objc private func moveRows() { if rows.count > 5 { let index = min(visibleIndex + 1, rows.count - 1); rows.insert(rows.remove(at: index), at: min(index + 4, rows.count)); list.applyChanges(items: displayed) } }
     @objc private func resizeRow() {
