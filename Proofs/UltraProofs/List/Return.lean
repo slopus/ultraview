@@ -36,6 +36,10 @@ notifications and layouts do nothing.
   and never returns.
 * `notify_keeps_latest`: notifications, layouts and the release never change
   the recorded inset, so the shift is the finger's, not the animation's.
+* `resume_keeps_start`, `resume_resolution`: a drag that begins while the
+  outcome is awaited resumes the gesture, keeping the first drag's start,
+  so the return covers both drags. `resume_sample`: beginning afresh
+  instead leaves the displacement in place for good.
 * `touch_loses`, `touch_drops`: an outcome that resolves while a new touch
   is down after the release, and whose return the controller does not
   apply, loses the return for good.
@@ -84,6 +88,10 @@ inductive Ev
   | release (guide : Rat)
   /-- A layout after the release, with the guide's height. -/
   | layout (guide : Rat)
+  /-- A drag begins while a released gesture awaits its outcome: it goes on
+  tracking from `inset`, keeping the snapshot's start, starting height and
+  resting height, and forgetting the recorded target. -/
+  | resume (inset : Rat)
 
 /-- Resolving at height `h`. -/
 def resolve (c : C) (g : G) (h : Rat) : C :=
@@ -109,11 +117,16 @@ def step (c : C) : Ev → C
   | .layout gd => match c.gesture with
     | some g => if g.released then resolve c g gd else c
     | none => c
+  | .resume i => match c.gesture with
+    | some g => if g.released then ⟨some { g with latest := i, pending := none, released := false }, c.shifts⟩ else c
+    | none => c
 
 def run (c : C) (evs : List Ev) : C := evs.foldl step c
 
+/-- A drag begins: a fresh snapshot or a resumed one. -/
 def Ev.isBegin : Ev → Bool
   | .begin .. => true
+  | .resume _ => true
   | _ => false
 
 def Ev.isRelease : Ev → Bool
@@ -173,6 +186,7 @@ theorem awaiting : ∀ (post : List Ev) (c : C) (g : G), c.gesture = some g → 
         · exact awaiting post _ g rfl hr hb'
     cases e with
     | begin => simp [Ev.isBegin] at he
+    | resume => simp [Ev.isBegin] at he
     | track i h =>
       have : step c (.track i h) = c := by simp [step, hg, hr]
       simp only [run, List.foldl_cons, this, List.filterMap_cons, Ev.height] at *
@@ -211,6 +225,7 @@ theorem tracking : ∀ (pre : List Ev) (c : C) (g : G), c.gesture = some g → g
     have hb' := fun x hx => hb x (List.mem_cons_of_mem _ hx)
     cases e with
     | begin => simp [Ev.isBegin] at he
+    | resume => simp [Ev.isBegin] at he
     | release => simp [Ev.isRelease] at he
     | track i h =>
       by_cases hm : matchesTarget g h = true
@@ -336,6 +351,15 @@ theorem step_Q (c : C) (e : Ev) : Q (step c e) ≤ Q c + (if e.isBegin then 1 el
       split
       · exact resolve_Q c g gd hg
       · exact Nat.le_refl _
+  | resume i =>
+    simp only [step, Ev.isBegin, ite_true]
+    cases hg : c.gesture with
+    | none => simp
+    | some g =>
+      simp only []
+      split
+      · simp [Q, hg]
+      · simp
 
 /-- **Never more returns than gestures**: a run adds at most one return per
 gesture it begins, plus one for a gesture already running. With no new
@@ -367,6 +391,7 @@ theorem notify_keeps_latest (c : C) (g g' : G) (e : Ev) (hg : c.gesture = some g
     g'.latest = g.latest := by
   cases e with
   | begin => simp [Ev.isBegin] at hb
+  | resume => simp [Ev.isBegin] at hb
   | track i h => exact absurd rfl (he i h)
   | outcome h =>
     simp only [step, hg] at hg'
@@ -439,6 +464,52 @@ theorem jump_as_outcome (c : C) (g : G) (hg : c.gesture = some g) (hr : g.releas
   have hrun : run c [.outcome g.startHeight, .release gd] = step (step c (.outcome g.startHeight)) (.release gd) := rfl
   rw [hrun, ho, hrel]
   simp [resolve, G.isOpen, hopen]
+
+/-! ## A drag that resumes the waiting gesture
+
+A drag that begins while a released gesture awaits its outcome resumes it
+(`resumeTracking(inset:)`): the start inset and heights stay those of the
+first drag, so the return covers what both drags took away. -/
+
+/-- **Resuming keeps the first drag's snapshot**: its start inset, starting
+height and resting height, with the inset tracked from where it is and no
+recorded target. -/
+theorem resume_keeps_start (c : C) (g : G) (hg : c.gesture = some g) (hr : g.released = true) (i : Rat) :
+    (step c (.resume i)).gesture = some { g with latest := i, pending := none, released := false } ∧
+      (step c (.resume i)).shifts = c.shifts := by
+  simp [step, hg, hr]
+
+/-- **A resumed gesture resolves like one that never lifted**, against the
+first drag's start: `verdict` of the gesture with the original snapshot, on
+the last target of the resumed drag (or the guide at its release) and then
+every later height. -/
+theorem resume_resolution (c : C) (g : G) (hg : c.gesture = some g) (hr : g.released = true) (i : Rat)
+    (pre post : List Ev) (hpre : ∀ e ∈ pre, e.isBegin = false ∧ e.isRelease = false)
+    (hpost : ∀ e ∈ post, e.isBegin = false) (gd : Rat) :
+    ∃ g', g'.start = g.start ∧ g'.startHeight = g.startHeight ∧ g'.resting = g.resting ∧
+      g'.pending = lastOutcome none pre ∧
+      (run c (.resume i :: pre ++ .release gd :: post)).shifts =
+        c.shifts ++ verdict g' ((g'.pending.getD gd) :: post.filterMap Ev.height) := by
+  obtain ⟨h1, h2⟩ := resume_keeps_start c g hg hr i
+  obtain ⟨g', _, e1, e2, e3, e4, e5⟩ := resolution (step c (.resume i)) _ h1 rfl pre post hpre hpost gd
+  refine ⟨g', e1, e2, e3, e4, ?_⟩
+  have hrun : run c (.resume i :: pre ++ .release gd :: post) =
+      run (step c (.resume i)) (pre ++ .release gd :: post) := rfl
+  rw [hrun, e5, h2]
+
+/-- The sample: a drag from inset 300 with the keyboard 336 tall (resting
+34) lifts at inset 200 and height 150, and the keyboard waits there. A
+second drag takes the inset to 180 and lifts at 140; then the keyboard
+animates back open. Resumed, the content returns 120, back to the start
+inset 300. Begun afresh from the displaced inset, the second snapshot
+starts at 150 tall, the keyboard opening to 336 is not its starting height,
+and nothing ever returns: the 120 points stay displaced. -/
+theorem resume_sample :
+    (run ⟨none, []⟩ [.begin 300 336 34, .track 200 150, .release 150, .resume 200, .track 180 140,
+      .release 140, .outcome 336]).shifts = [120] ∧
+    (run ⟨none, []⟩ [.begin 300 336 34, .track 200 150, .release 150, .begin 200 150 34, .track 180 140,
+      .release 140, .outcome 336]).shifts = [] := by
+  decide +kernel
 
 /-! ## A touch while the outcome is awaited
 

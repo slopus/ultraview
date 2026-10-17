@@ -1182,6 +1182,21 @@ drag in the waiting state replaces the gesture (`begin_fresh`), which drops
 the waiting return as well; the new snapshot starts from the displaced
 inset.
 
+**The follow-up (agfv's, hash to come).** As described: a resolution
+applies even with a new touch down (the resolver resolves before the
+tracking guard, with compensation on), and a partial guide during such a
+touch keeps the gesture waiting instead of being discarded, so the run is
+plain `step` and `touch_loses` no longer applies. A drag that begins while
+the outcome is awaited calls `resumeTracking(inset:)`, modeled as
+`Ev.resume`: it keeps the first drag's start inset, starting height and
+resting height, records the current inset as the latest and clears the
+recorded target. `resume_resolution`: the gesture then resolves as one that
+never lifted, against the first start, so an open return restores the
+original inset. `resume_sample`: beginning afresh from the displaced inset
+(the behaviour at `f683c2f`) takes the partial height as the new starting
+one, and the keyboard opening back up never matches it, so the displacement
+stays for good. The rows map to the Swift when it lands.
+
 Momentum rows at `f683c2f` (the section at `b896af1` maps the earlier
 controller): the model's tracking is `isTrackingKeyboard` (:23), which adds
 the gesture's own tracking and excludes the moment after `didEndDragging`
@@ -1330,7 +1345,8 @@ origin, presented radius 16, no bitmap on the card, one host).
   returns the content exactly once, by the inset the finger took away, in
   every order of notifications, layouts and the release.
   `touch_loses`: a touch while the outcome is awaited loses it (gap at
-  `f683c2f`).
+  `f683c2f`). `resume_resolution`: a drag that resumes the waiting gesture
+  returns against the first drag's start.
 - `ListElastic.bounds_round`, `slice_bands`, `corners_fit`, `text_inset`,
   `ghost_shared`: a background resized by its bounds or nine-sliced keeps
   its corners, which always fit, under any width and height clocks; its

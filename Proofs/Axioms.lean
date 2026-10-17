@@ -316,5 +316,8 @@ open UltraProofs
 #print axioms ListElastic.ghost_new
 #print axioms ListElastic.ghost_old
 #print axioms ListElastic.both_dip
+#print axioms ListReturn.resume_keeps_start
+#print axioms ListReturn.resume_resolution
+#print axioms ListReturn.resume_sample
 #print axioms ListReturn.touch_loses
 #print axioms ListReturn.touch_drops
