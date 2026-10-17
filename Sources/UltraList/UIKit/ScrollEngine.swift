@@ -233,6 +233,7 @@ final class PhysicsEngine: NSObject, ScrollEngine, UIGestureRecognizerDelegate {
         animation.values = flight.trajectory.additiveValues
         animation.keyTimes = flight.trajectory.keyTimes.map { NSNumber(value: $0) }
         animation.duration = flight.trajectory.duration; animation.beginTime = flight.beginTime
+        animation.fillMode = .backwards
         animation.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: maxFPS, preferred: maxFPS)
         host.layer.add(animation, forKey: flightKey)
     }

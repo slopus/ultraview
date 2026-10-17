@@ -1161,6 +1161,7 @@ public final class UltraListView: UltraScrollView {
         guard items.indices.contains(index) else { return nil }; return items[index].attachments[run.key]
     }
     private func renderAttachments() {
+        deferredAttachmentRender = false
         attachmentsHost.frame = container.frame
         let flight = engine.activeFlight, solveOffset = flight?.settledOffset ?? engine.offset
         var ownership: [String: [UIView]] = [:]
@@ -1182,6 +1183,7 @@ public final class UltraListView: UltraScrollView {
                     animation.isAdditive = true; animation.calculationMode = .linear
                     animation.values = values; animation.keyTimes = flight.trajectory.keyTimes.map { NSNumber(value: $0) }
                     animation.duration = flight.trajectory.duration; animation.beginTime = flight.beginTime
+                    animation.fillMode = .backwards
                     view.layer.add(animation, forKey: "ultraview.attachment.flight")
                 } else { view.layer.removeAnimation(forKey: "ultraview.attachment.flight") }
                 attachmentFlightSignatures[run.serial] = flight

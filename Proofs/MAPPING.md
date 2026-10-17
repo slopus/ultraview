@@ -331,6 +331,14 @@ queue algorithms are unchanged. Programmatic momentum in the native engine
 now uses its existing stepped replay driver; native delegate behavior and
 display-link scheduling remain outside the proofs.
 
+The follow-up after `0592bc8` fills content and attachment flight keyframes
+backwards before their layer-local start times. This preserves the first
+trajectory value over the parked final model value when the render server's
+frame precedes that start. Simulator presentation tests cover both an initial
+flight and one shifted to a new coordinate base, plus a pinned attachment.
+Core Animation's fill behavior remains an environment assumption; the flight
+trajectory and pass-geometry equations are unchanged.
+
 `Proofs/UltraProofs/List/Preparation.lean` models `PreparationQueue`
 (PreparationQueue.swift) and how `UltraListView` drives it.
 

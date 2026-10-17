@@ -119,6 +119,12 @@ finite edges.
 Flights have explicit layer-local start times. A coordinate shift translates the
 content base and trajectory together without rebaking. Reachable edge changes
 schedule one durable rebake; the replacement retains recent trajectory history.
+A flight's additive correction also applies before its start time, so the
+first rendered frame shows the starting offset over the parked final model
+offset. Attachment flight corrections follow the same rule. A presentation
+regression measured a 1,492-point pre-start jump without that fill behavior.
+With it, all 341 simulator unit tests and 78 focused tests under each sanitizer
+passed, including the starting position after reparking and a pinned header.
 A stopping touch truncates the same animation with two frames of headroom.
 Leaving the window tears down motion and the sampling link.
 

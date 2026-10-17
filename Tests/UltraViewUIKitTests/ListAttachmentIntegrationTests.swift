@@ -102,5 +102,28 @@ private final class HeaderView: ListAttachmentView {
         #expect(list.loadedIndexRange.contains(0))
         list.haltScrolling()
     }
+    @Test func aPinnedAttachmentKeepsItsPositionBeforeTheFlightStarts() async throws {
+        let list = list((0..<80).map { HeaderRow(identity: String($0), header: "same") })
+        let window = makeWindow(); window.frame = list.bounds
+        window.addSubview(list); window.isHidden = false
+        defer { list.haltScrolling(); window.isHidden = true }
+        list.layer.speed = 0; list.layer.timeOffset = 100
+        list.scrollTo(.init(index: 40), transition: .immediate)
+        let header = try #require(list.loadedAttachmentViews.first)
+        func shownY() throws -> Double {
+            let layer = try #require(header.layer.presentation())
+            let target = try #require(list.layer.presentation())
+            return layer.convert(layer.bounds, to: target).minY
+        }
+        CATransaction.flush()
+        try await Task.sleep(for: .milliseconds(35))
+        let before = try shownY()
+        list.beginMomentum(velocity: 9000)
+        let flight = try #require(list.engine.activeFlight)
+        list.layer.timeOffset = flight.beginTime - 0.01
+        CATransaction.flush()
+        try await Task.sleep(for: .milliseconds(35))
+        #expect(abs(try shownY() - before) < 0.5)
+    }
 }
 #endif

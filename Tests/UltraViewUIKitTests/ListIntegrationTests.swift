@@ -741,6 +741,24 @@ private actor MeasurementGate: NodeRowMeasuring {
         #expect(engine.host.layer.animationKeys()?.isEmpty ?? true)
         #expect(engine.offset > 10)
     }
+    @Test(arguments: [false, true]) func aFlightShowsItsStartingPositionBeforeItsLayerStart(repark: Bool) async throws {
+        let window = makeWindow()
+        window.frame = .init(x: 0, y: 0, width: 320, height: 400)
+        let engine = PhysicsEngine(mode: .keyframe)
+        engine.host.frame = window.bounds; window.addSubview(engine.host); window.isHidden = false
+        defer { engine.teardown(); window.isHidden = true }
+        engine.host.layer.speed = 0; engine.host.layer.timeOffset = 100
+        engine.setOffset(1000); engine.beginMomentum(velocity: 3000)
+        if repark { engine.shift(by: 500) }
+        let flight = try #require(engine.activeFlight)
+        let start = flight.offset(at: flight.beginTime)
+        #expect(abs(engine.host.bounds.minY - start) > 1000)
+        engine.host.layer.timeOffset = flight.beginTime - 0.01
+        CATransaction.flush()
+        try await Task.sleep(for: .milliseconds(35))
+        let shown = try #require(engine.host.layer.presentation()?.bounds.minY)
+        #expect(abs(shown - start) < 0.5)
+    }
     @Test func frozenFlightMutationPreservesActualListGeometry() {
         let list = list(count: 1000)
         list.layer.speed = 0; list.layer.timeOffset = 100
