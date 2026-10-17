@@ -110,6 +110,7 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
         ListStreamSendProbe.startIfRequested(chat: self)
         ListComposerTimingProbe.startIfRequested(chat: self)
         ListComposerMotionProbe.startIfRequested(chat: self)
+        ListComposerKeystrokeProbe.startIfRequested(chat: self)
         if UserDefaults.standard.bool(forKey: "listProbe") {
             Task { [weak self] in
                 let delay = UserDefaults.standard.double(forKey: "listProbeDelay")
@@ -184,7 +185,9 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
     func textViewDidChange(_ textView: UITextView) {
         waitsForSentCollection = false; pendingComposerHeight = nil
         if !list.isTracking { followsComposer = true }
-        updateComposerHeight(animated: true)
+        keyboardTransition = ListTransition.none
+        updateComposerHeight()
+        view.layoutIfNeeded()
     }
     private func updateComposerHeight(animated: Bool = false, duration: Double = 0.18) {
         let started = CACurrentMediaTime()

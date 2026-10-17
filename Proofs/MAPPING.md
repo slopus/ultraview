@@ -361,6 +361,10 @@ coverage now starts away from newest and observes the same surviving row
 through keyboard show, composer growth/shrink and programmatic hide in every
 engine. The interactive dismissal latch still disables compensation through
 release, so a later hide cannot snap the content back.
+The typing follow-up after `6d94fd0` applies ordinary text edits' height and
+inset with an immediate transition in the editing turn. It keeps the animated
+Send and keyboard transitions. This changes the host's timing choice, while
+the inset equations and `Momentum`'s compensation policy remain unchanged.
 The historical chat-policy transitions in `Momentum` at `0e5c7b6` still describe
 that earlier host policy. The new host no longer tests whether content is at
 newest before a programmatic change. The conditional flight-translation and

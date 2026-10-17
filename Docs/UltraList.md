@@ -164,8 +164,11 @@ list's 0.3-second duration and viewport-animation start time, including time
 spent applying the prepared pass. The demo copies UIKit's generated geometry
 tracks to assign that start time.
 Ordinary typing starts growth immediately, including a new draft typed while
-Send is still preparing. Composer growth and shrink share the viewport's
-transaction; pending row work cannot delay a vertical inset update.
+Send is still preparing. Native edits, line removal and multiline paste apply
+the composer height and viewport inset synchronously with no resize animation.
+This keeps the glyph layout, caret, bar and list in one commit. Send retains its
+animated shrink, and keyboard show/hide retains the keyboard transition.
+Pending row work cannot delay a vertical inset update.
 In a compact vertical size class, the demo's screen, engine and blocker controls
 share one horizontal row so the keyboard leaves room for chat gestures. Seven
 keyboard interaction methods passed, including landscape dismissal in every
