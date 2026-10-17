@@ -56,6 +56,19 @@ private struct AsyncFixedRow: ListRow {
 }
 
 @MainActor
+private struct DelayedRevisionRow: ListRow {
+    var identity: String
+    var revision: UInt64
+    var delay: Duration = .milliseconds(150)
+    var measuresAsynchronously: Bool { true }
+    func makeView() -> ListRowView { FixedRowView() }
+    func measure(width: Double, environment: RenderEnvironment) async -> Double? {
+        try? await Task.sleep(for: delay)
+        return 50 + Double(revision)
+    }
+}
+
+@MainActor
 private struct UnavailableRow: ListRow {
     var identity: String
     var measuresAsynchronously: Bool { true }
@@ -87,6 +100,45 @@ private actor MeasurementGate: NodeRowMeasuring {
 
 @MainActor
 @Suite(.serialized) struct ListIntegrationTests {
+    @Test func streamingRevisionsMakeProgressWhileMeasurementsAreSlowerThanSubmissions() async throws {
+        let list = list(count: 0)
+        var displayed: Set<UInt64> = []
+        for revision in 1...20 {
+            list.applyChanges(items: [DelayedRevisionRow(identity: "stream", revision: UInt64(revision))], transition: .none)
+            try await Task.sleep(for: .milliseconds(50))
+            if let revision = list.items.first?.revision { displayed.insert(revision) }
+        }
+        #expect(displayed.count >= 5, "Streaming must advance before the producer stops: \(displayed)")
+        for _ in 0..<100 where list.items.first?.revision != 20 { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(list.items.first?.revision == 20)
+    }
+    @Test func aSupersededSendKeepsItsIdentityTargetAndInsertedBlock() async throws {
+        let list = list(count: 100)
+        list.scrollTo(.init(index: 40), transition: .none)
+        let old = list.items
+        let sent: [any ListRow] = [DelayedRevisionRow(identity: "sent", revision: 1, delay: .milliseconds(200))]
+        list.applyChanges(items: sent + old,
+            scrollTo: .init(index: 0), animatesInsertions: false, transition: .easeInOut(1))
+        list.animateInsertedBlock(identities: ["sent"], from: .top, transition: .easeInOut(1))
+        let newest: [any ListRow] = [FixedRow(identity: "header"), DelayedRevisionRow(identity: "sent", revision: 2, delay: .milliseconds(75))]
+        list.applyChanges(items: newest + old,
+            transition: .easeInOut(1))
+        for _ in 0..<100 where list.items.first?.identity != "header" { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(list.items.first?.identity == "header")
+        #expect(abs((list.settledFrame(at: 1)?.minY ?? -1000) - list.viewportInsets.top) < 0.5)
+        #expect(list.loadedItemView(at: 1)?.layer.animation(forKey: "ultraview.list.positionY") != nil)
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(list.items.first?.identity == "header")
+        #expect(list.items[1].revision == 2)
+    }
+    @Test func anAwaitedMutationCannotReplayAnOlderKeyboardInset() async throws {
+        let list = list(count: 10)
+        list.applyChanges(items: [DelayedRevisionRow(identity: "stream", revision: 1)], newInsets: .init(top: 100), transition: .none)
+        list.applyChanges(newInsets: .init(top: 200), transition: .none)
+        for _ in 0..<100 where list.items.first?.identity != "stream" { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(list.items.first?.identity == "stream")
+        #expect(list.viewportInsets.top == 200)
+    }
     @Test(arguments: ScrollEngineMode.allCases) func keyboardInsetsKeepTheViewportAndRowGeometryWhileCompensatingOnce(mode: ScrollEngineMode) throws {
         let list = list(mode, count: 1000)
         list.contentView.transform = .init(scaleX: 1, y: -1)
@@ -416,10 +468,10 @@ private actor MeasurementGate: NodeRowMeasuring {
         #expect(list.presentedFrame(at: 0)!.height < 52)
         #expect(abs(list.presentedFrame(at: 1)!.minY - list.presentedFrame(at: 0)!.maxY) < 1)
     }
-    @Test func revisedNodeRowsKeepReadyContentUntilTheNewestCommit() async throws {
+    @Test func revisedNodeRowsKeepReadyContentAndAdvanceBeforeTheNewestCommit() async throws {
         func row(_ revision: UInt64) -> NodeRow {
             NodeRow(identity: "stream", revision: revision) {
-                var style = Style(); style.height = 60; style.backgroundColor = .white
+                var style = Style(); style.height = .points(60 + Double(revision) * 20); style.backgroundColor = .white
                 return UltraNode(style: style, children: [UltraTextNode("Revision \(revision)")])
             }
         }
@@ -436,25 +488,35 @@ private actor MeasurementGate: NodeRowMeasuring {
         }
         let shown = try #require(view.subviews.first as? NodeHostView)
         #expect(view.isDisplayReady && !shown.isHidden)
+        var displayed: [String] = []
+        view.onDisplayReady = {
+            if let host = view.subviews.compactMap({ $0 as? NodeHostView }).first(where: { !$0.isHidden }),
+               let text = host.rootNode.children.first as? UltraTextNode { displayed.append(text.text) }
+        }
         let replacement = row(1), newest = row(2)
         _ = await replacement.measure(width: 320, environment: environment)
         _ = await newest.measure(width: 320, environment: environment)
         replacement.apply(to: view, transition: .easeInOut(0.3))
-        view.applyMeasurement(width: 320, height: 60, environment: environment)
-        let superseded = try #require(view.subviews.last as? NodeHostView)
+        view.applyMeasurement(width: 320, height: 80, environment: environment)
+        let inFlight = try #require(view.subviews.last as? NodeHostView)
         #expect(shown.superview === view && !shown.isHidden)
-        #expect(superseded !== shown && superseded.isHidden)
+        #expect(inFlight !== shown && inFlight.isHidden)
+        view.bounds.size.height = 80; view.layoutIfNeeded()
+        #expect(shown.bounds.height == 60 && shown.hasContent)
         newest.apply(to: view, transition: .easeInOut(0.3))
-        view.applyMeasurement(width: 320, height: 60, environment: environment)
-        let candidate = try #require(view.subviews.last as? NodeHostView)
-        #expect(superseded.superview == nil)
+        view.applyMeasurement(width: 320, height: 100, environment: environment)
+        #expect(inFlight.superview === view && inFlight.isHidden)
+        #expect(view.subviews.last === inFlight)
         #expect(shown.superview === view && !shown.isHidden && view.isDisplayReady)
         for _ in 0..<100 {
-            if shown.superview == nil { break }
+            if displayed.last == "Revision 2" { break }
             try? await Task.sleep(for: .milliseconds(10))
         }
+        #expect(displayed == ["Revision 1", "Revision 2"])
         #expect(shown.superview == nil)
-        #expect(view.subviews.count == 1 && candidate.superview === view)
+        #expect(inFlight.superview == nil)
+        let candidate = try #require(view.subviews.first as? NodeHostView)
+        #expect(view.subviews.count == 1)
         #expect(!candidate.isHidden && candidate.hasContent)
     }
     @Test func nodeRowShrinkKeepsTallReadyContentUntilTheClipFinishes() async throws {

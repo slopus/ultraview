@@ -80,6 +80,16 @@ fileprivate final class NodeRowView: ListRowView {
     var row: NodeRow
     private var displayedHost: NodeHostView?
     private var pendingHost: NodeHostView?
+    private struct Candidate {
+        var row: NodeRow
+        var root: UltraNode
+        var size: CGSize
+        var environment: RenderEnvironment
+    }
+    private var pendingCandidate: Candidate?
+    private var queuedCandidate: Candidate?
+    private var displayedSize = CGSize.zero
+    private var revealDeadline: Double?
     private var preparing: (row: NodeRow, width: Double, environment: UInt64)?
     override var isDisplayReady: Bool { displayedHost != nil }
     init(row: NodeRow) { self.row = row; super.init(frame: .zero); clipsToBounds = true }
@@ -88,28 +98,50 @@ fileprivate final class NodeRowView: ListRowView {
             snapshot.frame = host.frame; addSubview(snapshot)
         }
         if displayedHost === host { displayedHost = nil }
-        if pendingHost === host { pendingHost = nil }
+        if pendingHost === host { pendingHost = nil; pendingCandidate = nil; revealDeadline = nil }
+        queuedCandidate = nil
         host.onCommit = nil; host.removeFromSuperview()
     }
     private func showPreparedHost(_ host: NodeHostView) {
         guard pendingHost === host, host.hasContent else { return }
         // Keep the old tall content while the render server clips it down.
         // A short replacement would otherwise make the visible card jump.
-        if let animation = layer.animation(forKey: "ultraview.list.height") as? CABasicAnimation,
-           let from = animation.fromValue as? Double, let to = animation.toValue as? Double,
-           from > to, let start = animation.value(forKey: "ultraviewStartTime") as? Double {
-            let remaining = start + animation.duration / Double(animation.speed) - layer.convertTime(CACurrentMediaTime(), from: nil)
-            if remaining > 0.001 {
-                DispatchQueue.main.asyncAfter(deadline: .now() + remaining) { [weak self, weak host] in
-                    guard let self, let host else { return }; showPreparedHost(host)
-                }
-                return
+        if revealDeadline == nil {
+            if let animation = layer.animation(forKey: "ultraview.list.height") as? CABasicAnimation,
+               let from = animation.fromValue as? Double, let to = animation.toValue as? Double,
+               from > to, let start = animation.value(forKey: "ultraviewStartTime") as? Double {
+                revealDeadline = start + animation.duration / Double(animation.speed)
+            } else { revealDeadline = 0 }
+        }
+        let remaining = (revealDeadline ?? 0) - layer.convertTime(CACurrentMediaTime(), from: nil)
+        if remaining > 0.001 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + remaining) { [weak self, weak host] in
+                guard let self, let host else { return }; showPreparedHost(host)
             }
+            return
         }
         displayedHost?.removeFromSuperview()
+        displayedSize = pendingCandidate?.size ?? host.bounds.size
         displayedHost = host; pendingHost = nil
-        host.frame = bounds; host.isHidden = false
+        pendingCandidate = nil; revealDeadline = nil
+        host.frame = .init(origin: .zero, size: displayedSize); host.isHidden = false
         reportDisplayReady()
+        if let next = queuedCandidate {
+            queuedCandidate = nil
+            if next.root !== host.rootNode { start(next) }
+        }
+    }
+    private func start(_ candidate: Candidate) {
+        guard let host = candidate.row.host(width: candidate.size.width, environment: candidate.environment, owner: self) else { return }
+        pendingCandidate = candidate; revealDeadline = nil
+        host.onCommit = { [weak self, weak host] in
+            guard let self, let host else { return }
+            showPreparedHost(host)
+        }
+        host.isHidden = true
+        addSubview(host); pendingHost = host
+        configureNodeRowHost(host, size: candidate.size)
+        if host.hasContent { showPreparedHost(host) }
     }
     override func applyMeasurement(width: Double, height: Double, environment: RenderEnvironment) {
         guard let root = row.preparedNode(width: width, environment: environment) else {
@@ -127,31 +159,19 @@ fileprivate final class NodeRowView: ListRowView {
             return
         }
         preparing = nil
-        if pendingHost?.rootNode !== root && displayedHost?.rootNode !== root {
-            pendingHost?.removeFromSuperview()
-            guard let host = row.host(width: width, environment: environment, owner: self) else { return }
-            host.onCommit = { [weak self, weak host] in
-                guard let self, let host else { return }
-                showPreparedHost(host)
-            }
-            host.isHidden = true
-            addSubview(host); pendingHost = host
-            configureNodeRowHost(host, size: .init(width: width, height: height))
-            if host.hasContent { showPreparedHost(host) }
-        } else if displayedHost?.rootNode === root {
-            pendingHost?.removeFromSuperview(); pendingHost = nil
+        let candidate = Candidate(row: row, root: root, size: .init(width: width, height: height), environment: environment)
+        if let pendingHost {
+            if pendingHost.rootNode !== root { queuedCandidate = candidate }
+            else { queuedCandidate = nil }
+        } else if displayedHost?.rootNode !== root {
+            start(candidate)
         }
-        if let displayedHost { displayedHost.frame = .init(x: 0, y: 0, width: width, height: pendingHost == nil ? height : max(height, displayedHost.bounds.height)) }
-        pendingHost?.frame = .init(x: 0, y: 0, width: width, height: height)
+        setNeedsLayout()
     }
     override func layoutSubviews() {
         super.layoutSubviews()
-        if let displayedHost {
-            var frame = bounds
-            if pendingHost != nil { frame.size.height = max(frame.height, displayedHost.bounds.height) }
-            displayedHost.frame = frame
-        }
-        pendingHost?.frame = bounds
+        displayedHost?.frame = .init(origin: .zero, size: displayedSize)
+        if let pendingCandidate { pendingHost?.frame = .init(origin: .zero, size: pendingCandidate.size) }
     }
 }
 #endif

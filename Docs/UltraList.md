@@ -268,6 +268,14 @@ cached by a prior instance. Separate tests cover transient nil measurement
 recovery, preservation of a pending scroll's transition, and pinned viewport
 changes without row reapplication.
 
+The preparation queue keeps one active snapshot and one replacement. A ready
+replacement can overtake the active snapshot; otherwise the active one applies
+before the replacement starts waiting alone. A continuous stream of revisions
+therefore advances even when measurement is slower than submission. Node hosts
+follow the same rule for rendering. Scroll targets and inserted-block animation
+intent survive replacement by identity, while later viewport changes supersede
+older queued insets. This follow-up passed 210 Linux and 303 simulator tests.
+
 A focused simulator fling started with loaded index 38 and injected a 252.1 ms
 main-thread block. The flight remained active at the next sample, continued from
 loaded index 14 to 0, and finished with all 60 geometry samples finite. Node
