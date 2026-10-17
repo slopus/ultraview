@@ -944,6 +944,9 @@ one timing, which is again a track on it.
   the Swift's two special cases are that same step.
 - `alone_drifts`: retiming the row alone, with a 10-point inset bubble left
   on its timing, overlaps the row's edge by 2.5 points at 1 s.
+- `shift_value`, `shift_keeps`, `row_only_off`, `join_jump`, `join_exact`,
+  `shift_sample`: content replaced with no timing, and content joining a
+  running animation (below).
 
 Both start values are read from the same rendered frame: the inner one from
 its presentation layer in `retime`, the row's from the presentation captured
@@ -958,12 +961,20 @@ assumes that is the value at `t0`. Not covered:
   its start inset is the snapshot's, not the row's at the animation's begin,
   so `edge_constant` does not apply; with no running height animation it
   animates over the pass's remaining duration while the row's height is
-  still;
+  still. `join_jump`: at the join the content shows `s + (T - s) p`, a jump
+  of `(T - s) p` from the snapshot `s`; `join_exact`: a start of
+  `(s - T p) / (1 - p)` would show `s` there (it can lie outside `[s, T]`
+  as `p` nears 1). Only the late path (pre-render timeout, a row not live)
+  takes this branch;
 - a re-installed row animation with an explicit begin (`beginTime != 0`),
   which `rowDidAnimate` ignores, including an immediate change to an
   in-flight height (ListAnimation.swift:212-219) that shifts the row's ends
   by the change and keeps its timing: inner animations keep their ends, so
-  the inset moves by that change until a pass lays the content out again;
+  the inset moves by that change until a pass lays the content out again
+  (`row_only_off`). f4yx's fix (written, not yet pushed) moves each running
+  inner animation the same way, `TransitionShift.start(from:to:target:) =
+  from + (target - to)` on the old timing: `shift`, and `shift_keeps`
+  proves the inset holds at every frame;
 - a height and a width animation on different timings: each `rowDidAnimate`
   moves all content onto its own, so the last one added wins and the other
   axis is off its row's timing (`last_wins_drifts`: 35 points instead of 10
@@ -1262,8 +1273,10 @@ tall can dip below it and clamp the radius for those frames. Text placed
 width, so it moves with the width clock; the model's `textFrame` is the
 left-aligned case. A pixel's ink is a coverage in `[0, 1]`; antialiasing,
 subpixel positioning and the reveal mask's band edges are not modeled.
-The simulator test f4yx runs checks the same invariants (card edges, title
-origin, presented radius 16, no bitmap on the card, one host).
+`ElasticResizeTests` (at `621e7a1`, where the demo's cards opt in) checks
+the same invariants in stopped time at six points of a resize, in height and
+in width: card edges on the row's less the inset, title at the card's
+padding, radius 16 with no bitmap, one revision shown.
 
 ## Theorems
 

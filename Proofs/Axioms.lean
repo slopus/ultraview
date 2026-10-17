@@ -227,6 +227,12 @@ open UltraProofs
 #print axioms ListContent.alone_drifts
 #print axioms ListContent.axes_keep
 #print axioms ListContent.last_wins_drifts
+#print axioms ListContent.shift_value
+#print axioms ListContent.shift_keeps
+#print axioms ListContent.row_only_off
+#print axioms ListContent.join_jump
+#print axioms ListContent.join_exact
+#print axioms ListContent.shift_sample
 #print axioms ListLayers.follower_exact
 #print axioms ListLayers.prefix_seam
 #print axioms ListLayers.prefix_anchor
