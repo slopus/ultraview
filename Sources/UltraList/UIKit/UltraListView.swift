@@ -521,7 +521,9 @@ public final class UltraListView: UltraScrollView {
         let incomingPlans = CrossingPlanner.infer(incomingEndpoints, samples: samples, safeRange: (engine.offset - preloadMargin)...(engine.offset + viewport.height + preloadMargin), anchorY: crossingAnchor)
         for (id, next) in plans {
             guard let carry = carried[id] else { continue }
-            let oldY = carry.view.frame.minY; carry.view.frame.origin.y = next
+            let oldY = carry.view.frame.minY
+            // Translate without asking UIKit to infer bounds from a transformed frame.
+            carry.view.layer.position.y += next - oldY
             animations.transition(.row(id), .positionY, old: oldY, new: next, at: time, transition: transition, restarts: displacing) { [weak self, weak view = carry.view] in
                 guard let self, let view, carried[id]?.view === view, views[id] == nil else { return }
                 carried.removeValue(forKey: id); view.removeFromSuperview(); animations.unbind(.row(id))
@@ -914,7 +916,7 @@ public final class UltraListView: UltraScrollView {
 
     private func shiftDetached(by delta: Double) {
         guard delta != 0 else { return }
-        for parent in [exits, crossings] { for child in parent.subviews { child.frame.origin.y += delta } }
+        for parent in [exits, crossings] { for child in parent.subviews { child.layer.position.y += delta } }
         ghostLedger.shift(by: delta)
     }
     private func transitionDetachedHorizontalGeometry(at time: Double, transition: ListTransition) {
@@ -958,7 +960,8 @@ public final class UltraListView: UltraScrollView {
             let root = liveBounds(first.0, first.1, first.2).minY
             let wrapper = UIView(); wrapper.layer.anchorPoint = .zero; wrapper.isUserInteractionEnabled = false
             let localBottom = members.map { liveBounds($0.0, $0.1, $0.2).maxY - root }.max() ?? 0
-            wrapper.frame = .init(x: 0, y: root, width: viewport.width, height: max(1, localBottom))
+            wrapper.bounds = .init(x: 0, y: 0, width: viewport.width, height: max(1, localBottom))
+            wrapper.layer.position = .init(x: 0, y: root)
             exits.addSubview(wrapper); ghostWrappers[blockID] = wrapper
             ghostLedger.insert(.init(id: blockID, root: root, localTop: 0, localBottom: localBottom, members: members.count))
             newGhostRanges[blockID] = first.0.index..<(members.last!.0.index + 1)
@@ -1035,7 +1038,7 @@ public final class UltraListView: UltraScrollView {
         }
         for (id, target) in ghostLedger.targets(rows: live) {
             guard let block = ghostLedger.blocks[id], let wrapper = ghostWrappers[id] else { continue }
-            wrapper.frame.origin.y = target
+            wrapper.layer.position.y = target
             animations.transition(.block(id), .positionY, old: block.root, new: target, at: time, transition: transition)
             ghostLedger.setRoot(id, target)
         }
@@ -1055,12 +1058,12 @@ public final class UltraListView: UltraScrollView {
         }
         let newTop = newOrigin - newOffset
         let correction = ViewportTravel.carouselCorrection(oldStrip: stripTop...stripBottom, newStrip: newTop...(newTop + newWindow.height), forward: ViewportTravel.forward(target: target.index, witness: witness, hint: target.forward))
-        for view in carousel.subviews { view.frame.origin.y += correction - oldCorrection }
+        for view in carousel.subviews { view.layer.position.y += correction - oldCorrection }
         for block in ghostLedger.blocks.values where !block.viewportAnchored {
             guard let wrapper = ghostWrappers[block.id] else { continue }
             ghostLedger.promoteToViewport(block.id, offset: newOffset)
             let root = (ghostLedger.blocks[block.id]?.root ?? 0) + correction - oldCorrection
-            ghostLedger.setRoot(block.id, root); wrapper.frame.origin.y = root; carousel.addSubview(wrapper)
+            ghostLedger.setRoot(block.id, root); wrapper.layer.position.y = root; carousel.addSubview(wrapper)
             for owner in ghostExitOwners[block.id] ?? [] {
                 let opacity = animations.value(owner, .opacity, at: time)
                 animations.replace(owner, .opacity, from: opacity, to: 0, at: time, transition: transition)
@@ -1068,7 +1071,8 @@ public final class UltraListView: UltraScrollView {
         }
         let wrapper = UIView(); wrapper.layer.anchorPoint = .zero; wrapper.isUserInteractionEnabled = false
         let oldTop = oldBase + oldWindow.minY - oldOffset - oldCorrection
-        wrapper.frame = .init(x: 0, y: oldTop + correction, width: viewport.width, height: oldWindow.height)
+        wrapper.bounds = .init(x: 0, y: 0, width: viewport.width, height: oldWindow.height)
+        wrapper.layer.position = .init(x: 0, y: oldTop + correction)
         carousel.addSubview(wrapper)
         for row in oldWindow.rows {
             let id = oldItems[row.index].identity
@@ -1238,7 +1242,7 @@ public final class UltraListView: UltraScrollView {
         for run in runs {
             guard let map = attachmentMaps[run.serial], let view = attachmentViews[run.serial] else { continue }
             let y = map.position(offset: solveOffset)
-            view.frame = .init(x: viewport.insets.left, y: y - settledWindow.minY, width: viewport.contentWidth, height: map.height)
+            view.place(in: .init(x: viewport.insets.left, y: y - settledWindow.minY, width: viewport.contentWidth, height: map.height))
             attachmentsHost.bringSubviewToFront(view)
             view.stickDistanceUpdated(map.stickDistance(offset: engine.offset))
             let candidates = settledWindow.rows.filter { run.members.contains($0.index) }

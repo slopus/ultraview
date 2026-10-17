@@ -193,6 +193,15 @@ preservation of an existing viewport spring and opacity deadline. The generic
 retiming model remains broader than this selection policy; it does not prove
 the controller's filtering or callbacks correct.
 
+The carry-placement follow-up after `746e713` rechecks the `Pass.detached_jump`
+and `scroll_carry_jumps` rows above. `shiftDetached` and crossing placement now
+translate layer positions directly; row and attachment size placement uses
+`place(in:)`. Ghost wrappers set their bounds and layer position explicitly.
+The modeled coordinate shifts are unchanged. UIKit's inference of bounds and
+position when assigning a transformed view's `frame` is outside those equations;
+the simulator carry regression exercises repeated stream revisions during an
+insertion with both normal and inverted rows.
+
 The `Window.dropFront` / `dropBack` / `rebalance` mapping was rechecked.
 `ListWindow.rebalance` now accepts a temporal coverage interval and an optional
 budget for added rows. It still removes only end rows and adds linked rows

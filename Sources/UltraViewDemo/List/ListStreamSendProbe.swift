@@ -42,7 +42,9 @@ final class ListStreamSendProbe: NSObject {
 
     private enum Scenario: String, CaseIterable {
         case sendMidGrow, keyboardSendMidGrow, twoSends, streamSendStream, multilineSendShrink, keyboardMultilineSendShrink
-        var raisesKeyboard: Bool { self == .keyboardSendMidGrow || self == .keyboardMultilineSendShrink }
+        case keyboardSendAtHalfSecond, keyboardSendAtOneAndHalfSeconds
+        var manualFlow: Bool { self == .keyboardSendAtHalfSecond || self == .keyboardSendAtOneAndHalfSeconds }
+        var raisesKeyboard: Bool { self == .keyboardSendMidGrow || self == .keyboardMultilineSendShrink || manualFlow }
     }
 
     /// The gap of one adjacent pair that contains a row inserted by a tap.
@@ -149,6 +151,9 @@ final class ListStreamSendProbe: NSObject {
         var lingering: [String] = []
         var composer: ComposerSend?
         var final: [String: Any] = [:]
+        var continuityFrames: [[String: Any]] = []
+        var sceneFrames: [[String: Any]] = []
+        var unchangedTargetRestarts: [[String: Any]] = []
         init(engine: String, scenario: String) { self.engine = engine; self.scenario = scenario }
 
         var violationCount: Int { violations.values.reduce(0, +) }
@@ -170,6 +175,10 @@ final class ListStreamSendProbe: NSObject {
             ]
             if let keyboardVisible { value["keyboardVisible"] = keyboardVisible }
             if let composer { value["composerSend"] = composer.dictionary }
+            if !continuityFrames.isEmpty {
+                value["continuityFrames"] = continuityFrames.count
+                value["unchangedTargetRestarts"] = unchangedTargetRestarts
+            }
             value.merge(final) { _, new in new }
             return value
         }
@@ -192,6 +201,10 @@ final class ListStreamSendProbe: NSObject {
     private var complete = false
     private var notReadyAtStart = false
     private var failure: String?
+    private var previousTracks: [String: (target: Double, generation: UInt64, begin: Double, end: Double)] = [:]
+    private var displayTime = 0.0
+    private var rowIdentities: [ObjectIdentifier: String] = [:]
+    private var capturesContinuity: Bool { UserDefaults.standard.bool(forKey: "listStreamSendContinuity") }
 
     private init(chat: ListChatController) {
         initialChat = chat
@@ -218,7 +231,7 @@ final class ListStreamSendProbe: NSObject {
         let engines = (defaults.string(forKey: "listStreamSendEngines")?.split(separator: ",").map(String.init))
             ?? ScrollEngineMode.allCases.map(\.rawValue)
         let scenarios = (defaults.string(forKey: "listStreamSendScenarios")?.split(separator: ",").compactMap { Scenario(rawValue: String($0)) })
-            ?? Scenario.allCases
+            ?? Scenario.allCases.filter { !$0.manualFlow }
         for engine in engines {
             guard let mode = ScrollEngineMode(rawValue: engine) else { failure = "unknown engine \(engine)"; continue }
             for scenario in scenarios {
@@ -263,6 +276,7 @@ final class ListStreamSendProbe: NSObject {
         results.append(result)
         known = Set(chat.list.items.map(\.identity)); streamed.removeAll(); firstSeen.removeAll()
         openings.removeAll(); settledGaps.removeAll(); gapChanges.removeAll()
+        previousTracks.removeAll()
         let initialCount = chat.list.items.count
         if notReadyAtStart { result.violate("rowsNotReadyAtStart", ["loaded": "\(chat.list.loadedIndexRange)"]) }
         if scenario.raisesKeyboard, let composer = composer(in: chat) {
@@ -297,6 +311,10 @@ final class ListStreamSendProbe: NSObject {
             await sendDraft(chat, result, lines: 4)
         case .keyboardMultilineSendShrink:
             await sendDraft(chat, result, lines: 7)
+        case .keyboardSendAtHalfSecond, .keyboardSendAtOneAndHalfSeconds:
+            lastStream = await tap("Stream", chat, result)
+            try? await Task.sleep(for: .milliseconds(scenario == .keyboardSendAtHalfSecond ? 500 : 1500))
+            await tap("Send", chat, result)
         }
         if let lastStream { await waitForRevision(lastStream, finalRevision, chat, timeout: 10) }
         let begin = CACurrentMediaTime()
@@ -429,7 +447,8 @@ final class ListStreamSendProbe: NSObject {
         var visible: Bool
     }
 
-    @objc private func tick() {
+    @objc private func tick(_ link: CADisplayLink) {
+        displayTime = link.timestamp
         guard let result, let chat, chat.view.window != nil, let listLayer = chat.list.layer.presentation() else { return }
         let list = chat.list, time = elapsed
         result.frames += 1
@@ -439,6 +458,7 @@ final class ListStreamSendProbe: NSObject {
             known.insert(item.identity); result.inserted.append(item.identity); firstSeen[item.identity] = time
             if item.identity.hasPrefix("stream-") { streamed.insert(item.identity) }
         }
+        if capturesContinuity { sampleScene(list, time: time, result: result, listLayer: listLayer) }
         var previous: Row?
         for index in list.loadedIndexRange {
             guard let view = list.loadedItemView(at: index), let settled = list.settledFrame(at: index) else { previous = nil; continue }
@@ -451,10 +471,129 @@ final class ListStreamSendProbe: NSObject {
             }
             let visible = Double(rect.maxY) > band.0 && Double(rect.minY) < band.1
             let row = Row(identity: list.items[index].identity, rect: rect, settled: settled, visible: visible)
+            if capturesContinuity { sampleContinuity(view, row, index: index, time: time, result: result, list: list, listLayer: listLayer) }
             if let previous { check(previous, row, inverted: inverted, time: time, result: result) }
             previous = row
         }
         if let send = result.composer { sampleComposer(send, list, result: result) }
+    }
+
+    private func sampleContinuity(_ view: ListRowView, _ row: Row, index: Int, time: Double, result: ScenarioResult, list: UltraListView, listLayer: CALayer) {
+        guard let layer = view.layer.presentation() else { return }
+        func rectangle(_ layer: CALayer) -> [Double] {
+            let value = (layer.presentation() ?? layer).convert((layer.presentation() ?? layer).bounds, to: listLayer)
+            return [value.minX, value.minY, value.width, value.height]
+        }
+        var tracks: [String: Any] = [:]
+        for (name, owner, target) in [("height", view.layer, view.layer.bounds.height),
+                                      ("positionY", view.layer, view.layer.position.y),
+                                      ("viewportOffset", list.contentView.layer, list.contentView.layer.bounds.minY)] {
+            let key = name == "viewportOffset" ? name : row.identity + "/" + name
+            guard let animation = owner.animation(forKey: "ultraview.list.\(name)") as? CABasicAnimation else {
+                previousTracks.removeValue(forKey: key); continue
+            }
+            let generation = (animation.value(forKey: "ultraviewGeneration") as? NSNumber)?.uint64Value ?? 0
+            let start = animation.beginTime == 0
+                ? (animation.value(forKey: "ultraviewStartTime") as? NSNumber)?.doubleValue ?? owner.convertTime(CACurrentMediaTime(), from: nil)
+                : animation.beginTime
+            let end = owner.convertTime(start + animation.duration / max(0.000001, Double(animation.speed)), to: nil)
+            if let previous = previousTracks[key], abs(previous.target - target) < 0.000001,
+               previous.generation != generation, CACurrentMediaTime() < previous.end,
+               result.unchangedTargetRestarts.count < 200 {
+                result.unchangedTargetRestarts.append(["t": time, "row": row.identity, "property": name,
+                    "target": target, "oldGeneration": previous.generation, "generation": generation,
+                    "oldBegin": previous.begin, "begin": animation.beginTime])
+            }
+            previousTracks[key] = (target, generation, animation.beginTime, end)
+            var first: [Float] = [0, 0], last: [Float] = [1, 1]
+            animation.timingFunction?.getControlPoint(at: 1, values: &first)
+            animation.timingFunction?.getControlPoint(at: 2, values: &last)
+            tracks[name] = ["generation": generation, "begin": animation.beginTime,
+                "modelStart": (animation.value(forKey: "ultraviewStartTime") as? NSNumber)?.doubleValue ?? 0,
+                "duration": animation.duration, "speed": animation.speed,
+                "from": (animation.fromValue as? NSNumber)?.doubleValue ?? 0,
+                "to": (animation.toValue as? NSNumber)?.doubleValue ?? 0,
+                "curve": first + last]
+        }
+        var hosts: [[String: Any]] = []
+        for child in view.subviews {
+            var value: [String: Any] = ["class": String(describing: type(of: child)),
+                "identity": String(describing: ObjectIdentifier(child)), "hidden": child.isHidden,
+                "presented": child.layer.presentation() != nil, "modelHeight": child.bounds.height,
+                "z": child.layer.zPosition, "order": view.subviews.firstIndex(of: child) ?? -1]
+            if child.layer.presentation() != nil { value["rect"] = rectangle(child.layer) }
+            if let host = child as? NodeHostView {
+                value["hasContent"] = host.hasContent
+                if let card = Self.find(in: host, UIView.self, { $0.layer.cornerRadius >= 12 }), card.layer.presentation() != nil {
+                    value["card"] = rectangle(card.layer)
+                    value["cardModelHeight"] = card.bounds.height
+                }
+                value["commitCount"] = host.statistics.current.commits
+            }
+            hosts.append(value)
+        }
+        guard result.continuityFrames.count < 8000 else { return }
+        result.continuityFrames.append(["t": time, "clock": CACurrentMediaTime(), "displayTime": displayTime, "row": row.identity,
+            "revision": list.items[index].revision, "index": index, "visible": row.visible,
+            "rect": [row.rect.minX, row.rect.minY, row.rect.width, row.rect.height],
+            "settled": [row.settled.minY, row.settled.height], "positionY": layer.position.y,
+            "height": layer.bounds.height, "modelPositionY": view.layer.position.y,
+            "modelHeight": view.layer.bounds.height, "z": view.layer.zPosition,
+            "order": view.superview?.subviews.firstIndex(of: view) ?? -1,
+            "viewport": list.contentView.layer.presentation()?.bounds.minY ?? list.contentView.layer.bounds.minY,
+            "tracks": tracks, "children": hosts])
+    }
+
+    private func sampleScene(_ list: UltraListView, time: Double, result: ScenarioResult, listLayer: CALayer) {
+        var loaded: [ObjectIdentifier: Int] = [:]
+        for index in list.loadedIndexRange {
+            guard let view = list.loadedItemView(at: index) else { continue }
+            let identity = ObjectIdentifier(view)
+            loaded[identity] = index; rowIdentities[identity] = list.items[index].identity
+        }
+        var entries: [[String: Any]] = []
+        func inspect(_ view: UIView, parent: String, order: Int) {
+            let identity = ObjectIdentifier(view), name = String(describing: identity)
+            var entry: [String: Any] = ["identity": name, "parent": parent, "order": order,
+                "class": String(describing: type(of: view)), "z": view.layer.zPosition,
+                "hidden": view.isHidden, "alpha": view.alpha, "clips": view.clipsToBounds,
+                "modelPosition": [view.layer.position.x, view.layer.position.y],
+                "modelBounds": [view.bounds.minX, view.bounds.minY, view.bounds.width, view.bounds.height],
+                "animations": view.layer.animationKeys() ?? []]
+            var tracks: [String: Any] = [:]
+            for key in view.layer.animationKeys() ?? [] {
+                guard let animation = view.layer.animation(forKey: key) as? CABasicAnimation else { continue }
+                tracks[key] = ["begin": animation.beginTime, "duration": animation.duration,
+                    "speed": animation.speed, "from": (animation.fromValue as? NSNumber)?.doubleValue ?? 0,
+                    "to": (animation.toValue as? NSNumber)?.doubleValue ?? 0,
+                    "generation": (animation.value(forKey: "ultraviewGeneration") as? NSNumber)?.uint64Value ?? 0]
+            }
+            if !tracks.isEmpty { entry["tracks"] = tracks }
+            if let label = view.accessibilityIdentifier { entry["accessibilityIdentifier"] = label }
+            if let layer = view.layer.presentation() {
+                let rect = layer.convert(layer.bounds, to: listLayer)
+                entry["rect"] = [rect.minX, rect.minY, rect.width, rect.height]
+                entry["opacity"] = layer.opacity
+            }
+            if view is ListRowView {
+                let rowIdentity = rowIdentities[identity] ?? view.accessibilityIdentifier.flatMap {
+                    $0.hasPrefix("row-") ? String($0.dropFirst(4)) : nil
+                }
+                entry["row"] = rowIdentity ?? "unknown"
+                entry["loadedIndex"] = loaded[identity] ?? -1
+                if let row = rowIdentity { entry["itemIndex"] = list.items.firstIndex { $0.identity == row } ?? -1 }
+            }
+            if let host = view as? NodeHostView { entry["hasContent"] = host.hasContent }
+            if let label = view as? UILabel { entry["text"] = label.text ?? "" }
+            entries.append(entry)
+            for (index, child) in view.subviews.enumerated() { inspect(child, parent: name, order: index) }
+        }
+        inspect(list, parent: "", order: 0)
+        let inverted = list.contentView.transform.d < 0, insets = list.viewportInsets
+        result.sceneFrames.append(["t": time, "clock": CACurrentMediaTime(), "displayTime": displayTime,
+            "loaded": [list.loadedIndexRange.lowerBound, list.loadedIndexRange.upperBound],
+            "band": inverted ? [insets.bottom, list.bounds.height - insets.top] : [insets.top, list.bounds.height - insets.bottom],
+            "views": entries])
     }
 
     private struct NewestSample {
@@ -666,6 +805,16 @@ final class ListStreamSendProbe: NSObject {
         if let data = try? JSONSerialization.data(withJSONObject: document, options: [.prettyPrinted, .sortedKeys]),
            let directory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
             try? data.write(to: directory.appendingPathComponent("list-stream-send-geometry.json"), options: .atomic)
+            if capturesContinuity {
+                let continuity: [String: Any] = ["complete": complete, "scenarios": results.map {
+                    ["engine": $0.engine, "scenario": $0.scenario, "frames": $0.continuityFrames,
+                     "sceneFrames": $0.sceneFrames,
+                     "unchangedTargetRestarts": $0.unchangedTargetRestarts] as [String: Any]
+                }]
+                if let data = try? JSONSerialization.data(withJSONObject: continuity, options: [.sortedKeys]) {
+                    try? data.write(to: directory.appendingPathComponent("list-stream-send-continuity.json"), options: .atomic)
+                }
+            }
         }
         if complete { print("LIST-STREAM-SEND \(report.accessibilityValue ?? "")") }
     }
