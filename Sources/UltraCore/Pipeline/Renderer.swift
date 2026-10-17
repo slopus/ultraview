@@ -147,10 +147,14 @@ final class Renderer: @unchecked Sendable {
     }
 
     /// Waits until no pass is pending or running.
+    ///
+    /// The flag is read on the layout queue, where no pass is running: read
+    /// anywhere else, a pass that just started has already cleared it.
     func waitUntilIdle() {
-        repeat {
-            Pipeline.layoutQueue.sync {}
-        } while passScheduled.load(ordering: .sequentiallyConsistent)
+        while Pipeline.layoutQueue.sync(execute: { passScheduled.load(ordering: .sequentiallyConsistent) }) {
+            // A pass is due: queued behind us, or still hopping through the
+            // main queue.
+        }
     }
 
     // MARK: The pass
@@ -181,6 +185,9 @@ final class Renderer: @unchecked Sendable {
             attach(root, parent: nil, pass: pass)
         }
         sync(root, forced: firstPass || environmentChanged, pass: pass)
+        if previous?.width != inputs.width || previous?.height != inputs.height, let state = root.shadow.snapshot {
+            root.shadow.layout.style = layoutStyle(for: root, state: state, inputs: inputs)
+        }
 
         // 2. Layout.
         root.shadow.layout.calculateLayout(
@@ -237,7 +244,7 @@ final class Renderer: @unchecked Sendable {
             shadow.snapshot = current
             shadow.renderer = self
             shadow.layout.config = pass.config
-            shadow.layout.style = node.effectiveLayoutStyle(current)
+            shadow.layout.style = layoutStyle(for: node, state: current, inputs: pass.inputs)
             node.syncContent(previous: previous, current: current, pass: pass)
             if forced || previous == nil || !Self.sameNodes(previous!.children, current.children) {
                 reconcileChildren(of: node, with: current.children, pass: pass)
@@ -249,6 +256,22 @@ final class Renderer: @unchecked Sendable {
                 sync(child, forced: forced, pass: pass)
             }
         }
+    }
+
+    /// The style Yoga gets for `node`. The root fills the host exactly
+    /// along each axis the host gives a size for, rather than sizing to its
+    /// content within it.
+    private func layoutStyle(for node: UltraNode, state: NodeState, inputs: Inputs) -> LayoutStyle {
+        var style = node.effectiveLayoutStyle(state)
+        if node === root {
+            if let width = inputs.width {
+                style.width = .points(width)
+            }
+            if let height = inputs.height {
+                style.height = .points(height)
+            }
+        }
+        return style
     }
 
     private static func sameNodes(_ lhs: [UltraNode], _ rhs: [UltraNode]) -> Bool {

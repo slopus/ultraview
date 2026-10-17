@@ -45,6 +45,24 @@ import UltraLayout
         return (box(children: [scroll]), scroll, rows)
     }
 
+    @Test func aHostSizedAfterItsFirstPassSizesTheScrollNode() throws {
+        // A host appears in a window before it has a size: the first pass
+        // has no height, the next one does.
+        let rows = (0..<100).map { _ in box { $0.height = 50 } }
+        let scroll = UltraScrollNode(style: { var style = Style(); style.flex = 1; return style }(), children: rows)
+        let harness = Harness(root: box({ $0.flex = 1 }, children: [scroll]), width: nil, height: nil, inWindow: false)
+        harness.pass()
+        harness.update { $0.inWindow = true }
+        harness.pass()
+        harness.update {
+            $0.width = 320
+            $0.height = 400
+        }
+        harness.pass()
+        #expect(harness.read { scroll.shadow.sentFrame } == CGRect(x: 0, y: 0, width: 320, height: 400))
+        #expect(harness.read { rows[40].shadow.isMounted } == false)
+    }
+
     @Test func contentIsLaidOutWithoutALimit() throws {
         let (root, scroll, rows) = feed()
         let harness = Harness(root: root, height: 100)

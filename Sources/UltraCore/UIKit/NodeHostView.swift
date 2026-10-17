@@ -23,7 +23,7 @@ public final class NodeHostView: UIView {
 
     private let mailbox = CommitMailbox()
     private let link = HostLink()
-    private let renderer: Renderer
+    let renderer: Renderer
     private var laidOutSize: CGSize?
     private var lastAppliedGeneration: UInt64 = 0
 
