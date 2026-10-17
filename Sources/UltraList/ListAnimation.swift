@@ -128,7 +128,7 @@ public struct ListAnimationModel: Sendable {
     }
     public private(set) var tracks: [Key: AnimationTrack] = [:]
     private var stored: [Key: Double] = [:]
-    private var generation: UInt64 = 0
+    public private(set) var generation: UInt64 = 0
     public init() {}
     public func value(_ owner: AnimationOwner, _ property: AnimatedProperty, at time: Double) -> Double {
         let key = Key(owner, property)
@@ -142,12 +142,27 @@ public struct ListAnimationModel: Sendable {
         let track = AnimationTrack(generation: generation, from: from, to: to, startTime: time, transition: transition)
         tracks[key] = track; return track
     }
-    /// A settled no-op keeps the old track's phase and generation intact.
+    /// A settled no-op keeps the old track's phase and generation intact, unless `restarts` asks for a track on this
+    /// timing anyway.
     @discardableResult
-    public mutating func transition(_ owner: AnimationOwner, _ property: AnimatedProperty, old: Double, new: Double, resume: Double? = nil, at time: Double, transition: ListTransition) -> AnimationTrack? {
-        guard abs(new - old) > 1e-6 else { return tracks[Key(owner, property)] }
+    public mutating func transition(_ owner: AnimationOwner, _ property: AnimatedProperty, old: Double, new: Double, resume: Double? = nil, at time: Double, transition: ListTransition, restarts: Bool = false) -> AnimationTrack? {
+        guard restarts || abs(new - old) > 1e-6 else { return tracks[Key(owner, property)] }
         let current = resume ?? value(owner, property, at: time)
         return replace(owner, property, from: property.additive ? old + current - new : (stored[Key(owner, property)] == nil ? old : current), to: property.additive ? 0 : new, at: time, transition: transition)
+    }
+    /// Once a pass has started a track (one newer than generation `pass`), restarts every older track still in flight
+    /// on the pass's timing `(time, transition)`, from its current value toward the same destination, so all motion
+    /// shares one progress. `resume` may supply the current value. Returns the restarted tracks.
+    @discardableResult
+    public mutating func retime(since pass: UInt64, at time: Double, transition: ListTransition, resume: (Key) -> Double? = { _ in nil }, including include: (Key) -> Bool = { _ in true }) -> [(Key, AnimationTrack)] {
+        guard !transition.isImmediate, tracks.values.contains(where: { $0.generation > pass }) else { return [] }
+        var restarted: [(Key, AnimationTrack)] = []
+        for (key, track) in tracks.sorted(by: { $0.value.generation < $1.value.generation })
+        where track.generation <= pass && time < track.deadline && include(key) {
+            let current = resume(key) ?? track.value(at: time)
+            if let next = replace(key.owner, key.property, from: current, to: track.to, at: time, transition: transition) { restarted.append((key, next)) }
+        }
+        return restarted
     }
     @discardableResult
     public mutating func finish(_ key: Key, generation: UInt64) -> Bool {

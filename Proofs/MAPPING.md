@@ -123,6 +123,62 @@ model. These tests do not establish a refinement theorem for renderer ownership,
 queued purging or the list-owned preparation cache. All 57 existing theorems were
 checked after this change, with no new axiom dependencies.
 
+## List at `61ff81d`
+
+`Proofs/UltraProofs/List/` models UltraList. The rows below pin the Swift as
+of `61ff81d`, plus the commit that adds this section, which adds
+`ListAnimationModel.retime(since:)`, the `restarts:` parameter of
+`transition`, and `AnimationController.retime(at:transition:)`, with no call
+sites yet. Coordinates are `Rat`; the Swift uses `Double`, so equalities hold
+up to rounding.
+
+| Model (`Proofs/UltraProofs/List/…`) | Swift |
+| --- | --- |
+| `Window.Row`, `Window` (`minY`, `maxY`, `translate`), `Viewport` | `WindowRow`, `ListWindow`, `ListViewport` (ListWindow.swift:13-47) |
+| `Window.prepend`, `append`, `pinRoom`, `place`, `underfill`, `build` | `ListWindow.build` and its `prepend`/`append` helpers (ListWindow.swift:62-104) |
+| `Window.pinSlack` | `ListWindow.pinSlack` (ListWindow.swift:48-52) |
+| `Window.dropFront`, `dropBack`, `rebalance` | `ListWindow.rebalance` (ListWindow.swift:107-119) |
+| `Diff.search`, `step`, `run`, `walk`, `kept` | `ItemDiff.init`: the binary search over `tails`, `predecessors`, the walk back from the last tail (ItemDiff.swift:12-27) |
+| `Diff.survivors`, `moves` | the `kept` split into `survivors` and `moves` (ItemDiff.swift:28-32) |
+| `Animation.Track`, `value`, `deadline` | `AnimationTrack` (ListAnimation.swift:108-119) |
+| `Animation.Model.replace`, `transition`, `finish` | `ListAnimationModel.replace` / `transition` / `finish` (ListAnimation.swift:138-171) |
+| `Animation.Model.retime`, `fixedPass` | `ListAnimationModel.retime(since:)` (ListAnimation.swift:157), `AnimationController.capturePositions` / `retime` (AnimationController.swift:42, 81) |
+| `Animation.swiftPass` | the `transition`/`replace` calls of one `applyChanges` pass, all at one `time` with one transition (UltraListView.swift:207-483) |
+| `Pass.screen`, `displaced_row_screen`, `kept_row_screen` | the settled-rows loop's `oldY`/`newY` (UltraListView.swift:465-466) and the viewport replace (431) |
+| `Pass.detached_jump`, `scroll_carry_jumps` | `shiftDetached(by: shift)`, `makeDepartures(coordinateShift: shift)`, the carried placement and the crossing samples (UltraListView.swift:395, 400, 406, 439) |
+| `Pass.compensated`, `inset_moves_content`, `inset_top_pinned` | `build`'s `resolveY` with `compensatesInsetChange` (UltraListView.swift:352) |
+| `Pass.containerOrigin` | `ScrollCore.containerOrigin` (ScrollCore.swift:52) |
+
+**Gaps at `61ff81d`, reproduced in `Tests/UltraViewUIKitTests/ListSyncTests.swift`**
+(known issues until the call sites land):
+
+1. `detached_jump`: in a displacing pass (a target, a size or inset change in
+   the full pass, an additional scroll distance) carries and departure
+   blocks move by `shift` while the viewport track starts from
+   `coordinateMap`, so they jump by `shift - coordinateMap`. Simulator: row 0
+   of a 320 × 400 list goes from 0 to 300 on `scrollTo(index: 3)`, as
+   `scroll_carry_jumps` computes. The fix moves them by `coordinateMap` in a
+   displacing pass (`detached_fixed`, `scroll_carry_fixed`) and gives the
+   rigid carry a track for the pass (`restarts:`), since a no-op transition
+   would end it at once.
+2. `kept_track_desyncs`: `transition`'s settled no-op keeps a track on the
+   previous pass's timing while its neighbours restart. Simulator: two rows
+   overlap by 50 points. The fix is `retime` at the end of every animated
+   pass that started a track (`fixed_one_timeline`, `fixed_pass_sync`,
+   `fixed_scenario_touches`); `swiftPass_started` shows the Swift's
+   generation guard is the model's condition.
+
+**Not covered.** `updateViewportInsets` (UltraListView.swift:486-514), the
+inset-only path, shifts the engine and the viewport track only; the
+inset theorems model the full pass's `resolveY`, not this path. Its
+viewport-only motion is common to everything in the content view, which
+the tests `contentFollowsAnInsetChangeInOnePass` and
+`contentMovesWithAnAnimatedInsetChange` check on screen. `CrossingPlanner`,
+attachments, the carousel, ghosts' geometry, measurement scheduling and the
+scroll physics are not modeled. `lockstep_iff` states when content and an
+animated input stay together; that the host passes the keyboard's curve and
+duration is a hypothesis.
+
 ## Theorems
 
 **Correctness**
@@ -155,6 +211,30 @@ checked after this change, with no new axiom dependencies.
   and has something to draw. `Ranges.visible_implies_displayed`: drawn
   before visible while the shown commit's offset is within the display
   margin of the real one.
+
+**List**
+
+- `ListWindow.build_good`, `rebalance_good`: every window is linked (each
+  row's band starts where the previous one ends) and measured.
+  `linked_y`: a row's `y` is the anchor's plus the measured extents between.
+- `ListWindow.resize_frames`: with the anchor fixed, resizing row `i` by `Δ`
+  keeps the rows between the anchor and `i` and moves the far side by `Δ`.
+- `ListWindow.rebalance_keeps`, `rebalance_screen`: scrolling never moves a
+  loaded row. `build_top_pinned`: the pinned top edge is at
+  `insets.top + slack`.
+- `ListDiff.kept_increasing`, `kept_longest`, `partition`: survivors keep
+  their order, no order-preserving choice keeps more rows (fewest moves), and
+  each surviving row is a survivor or a move.
+- `ListAnimation.lerp_sync`, `affine_sync`, `order_sync`, `touching_sync`:
+  tracks with one timing keep every linear relation (and, with a curve in
+  `[0, 1]`, order) between presented values at every frame.
+  `transition_continuous`, `retime_continuous`: retargeting and retiming
+  never jump. `finish_rejects_stale`: generations guard completions.
+- `ListPass.displaced_row_screen`, `kept_row_screen`: loaded rows go from
+  where they were to where they settle. `inset_moves_content`, `rigid`,
+  `immediate_same_frame`: an inset change moves the content by the inset
+  plus slack change in the same pass. `lockstep_iff`: content keeps its
+  distance to an animated input iff their progresses agree.
 
 **Optimality**
 

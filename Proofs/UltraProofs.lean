@@ -10,3 +10,7 @@ import UltraProofs.Text
 import UltraProofs.Power
 import UltraProofs.Corrected
 import UltraProofs.EndToEnd
+import UltraProofs.List.Window
+import UltraProofs.List.Diff
+import UltraProofs.List.Animation
+import UltraProofs.List.Pass

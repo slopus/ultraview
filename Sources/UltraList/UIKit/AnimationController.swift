@@ -21,6 +21,7 @@ final class AnimationController {
     private var origins: [ListAnimationModel.Key: (generation: UInt64, time: Double)] = [:]
     private var completions: [ListAnimationModel.Key: (UInt64, () -> Void)] = [:]
     private var mirrors: [CALayer] = []
+    private var passGeneration: UInt64 = 0
     weak var referenceLayer: CALayer?
     var now: Double { referenceLayer?.convertTime(CACurrentMediaTime(), from: nil) ?? CACurrentMediaTime() }
     func bind(_ owner: AnimationOwner, layer: CALayer) {
@@ -39,7 +40,7 @@ final class AnimationController {
     func mirrorViewport(on layer: CALayer) { mirrors.append(layer) }
     func owner(boundTo layer: CALayer) -> AnimationOwner? { layers.first { $0.value === layer }?.key }
     func capturePositions() {
-        snapshots.removeAll(keepingCapacity: true)
+        snapshots.removeAll(keepingCapacity: true); passGeneration = model.generation
         for (owner, layer) in layers {
             guard case .row = owner, let presentation = layer.presentation() else { continue }
             snapshots[owner] = presentation.position.y - layer.position.y
@@ -53,21 +54,11 @@ final class AnimationController {
         }
     }
     @discardableResult
-    func transition(_ owner: AnimationOwner, _ property: AnimatedProperty, old: Double, new: Double, at time: Double, transition: ListTransition, completion: (() -> Void)? = nil) -> UInt64? {
+    func transition(_ owner: AnimationOwner, _ property: AnimatedProperty, old: Double, new: Double, at time: Double, transition: ListTransition, restarts: Bool = false, completion: (() -> Void)? = nil) -> UInt64? {
         let key = ListAnimationModel.Key(owner, property)
         let prior = model.tracks[key]?.generation
         let resolvedCompletion = completion ?? completions[key]?.1
-        var resume: Double?
-        if property == .positionY { resume = snapshots[owner] }
-        else if !property.additive, let layer = layers[owner]?.presentation() {
-            switch property {
-            case .height: resume = layer.bounds.height
-            case .width: resume = layer.bounds.width
-            case .opacity: resume = Double(layer.opacity)
-            default: break
-            }
-        }
-        let track = model.transition(owner, property, old: old, new: new, resume: resume, at: time, transition: transition.scaled(by: durationScale))
+        let track = model.transition(owner, property, old: old, new: new, resume: resumeValue(owner, property), at: time, transition: transition.scaled(by: durationScale), restarts: restarts)
         if let track {
             if track.generation != prior { install(owner, property, track: track) }
             if let resolvedCompletion { completions[key] = (track.generation, resolvedCompletion) }
@@ -84,6 +75,25 @@ final class AnimationController {
             install(owner, property, track: track)
         } else { clear(owner, property); completions.removeValue(forKey: key); resolvedCompletion?() }
         return track?.generation
+    }
+    /// Once the pass has started a track, puts every bound track it kept on the pass's timeline, so they move with the
+    /// ones it started.
+    func retime(at time: Double, transition: ListTransition) {
+        let restarted = model.retime(since: passGeneration, at: time, transition: transition.scaled(by: durationScale), resume: { [self] in resumeValue($0.owner, $0.property) }, including: { [self] in layers[$0.owner] != nil })
+        for (key, track) in restarted {
+            install(key.owner, key.property, track: track)
+            if let entry = completions[key] { completions[key] = (track.generation, entry.1) }
+        }
+    }
+    private func resumeValue(_ owner: AnimationOwner, _ property: AnimatedProperty) -> Double? {
+        if property == .positionY { return snapshots[owner] }
+        guard !property.additive, let layer = layers[owner]?.presentation() else { return nil }
+        switch property {
+        case .height: return layer.bounds.height
+        case .width: return layer.bounds.width
+        case .opacity: return Double(layer.opacity)
+        default: return nil
+        }
     }
     func unbind(_ owner: AnimationOwner, removeModel: Bool = false) {
         for property in AnimatedProperty.allCases {

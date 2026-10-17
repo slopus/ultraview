@@ -131,6 +131,30 @@ import Testing
         #expect(model.completed(at: 10.49).isEmpty)
         #expect(model.completed(at: 10.5).first?.1 == track.generation)
     }
+    /// Rows `a` (top 0) and `b` slide down 100 together; halfway, `a` grows by 50 and `b` moves down with it. `a`'s
+    /// slide keeps its first track, so until it joins the second pass's timeline the rows overlap.
+    @Test func keptTracksJoinThePassTimeline() {
+        var model = ListAnimationModel()
+        let second = ListTransition(duration: 1, curve: .linear)
+        model.replace(.row("a"), .height, from: 100, to: 100, at: 0, transition: .immediate)
+        model.transition(.row("a"), .positionY, old: -100, new: 0, at: 0, transition: second)
+        model.transition(.row("b"), .positionY, old: 0, new: 100, at: 0, transition: second)
+        let pass = model.generation
+        model.transition(.row("a"), .positionY, old: 0, new: 0, at: 0.5, transition: second)
+        model.transition(.row("a"), .height, old: 100, new: 150, at: 0.5, transition: second)
+        model.transition(.row("b"), .positionY, old: 100, new: 150, at: 0.5, transition: second)
+        func gap(_ model: ListAnimationModel, at time: Double) -> Double {
+            (150 + model.value(.row("b"), .positionY, at: time)) - (model.value(.row("a"), .positionY, at: time) + model.value(.row("a"), .height, at: time))
+        }
+        #expect(gap(model, at: 1) == -25)
+        var unchanged = model
+        #expect(unchanged.retime(since: unchanged.generation, at: 0.5, transition: second).isEmpty)
+        #expect(unchanged.retime(since: pass, at: 0.5, transition: .immediate).isEmpty)
+        let restarted = model.retime(since: pass, at: 0.5, transition: second)
+        #expect(restarted.map(\.0) == [.init(.row("a"), .positionY)])
+        for time in [0.5, 0.75, 1, 1.25, 1.5, 2] { #expect(abs(gap(model, at: time)) < 1e-9) }
+        #expect(model.value(.row("a"), .positionY, at: 0.5) == -50)
+    }
     @Test func scrollCurveMatchesPublicShape() {
         var error = 0.0
         for index in 0...1000 {

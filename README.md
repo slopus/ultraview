@@ -213,7 +213,8 @@ xcodebuild test -project UltraView.xcodeproj -scheme UltraViewDemo \
 ## Proofs
 
 `Proofs/` contains machine-checked Lean proofs about models of scheduling,
-commit merging, rendering and selected work bounds, under explicit hypotheses.
+commit merging, rendering and selected work bounds, and of the list's frames,
+item diffs and animation timing, under explicit hypotheses.
 These proofs do not establish correctness or global optimality of the whole
 Swift implementation. `Proofs/MAPPING.md` records the historical model mapping
 and the current coverage gaps.
