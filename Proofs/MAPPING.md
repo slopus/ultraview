@@ -515,6 +515,55 @@ Not covered: the renders a pass makes itself (`handleScroll` and
 `handleScroll` the callback also starts (guarded by the same `passing`
 check), and the content of a render.
 
+## Flight band at `8d425b6`
+
+`Proofs/UltraProofs/List/Flight.lean` models the band `handleScroll`
+rebalances around while the engine is in flight.
+
+| Model (`Proofs/UltraProofs/List/Flight.lean`) | Swift |
+| --- | --- |
+| `Sample`, `Sorted` | `ScrollTrajectory.Sample` and `init`'s precondition (ScrollTrajectory.swift:4-14) |
+| `sampleAt`, `lerp` | `sample(at:).offset` (:33-44), the binary search modeled by the segment it finds |
+| `inside`, `extent` | `extent(from:through:)` (:49-64): the ends' samples and the vertices strictly between, folded with `min`/`max` |
+| `Flight`, `.offset`, `.covered` | `ScrollFlight`, `offset(at:)`, `coveredOffsets(at:horizon:)` (ScrollCore.swift:60-70) |
+| `flight_rows_kept`'s rebalance | `handleScroll`'s `flightOffsets` plus the viewport track's `valueBounds`, into `ListWindow.rebalance` (UltraListView.swift:613-619) |
+
+- `sample_in_extent`: at every time in `[start, end]` the trajectory lies in
+  `extent(from: start, through: end)`. Its bounds are values the trajectory
+  takes, so no smaller range contains it.
+- `flight_in_band`: the flight's offset at every time from `time` to
+  `time + horizon` lies in `coveredOffsets(at: time, horizon:)`.
+- `flight_rows_kept`: with `ListInsets.sum_covers`, every loaded row the
+  flight shows until the horizon, under any viewport delta within the
+  track's bounds, survives the rebalance. The track bounds remain the
+  hypothesis of `track_in_hull`.
+
+The band covers the next 0.3 s; that the next `handleScroll` comes sooner
+(every display-link tick in flight) is outside the model. So are the
+stepped engine's `coveragePrediction` (a trajectory baked from the axis that
+the ticks then step, ScrollEngine.swift:99-102), whose agreement with the
+ticks is the physics' own, and the `maximumAdditionalRows: 64` budget, which
+`rebalanceIn_keeps` does not need (it bounds new rows, never removes loaded
+ones).
+
+## Independent size and position motion (for the list's next change)
+
+`Proofs/UltraProofs/List/Layers.lean` states what keeping a size motion's
+timing through a later move pass requires; the Swift does not do this yet
+(at `8d425b6` retiming puts both on the pass's timing, `fixed_pass_sync`).
+
+- `superpose`: terms of a linear relation split into groups, each on one
+  timing and each keeping its share at start and end, keep the relation at
+  every frame. A presented value is its base plus one additive layer per
+  timing.
+- `layered_touches`: a row growing 100 → 150 over 1 s, and both it and the
+  row below moving up 40 in a pass at 0.5 s. With the lower row following
+  the growth on a layer with the growth's timing, and the move on a second
+  layer, the rows touch at every frame.
+- `single_layer_opens`: folding the lower row's remaining growth delta into
+  the move's one track, while the height keeps its timing, overlaps the rows
+  by 12.5 points at 1 s.
+
 ## Theorems
 
 **Correctness**
@@ -590,6 +639,10 @@ check), and the content of a render.
   never move content the user dragged off the edge.
 - `ListReentry.guarded_pass_renders`: no engine callback renders a
   half-applied list, and a deferred render runs once the pass ends.
+- `ListFlight.flight_in_band`, `flight_rows_kept`: the flight stays in its
+  covered band until the horizon, so rows it will show stay loaded.
+- `ListLayers.superpose`: motions on separate timings keep every linear
+  relation when each is its own additive layer.
 
 **Optimality**
 

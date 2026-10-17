@@ -156,3 +156,11 @@ open UltraProofs
 #print axioms ListReentry.guarded_pass_renders
 #print axioms ListReentry.guarded_consistent
 #print axioms ListReentry.unguarded_reads_outside
+#print axioms ListFlight.sample_in_extent
+#print axioms ListFlight.flight_in_band
+#print axioms ListFlight.flight_rows_kept
+#print axioms ListFlight.lerp_between
+#print axioms ListLayers.superpose
+#print axioms ListLayers.layered_touches
+#print axioms ListLayers.touches_before
+#print axioms ListLayers.single_layer_opens
