@@ -17,7 +17,7 @@ public struct ScrollCore: Sendable {
     }
     public mutating func setEdges(_ edges: ScrollEdges) { axis.edges = edges }
     public mutating func shift(by delta: Double) { axis.shift(by: delta) }
-    public mutating func touchDown(at time: Double) { decision.touchDown(at: time) }
+    public mutating func touchDown(at time: Double) { axis.resetDragRange(); decision.touchDown(at: time) }
     public mutating func beginDrag() {
         rebuild(); axis.beginDrag(); decision.beginGesture()
     }

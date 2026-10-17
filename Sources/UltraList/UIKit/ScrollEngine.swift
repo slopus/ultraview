@@ -27,6 +27,8 @@ protocol ScrollEngine: AnyObject {
     func halt()
     func sync()
     func reanchorDrag()
+    func settleIfNeeded()
+    func activate()
     func teardown()
     func beginMomentum(velocity: Double)
     func containerOrigin(height: Double, top: Bool, bottom: Bool) -> Double
@@ -45,6 +47,7 @@ final class InputPan: UIPanGestureRecognizer {
     private(set) var indirect = true
     var forced = false
     private var activeTouches = Set<ObjectIdentifier>()
+    var hasActiveTouches: Bool { !activeTouches.isEmpty }
     override func reset() { super.reset(); indirect = true; forced = false; activeTouches.removeAll() }
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
         super.touchesBegan(touches, with: event)
@@ -77,7 +80,7 @@ final class PhysicsEngine: NSObject, ScrollEngine, UIGestureRecognizerDelegate {
     var activeFlight: ScrollFlight? { flightState?.flight }
     var dragging: Bool { core.isDragging }
     var decelerating: Bool { core.isDecelerating }
-    var tracking: Bool { pan.state == .began || pan.state == .changed }
+    var tracking: Bool { pan.hasActiveTouches || pan.state == .began || pan.state == .changed }
     var onScroll: ((Double) -> Void)?
     var onFlightChanged: ((ScrollFlight?) -> Void)?
     var willBeginDragging: (() -> Void)?
@@ -92,6 +95,8 @@ final class PhysicsEngine: NSObject, ScrollEngine, UIGestureRecognizerDelegate {
     private var baseline = CGPoint.zero
     private var sawDrag = false
     private var settleScheduled = false
+    private var settleGeneration: UInt64 = 0
+    private var settlingEnabled = true
     private var edges = ScrollEdges()
     private let flightKey = "ultraview.scroll.flight"
     private var now: Double { host.layer.convertTime(CACurrentMediaTime(), from: nil) }
@@ -139,8 +144,9 @@ final class PhysicsEngine: NSObject, ScrollEngine, UIGestureRecognizerDelegate {
         catchMotion(braking: false); core.setOffset(value)
         if dragging { baseline = pan.translation(in: host); core.beginDrag() }
         writeBase(value)
+        settleIfNeeded()
     }
-    func halt() { catchMotion(braking: false); core.halt(); writeBase(offset) }
+    func halt() { catchMotion(braking: false); core.halt(); writeBase(offset); settleIfNeeded() }
     func sync() { flightState?.beginTick(at: now, core: &core) }
     func shift(by delta: Double) {
         CATransaction.begin(); CATransaction.setDisableActions(true)
@@ -152,9 +158,10 @@ final class PhysicsEngine: NSObject, ScrollEngine, UIGestureRecognizerDelegate {
             writeBase(host.bounds.origin.y + delta)
             onFlightChanged?(activeFlight)
         } else { writeBase(offset) }
+        settleIfNeeded()
     }
     func setEdges(_ edges: ScrollEdges) {
-        guard self.edges != edges else { return }
+        guard self.edges != edges else { settleIfNeeded(); return }
         CATransaction.begin(); CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }
         let discoversEdge = self.edges.minimum == nil && edges.minimum != nil || self.edges.maximum == nil && edges.maximum != nil
@@ -170,17 +177,28 @@ final class PhysicsEngine: NSObject, ScrollEngine, UIGestureRecognizerDelegate {
         if coveragePrediction != nil {
             coveragePrediction = .init(trajectory: .init(baking: core.axis), beginTime: now, coordinateShift: 0)
         }
-        // An edge arriving under resting content starts its own return.
-        if flightState == nil, !core.isDragging, !core.isDecelerating, !edges.contains(offset), !settleScheduled {
-            settleScheduled = true
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }; settleScheduled = false
-                if flightState == nil, !core.isDragging, !core.isDecelerating, core.resumeBounce() { startMotion() }
-            }
-        }
+        settleIfNeeded()
     }
     func reanchorDrag() { core.reanchorDrag() }
-    func teardown() { halt(); link?.invalidate(); link = nil }
+    func settleIfNeeded() {
+        guard settlingEnabled, !settleScheduled, flightState == nil, !core.isDragging, !core.isDecelerating,
+              !tracking, !edges.contains(offset) else { return }
+        settleScheduled = true; settleGeneration &+= 1
+        let generation = settleGeneration
+        DispatchQueue.main.async { [weak self] in
+            guard let self, settleGeneration == generation else { return }
+            settleScheduled = false
+            guard host.window != nil, flightState == nil, !core.isDragging, !core.isDecelerating, !tracking else { return }
+            core.viewport = host.bounds.height; core.scale = max(1, host.traitCollection.displayScale)
+            if core.resumeBounce() { startMotion() }
+        }
+    }
+    func activate() { settlingEnabled = true; settleIfNeeded() }
+    func teardown() {
+        settlingEnabled = false
+        halt(); link?.invalidate(); link = nil
+        settleGeneration &+= 1; settleScheduled = false
+    }
     func beginMomentum(velocity: Double) {
         halt(); core.viewport = host.bounds.height; core.scale = max(1, host.traitCollection.displayScale)
         core.reseed(offset: offset, velocity: velocity / 1000); startMotion()
@@ -258,7 +276,7 @@ final class PhysicsEngine: NSObject, ScrollEngine, UIGestureRecognizerDelegate {
                 flightState = nil; core.setOffset(rest); writeBase(rest)
                 host.layer.removeAnimation(forKey: flightKey)
                 onFlightChanged?(nil); onScroll?(rest)
-                self.link?.invalidate(); self.link = nil; didEndScrolling?(); return
+                self.link?.invalidate(); self.link = nil; didEndScrolling?(); settleIfNeeded(); return
             }
             state.beginTick(at: time, core: &core); flightState = state
             onScroll?(offset)
@@ -269,8 +287,8 @@ final class PhysicsEngine: NSObject, ScrollEngine, UIGestureRecognizerDelegate {
         } else if core.isDecelerating {
             let settled = core.step(seconds: max(1 / 120, link.targetTimestamp - link.timestamp))
             writeBase(offset); onScroll?(offset)
-            if settled { coveragePrediction = nil; core.halt(); self.link?.invalidate(); self.link = nil; didEndScrolling?() }
-        } else { self.link?.invalidate(); self.link = nil }
+            if settled { coveragePrediction = nil; core.halt(); self.link?.invalidate(); self.link = nil; didEndScrolling?(); settleIfNeeded() }
+        } else { self.link?.invalidate(); self.link = nil; settleIfNeeded() }
     }
     @objc private func panned() {
         let phase: GestureRecording.Event.Phase?
@@ -349,7 +367,22 @@ final class PhysicsEngine: NSObject, ScrollEngine, UIGestureRecognizerDelegate {
 @MainActor
 private final class TouchObserver: UIGestureRecognizer {
     var down: (() -> Void)?
-    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) { down?(); state = .failed }
+    var up: (() -> Void)?
+    private var activeTouches = Set<ObjectIdentifier>()
+    var hasActiveTouches: Bool { !activeTouches.isEmpty }
+    override func reset() { super.reset(); activeTouches.removeAll() }
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        let first = activeTouches.isEmpty
+        for touch in touches { activeTouches.insert(ObjectIdentifier(touch)) }
+        if first { down?() }
+    }
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
+        for touch in touches { activeTouches.remove(ObjectIdentifier(touch)) }
+        if activeTouches.isEmpty { up?(); state = .failed }
+    }
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
+        activeTouches.removeAll(); up?(); state = .failed
+    }
 }
 
 @MainActor
@@ -358,9 +391,9 @@ final class PlatformEngine: NSObject, ScrollEngine, UIScrollViewDelegate {
     var host: UIView { scroll }
     var offset: Double { scroll.contentOffset.y }
     var activeFlight: ScrollFlight? { nil }
-    var tracking: Bool { scroll.panGestureRecognizer.state == .began || scroll.panGestureRecognizer.state == .changed }
-    var dragging: Bool { scroll.isDragging }
-    var decelerating: Bool { nativeDecelerating || scroll.isDecelerating || replay?.decelerating == true || coveragePrediction != nil }
+    var tracking: Bool { touchObserver.hasActiveTouches || scroll.isTracking || scroll.panGestureRecognizer.state == .began || scroll.panGestureRecognizer.state == .changed }
+    var dragging: Bool { scroll.isDragging || replay?.dragging == true }
+    var decelerating: Bool { nativeSettling || nativeDecelerating || scroll.isDecelerating || replay?.decelerating == true || coveragePrediction != nil }
     var onScroll: ((Double) -> Void)?
     var onFlightChanged: ((ScrollFlight?) -> Void)?
     var willBeginDragging: (() -> Void)?
@@ -374,6 +407,10 @@ final class PlatformEngine: NSObject, ScrollEngine, UIScrollViewDelegate {
     private var replay: PhysicsEngine?
     private var coveragePrediction: ScrollFlight?
     private var nativeDecelerating = false
+    private var nativeSettling = false
+    private var settleScheduled = false
+    private var settleGeneration: UInt64 = 0
+    private var settlingEnabled = true
     func coveredOffsets(horizon: Double) -> ClosedRange<Double>? {
         if let coverage = replay?.coveredOffsets(horizon: horizon) { return coverage }
         return coveragePrediction?.coveredOffsets(at: scroll.layer.convertTime(CACurrentMediaTime(), from: nil), horizon: horizon)
@@ -387,17 +424,24 @@ final class PlatformEngine: NSObject, ScrollEngine, UIScrollViewDelegate {
         scroll.showsVerticalScrollIndicator = false; scroll.showsHorizontalScrollIndicator = false
         scroll.clipsToBounds = false; scroll.scrollsToTop = false
         touchObserver.cancelsTouchesInView = false
+        touchObserver.delaysTouchesEnded = false
         touchObserver.down = { [weak self] in
             guard let self else { return }
+            if nativeSettling {
+                nativeSettling = false
+                writing = true; scroll.setContentOffset(scroll.contentOffset, animated: false); writing = false
+            }
             stopReplay()
             didTouchDown?(); onInput?(.init(time: CACurrentMediaTime(), phase: .touchDown))
         }
+        touchObserver.up = { [weak self] in self?.settleIfNeeded() }
         scroll.addGestureRecognizer(touchObserver)
         scroll.panGestureRecognizer.addTarget(self, action: #selector(panned))
     }
     func setOffset(_ value: Double) {
         stopReplay(); nativeDecelerating = false; coveragePrediction = nil
         writing = true; scroll.setContentOffset(.init(x: 0, y: value), animated: false); writing = false
+        nativeSettling = false; settleIfNeeded()
     }
     func shift(by delta: Double) {
         guard abs(delta) > 1e-9 else { return }
@@ -408,9 +452,10 @@ final class PlatformEngine: NSObject, ScrollEngine, UIScrollViewDelegate {
         writing = false
         coveragePrediction?.coordinateShift += delta
         replay?.shift(by: delta)
+        settleIfNeeded()
     }
     func setEdges(_ edges: ScrollEdges) {
-        guard self.edges != edges else { return }
+        guard self.edges != edges else { settleIfNeeded(); return }
         self.edges = edges
         replay?.setEdges(edges)
         writing = true
@@ -421,11 +466,27 @@ final class PlatformEngine: NSObject, ScrollEngine, UIScrollViewDelegate {
         if scroll.contentInset != inset { scroll.contentInset = inset }
         if scroll.contentSize != size { scroll.contentSize = size }
         writing = false
+        settleIfNeeded()
     }
     func halt() { setOffset(offset) }
     func sync() {}
-    func reanchorDrag() {}
-    func teardown() { halt() }
+    func reanchorDrag() { replay?.reanchorDrag() }
+    func activate() { settlingEnabled = true; settleIfNeeded() }
+    func teardown() { settlingEnabled = false; halt(); settleGeneration &+= 1; settleScheduled = false }
+    func settleIfNeeded() {
+        guard settlingEnabled, !settleScheduled, let edges, !decelerating, !dragging, !tracking,
+              !edges.contains(offset) else { return }
+        settleScheduled = true; settleGeneration &+= 1
+        let generation = settleGeneration
+        DispatchQueue.main.async { [weak self] in
+            guard let self, settleGeneration == generation else { return }
+            settleScheduled = false
+            guard scroll.window != nil, let edges = self.edges, !decelerating, !dragging, !tracking,
+                  !edges.contains(offset) else { return }
+            nativeSettling = true
+            scroll.setContentOffset(.init(x: 0, y: edges.clamped(offset)), animated: true)
+        }
+    }
     func beginMomentum(velocity: Double) {
         halt()
         replayDriver().beginMomentum(velocity: velocity)
@@ -477,8 +538,17 @@ final class PlatformEngine: NSObject, ScrollEngine, UIScrollViewDelegate {
         return driver
     }
     func containerOrigin(height: Double, top: Bool, bottom: Bool) -> Double { top ? 0 : bottom ? 10_000_000 - height : 5_000_000 - height / 2 }
-    func scrollViewDidScroll(_ scrollView: UIScrollView) { if !writing { onScroll?(offset) } }
-    func scrollViewWillBeginDragging(_ scrollView: UIScrollView) { stopReplay(); nativeDecelerating = false; coveragePrediction = nil; willBeginDragging?() }
+    func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        guard !writing else { return }
+        if let replay, replay.dragging || replay.decelerating {
+            // The replay owns this offset until its gesture and motion finish.
+            // Native layout can otherwise clamp it while an edge moves.
+            writing = true; scroll.bounds.origin.y = replay.offset; writing = false
+            return
+        }
+        onScroll?(offset)
+    }
+    func scrollViewWillBeginDragging(_ scrollView: UIScrollView) { stopReplay(); nativeSettling = false; nativeDecelerating = false; coveragePrediction = nil; willBeginDragging?() }
     func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate: Bool) {
         nativeDecelerating = willDecelerate
         if !willDecelerate { coveragePrediction = nil }
@@ -486,7 +556,7 @@ final class PlatformEngine: NSObject, ScrollEngine, UIScrollViewDelegate {
         if !willDecelerate { didEndScrolling?() }
     }
     func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) { nativeDecelerating = false; coveragePrediction = nil; didEndScrolling?() }
-    func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) { coveragePrediction = nil; didEndScrolling?() }
+    func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) { nativeSettling = false; coveragePrediction = nil; didEndScrolling?() }
     func scrollViewWillEndDragging(_ scrollView: UIScrollView, withVelocity velocity: CGPoint, targetContentOffset: UnsafeMutablePointer<CGPoint>) {
         if shouldStopOnRelease?(velocity.y * 1000) == true {
             coveragePrediction = nil; targetContentOffset.pointee = scrollView.contentOffset

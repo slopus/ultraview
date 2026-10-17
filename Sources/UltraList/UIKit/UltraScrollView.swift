@@ -79,6 +79,7 @@ open class UltraScrollView: UIView {
     open override func didMoveToWindow() {
         super.didMoveToWindow()
         if window == nil { engine.teardown() }
+        else { engine.activate() }
     }
     open func handleScroll(_ offset: Double) { onScroll?(offset) }
     open func handleDragBegin() { willBeginDragging?() }

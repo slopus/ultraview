@@ -57,18 +57,24 @@ public struct ScrollAxis: Sendable {
     public private(set) var phase: Phase = .idle
     private var anchor: Double
     private var proposed: Double
+    private var expandedDragRange: Double?
+    private var dragRange: Double { max(range, expandedDragRange ?? range) }
     public init(offset: Double = 0, edges: ScrollEdges = .init(), range: Double = 800, rate: Double = 0.998, scale: Double = 1, coefficient: Double = 0.55) {
         precondition(rate > 0 && rate < 1)
         self.offset = offset; self.edges = edges; self.range = range
         self.rate = rate; self.scale = scale; self.coefficient = coefficient
         anchor = offset; proposed = offset
     }
-    public mutating func beginDrag() { anchor = offset; proposed = offset; velocity = 0; phase = .dragging }
+    public mutating func beginDrag() {
+        resetDragRange(); anchor = offset; proposed = offset; velocity = 0; phase = .dragging
+        reanchorDrag()
+    }
     public mutating func drag(translation: Double) {
         proposed = anchor - translation
-        offset = ScrollMath.rubberBand(proposed, edges: edges, range: range, coefficient: coefficient)
+        offset = ScrollMath.rubberBand(proposed, edges: edges, range: dragRange, coefficient: coefficient)
     }
     public mutating func release(velocity: Double, multiplier: Double = 1) {
+        resetDragRange()
         self.velocity = velocity.isFinite ? velocity : 0
         self.multiplier = multiplier; phase = .decelerating
     }
@@ -78,9 +84,16 @@ public struct ScrollAxis: Sendable {
     public mutating func shift(by delta: Double) { offset += delta; anchor += delta; proposed += delta }
     public mutating func reanchorDrag() {
         guard phase == .dragging else { return }
-        let replacement = ScrollMath.inverseRubberBand(offset, edges: edges, range: range, coefficient: coefficient)
+        let distance = abs(offset - edges.clamped(offset))
+        if distance > dragRange * (1 - 1e-6) {
+            // A changed edge can put the held content beyond the old band.
+            // This gesture needs enough range to represent that same offset.
+            expandedDragRange = max(dragRange, distance * 2)
+        }
+        let replacement = ScrollMath.inverseRubberBand(offset, edges: edges, range: dragRange, coefficient: coefficient)
         anchor += replacement - proposed; proposed = replacement
     }
+    mutating func resetDragRange() { expandedDragRange = nil }
     public struct Step: Sendable {
         public var written: Double
         public var settled: Bool

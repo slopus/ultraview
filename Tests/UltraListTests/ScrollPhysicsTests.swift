@@ -31,6 +31,29 @@ import Testing
         axis.drag(translation: 50)
         #expect(abs(axis.offset - held - 100) < 1e-8)
     }
+    @Test(arguments: [-1.0, 1.0]) func movingAnEdgePastTheRubberCapKeepsTheHeldOffset(direction: Double) {
+        var axis = ScrollAxis(offset: direction * 500, edges: .init(minimum: -1000, maximum: 1000), range: 400)
+        axis.beginDrag(); axis.drag(translation: 0)
+        let held = axis.offset
+        axis.edges = .init(minimum: 0, maximum: 0)
+        for _ in 0..<100 {
+            axis.reanchorDrag(); axis.drag(translation: 0)
+            #expect(abs(axis.offset - held) < 1e-8)
+        }
+        axis.drag(translation: direction * 10)
+        #expect(abs(axis.offset) < abs(held))
+        #expect(abs(axis.offset - held) > 0.1 && abs(axis.offset - held) < 10)
+        axis.release(velocity: 0)
+        for _ in 0..<1000 { axis.step(milliseconds: 1000 / 120) }
+        #expect(axis.offset == 0 && axis.phase == .idle)
+        axis.beginDrag(); axis.drag(translation: -100)
+        #expect(axis.offset == ScrollMath.rubberBand(100, edges: axis.edges, range: 400))
+    }
+    @Test(arguments: [-500.0, -25, 1025, 1500]) func catchingAnOverscrollStartsAtItsDisplayedOffset(offset: Double) {
+        var axis = ScrollAxis(offset: offset, edges: .init(minimum: 0, maximum: 1000), range: 400)
+        axis.beginDrag(); axis.drag(translation: 0)
+        #expect(abs(axis.offset - offset) < 1e-8)
+    }
     @Test func freeStepComposes() {
         var axis = ScrollAxis(); axis.release(velocity: 2)
         var split = axis
