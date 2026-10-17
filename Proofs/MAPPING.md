@@ -657,6 +657,42 @@ and display readiness themselves), the empty-items case of the zero guard
 (both cleared, nothing can apply), staged view reuse, mutations with new
 items (the preparation queue), and the `passing` deferral.
 
+## Placing transformed row views at `746e713`
+
+`Proofs/UltraProofs/List/Placement.lean` relates the list's content
+coordinates (a row's frame top, which the `Pass`, `Window` and `Insets`
+models compute) to the layer position UIKit draws from, for row views whose
+layer anchor point is the top-left corner and whose transform may flip them
+(an inverted list's rows, `scale(1, -1)`).
+
+| Model (`Proofs/UltraProofs/List/Placement.lean`) | Swift |
+| --- | --- |
+| `offsetY`, `frameTop` | `ListRowView.placementOffset(size:)` (ListRow.swift:81-84); the frame getter, the transformed bounds' box |
+| `place` | `ListRowView.place(in:)` (ListRow.swift:76-80) |
+| `Setter` (a structure field: UIKit leaves the setter undefined under a transform) | `UIView.frame`'s setter |
+| `write` | `carry.view.frame.origin.y = next` after reading `frame.minY` (UltraListView.swift:524), and `child.frame.origin.y += delta` in `shiftDetached` (:917) |
+
+- `place_exact`, `translate_exact`, `retarget_exact`: `place(in:)` and
+  moving `layer.position` by `next - frame.minY` land the frame exactly
+  where the models put it, flipped or not.
+- `setter_drifts`, `writes_drift`: each frame write through the setter
+  moves a flipped row `h` past the requested top; `setter_exact_iff`: it is
+  exact only for unflipped (or empty) rows. In the inverted list's flipped
+  content view, that is `h` down the screen per write.
+- `stream_carry_drifts`: a 140-point carried row replanned in place by five
+  stream passes ends 700 points off its plan. Stream passes do not shift
+  detached views (`shiftDetached` returns on a zero delta), so each pass
+  writes it once, at :524: about one row height per token, as the Send
+  traces showed (+129.5 and +138.8 for 140-point rows, 90 to 107 for
+  116-point rows, with the plans' own motion on top).
+
+The `Pass` theorems about carries and departures (`detached_fixed`,
+`scroll_carry_fixed`, `inserted_once`) are about frame tops and need no
+change; they hold for the Swift once its writes realize those tops
+(`retarget_exact`), not through the frame setter. Untransformed wrappers
+(carousel strips, departure blocks) are exact either way.
+The setter hypothesis is the observed behavior, not documented API.
+
 ## Theorems
 
 **Correctness**

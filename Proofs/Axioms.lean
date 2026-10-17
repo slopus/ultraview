@@ -178,3 +178,11 @@ open UltraProofs
 #print axioms ListMomentum.dismissal_latches
 #print axioms ListMomentum.untouched_drag_resumes
 #print axioms ListMomentum.dismissal_then_quiet
+#print axioms ListPlacement.place_exact
+#print axioms ListPlacement.translate_exact
+#print axioms ListPlacement.retarget_exact
+#print axioms ListPlacement.setter_drifts
+#print axioms ListPlacement.setter_exact_iff
+#print axioms ListPlacement.writes_drift
+#print axioms ListPlacement.moves_exact
+#print axioms ListPlacement.stream_carry_drifts
