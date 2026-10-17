@@ -130,3 +130,16 @@ open UltraProofs
 #print axioms ListPass.inserted_once
 #print axioms ListInsets.sum_covers
 #print axioms ListInsets.hull_misses
+#print axioms ListHosts.inv_run
+#print axioms ListHosts.one_host
+#print axioms ListHosts.one_slot
+#print axioms ListHosts.weak_iff
+#print axioms ListHosts.hosted_has_renderer
+#print axioms ListHosts.start_attaches_unhosted
+#print axioms ListHosts.purge_unhosted
+#print axioms ListHosts.start_reuses
+#print axioms ListHosts.start_creates
+#print axioms ListHosts.checkout_never_trips
+#print axioms ListHosts.purge_never_frees_hosted
+#print axioms ListHosts.sweep_never_drops_hosted
+#print axioms ListHosts.one_host_always

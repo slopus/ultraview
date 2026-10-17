@@ -369,6 +369,50 @@ every frame iff their own deltas agree, so the inserted-block animation's
 screen made before `b5667e5`) opens a gap of `h * (1 - p)`. The chat screen
 now inserts with the pass alone (ListChatController.swift:243).
 
+## Node row hosts at `0592bc8`
+
+`Proofs/UltraProofs/List/Hosts.lean` models how node rows hand a prepared
+root between row views (NodeRow.swift), and the two cleanups that must not
+touch a hosted root: the renderer's queued purge and the list's preparation
+sweep.
+
+| Model (`Proofs/UltraProofs/List/Hosts.lean`) | Swift |
+| --- | --- |
+| `S.displayed`, `S.pending` | `NodeRowView.displayedHost`, `pendingHost` (NodeRow.swift:92-93) |
+| `S.hostOf`, `S.weak` | `PreparedNodeContent.host` (weak) and `hasLiveHost` (NodeRow.swift:23-25) |
+| `S.owner` | `PreparedNodeContent.owner` (weak, NodeRow.swift:24) |
+| `S.renderer` | the root's `state.renderer` (Renderer.swift:92-96) |
+| `S.start` | `NodeRowView.start` with `checkout(owner:)` (NodeRow.swift:143, :27), under `accept`'s and the queued candidate's guard: nothing pending, a different root shown (:140, :183-188) |
+| `S.release` | `NodeRowView.release(_:)` (NodeRow.swift:105): the old owner lets the host go and keeps a snapshot |
+| `S.reveal` | `showPreparedHost(_:)` (NodeRow.swift:114): the pending host replaces the shown one |
+| `S.free` | a row view deallocated: its hosts go, weak `owner`s read `nil` |
+| `S.collect` | `NodeHostView.deinit` (NodeHostView.swift:103) calling `Renderer.detach()` (Renderer.swift:101), which clears the renderer if it is still this host's |
+| `purge_unhosted`'s hypothesis | the purge's check on the layout queue, `renderer == nil` (Renderer.swift:108) |
+| `sweep_never_drops_hosted`'s hypothesis | `hasLiveHost` false in `sweepPreparations` and after a measurement (UltraListView.swift:723, :786) |
+
+- `inv_run`, `one_host_always`: after every sequence of checkouts, reveals
+  and view deallocations, a root has at most one live host (`one_host`), kept
+  by one view (`one_slot`).
+- `start_reuses`, `start_creates`: a checkout takes the live host from the
+  view that had it and makes a host only when none is alive.
+  `checkout_never_trips`: a host is made only for a root with no renderer, so
+  the precondition at Renderer.swift:94 holds. `hosted_has_renderer`: a
+  checkout that ignored the live host would trip it.
+- `purge_never_frees_hosted`, `sweep_never_drops_hosted`: a purge whose check
+  finds no renderer, and a sweep that finds `hasLiveHost` false, act on a
+  root no live host renders.
+
+The model reads a host as alive exactly while a row view's `displayedHost` or
+`pendingHost` keeps it (the superview goes with the slot, and the commit and
+reveal closures capture it weakly), and deallocation as happening in the
+turn that lets it go. Not covered: the snapshot's content, the reveal's
+deadline and `hasContent` wait (any order of reveals is allowed), the legacy
+`NodeRow.prepared` cache's eviction, the window of the purge between its
+check and its last write (a host attaching then runs its first pass after the
+purge on the same serial queue), and the retention policy
+(`retainsPreparation`: ±80 rows, the pinned row, the pending target), which
+decides only when a sweep runs.
+
 ## Theorems
 
 **Correctness**
@@ -433,6 +477,10 @@ now inserts with the pass alone (ListChatController.swift:243).
 - `ListPreparation.applied_increasing`, `conserves`, `newest_applies`,
   `busy_producer`: prepared mutations apply in order, each once, the newest
   eventually, and a busy producer never starves the one in progress.
+- `ListHosts.one_host_always`, `checkout_never_trips`,
+  `purge_never_frees_hosted`, `sweep_never_drops_hosted`: a prepared root has
+  at most one live host at every step, a new host never meets an attached
+  renderer, and neither cleanup touches a hosted root.
 
 **Optimality**
 
