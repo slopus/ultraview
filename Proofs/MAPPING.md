@@ -1243,7 +1243,8 @@ Resolving clears the gesture, and a new drag replaces it.
 The Swift calls `end` once per `begin` (`didEndDragging` follows
 `willBeginDragging`); the model ignores a second release. The models take the chat's
 events as delivered; that the guide's moves reach the chat as layouts is
-a hypothesis ("Keyboard guide delivery" below), which `44e5d85` broke. The return runs
+a hypothesis ("Keyboard guide delivery" below), which `44e5d85` broke and
+`843e14a` restores with a view constrained to the guide. The return runs
 the inset-only path with compensation and a screen move of
 `start - latest`: `ListMomentum.keyboard_keeps_velocity` and
 `run_keeps_velocity` (a flight is translated and keeps its velocity),
@@ -1268,47 +1269,47 @@ drag in the waiting state replaces the gesture (`begin_fresh`), which drops
 the waiting return as well; the new snapshot starts from the displaced
 inset.
 
-**The follow-up at `44e5d85`.** The rows below replace the `f683c2f` table's for
-the files it changed.
+**The follow-up at `44e5d85`, lines as of `843e14a`.** The rows below replace
+the `f683c2f` table's for the files it changed.
 
-| Model (`Proofs/UltraProofs/List/Return.lean`) | Swift at `44e5d85` |
+| Model (`Proofs/UltraProofs/List/Return.lean`) | Swift at `843e14a` |
 | --- | --- |
 | `G` | `KeyboardInsetGesture.Gesture` (KeyboardInsetGesture.swift:8-14); `released` is `awaitsOutcome` (:17) |
 | `Ev.begin` | `begin` (:20-25) |
 | `Ev.resume` | `resumeTracking(inset:)` (:26-32): only while `awaitsOutcome`; keeps the snapshot, sets the latest inset, clears the target |
-| `Ev.track`, `matchesTarget` | `track` (:33-38), from `keyboardDragChanged` (ListChatController.swift:304-309), reached from `keyboardTrackingLayout` (:193-209) only while `keyboardInputIsTracking` (:186-192: the native pan began or changed with a touch on it, else the list tracking and dragging) |
-| `Ev.release` | `end` (KeyboardInsetGesture.swift:39-43) from `keyboardDragEnded` (ListChatController.swift:310-315) |
-| `Ev.outcome` | `keyboardOutcome` (KeyboardInsetGesture.swift:44-49) with the finger down: a notification with a duration (ListChatController.swift:379-380), or an animated or input-inactive layout with a conclusive guide (:196-201) |
-| `Ev.layout` | after the release: the `awaitsOutcome` branch of `viewDidLayoutSubviews` (:177-178) into `keyboardGuideChanged` (:316-322), and a notification with the finger up |
-| `dragBegin` | `keyboardDragBegan` (:288-303): the waiting slot applied first (:289-292), a waiting gesture resolved at the drag's height when conclusive (:293-295), then `resumeTracking(inset: composerInset)`, else `begin` (:299-302) |
-| `resolve`'s shift | `resolveKeyboardGesture` (:344-365): `.returned` applies the start inset with `compensatesInsetChange: true` on `easeInOut(duration * remaining / full height)` (:349-358) |
-| `Slot`, `SEv.defer`, `SEv.flush` | `finishKeyboardGesture` (:323-336): with no timing, `pendingKeyboardResolution` and a main-queue turn applying it on `.keyboard(0.25)`; a notification with a duration takes it (:381-384), a drag's begin applies it (:289-292); layouts apply no inset while it waits (:179, :206) |
+| `Ev.track`, `matchesTarget` | `track` (:33-38), from `keyboardDragChanged` (ListChatController.swift:319-324), reached from `keyboardTrackingLayout` (:208-224) only while `keyboardInputIsTracking` (:201-207: the native pan began or changed with a touch on it, else the list tracking and dragging) |
+| `Ev.release` | `end` (KeyboardInsetGesture.swift:39-43) from `keyboardDragEnded` (ListChatController.swift:325-330) |
+| `Ev.outcome` | `keyboardOutcome` (KeyboardInsetGesture.swift:44-49) with the finger down: a notification with a duration (ListChatController.swift:394-395), or an animated or input-inactive layout with a conclusive guide (:211-216) |
+| `Ev.layout` | after the release: the `awaitsOutcome` branch of `viewDidLayoutSubviews` (:192-193) into `keyboardGuideChanged` (:331-337), and a notification with the finger up |
+| `dragBegin` | `keyboardDragBegan` (:303-318): the waiting slot applied first (:304-307), a waiting gesture resolved at the drag's height when conclusive (:308-310), then `resumeTracking(inset: composerInset)`, else `begin` (:314-317) |
+| `resolve`'s shift | `resolveKeyboardGesture` (:359-380): `.returned` applies the start inset with `compensatesInsetChange: true` on `easeInOut(duration * remaining / full height)` (:364-373) |
+| `Slot`, `SEv.defer`, `SEv.flush` | `finishKeyboardGesture` (:338-351): with no timing, `pendingKeyboardResolution` and a main-queue turn applying it on `.keyboard(0.25)`; a notification with a duration takes it (:396-399), a drag's begin applies it (:304-307); layouts apply no inset while it waits (:194, :221) |
 
 - `touch_loses` was the gap at `f683c2f`. At `44e5d85` a resolution while a
   touch is down applies: `keyboardFrameChanged` applies it before returning
-  (:386-389), and `keyboardTrackingLayout` passes it to
-  `finishKeyboardGesture` (:198-201); while the gesture waits no layout
-  applies the bar's inset (:206). The run is plain `step`, so `resolution`,
+  (:401-404), and `keyboardTrackingLayout` passes it to
+  `finishKeyboardGesture` (:213-216); while the gesture waits no layout
+  applies the bar's inset (:221). The run is plain `step`, so `resolution`,
   `at_most_once` and `resume_resolution` describe it.
 - Momentum: the model's `tracking` is a drag in progress. A return applied
-  under a touch that has not become a drag compensates (forced, :358); the
+  under a touch that has not become a drag compensates (forced, :373); the
   engine's `shift` moves the axis' offset, anchor and proposed offset
   together (ScrollMath.swift:84), so a drag that then begins starts where
   the content is. Resolutions never apply during a drag: the gesture is
   tracking then, and `keyboardOutcome` only records a target.
 - Finishing: `finishViewportTransition()` (UltraListView.swift:225-229) is
   `Ev.finishViewport` (`finish_keeps_engine`). `applyComposerInset`'s
-  `finishesAnimation` (ListChatController.swift:210-216) removes the bar's
+  `finishesAnimation` (ListChatController.swift:225-231) removes the bar's
   animations and finishes the viewport track in one transaction, as an
   immediate inset change does (`list.applyChanges(..., .none)` with
-  `removeComposerAnimations`, :233-243): `finish_together`. It runs for a
-  notification whose begin and end frames are already off screen (:272-283)
-  and on `didHide` (:285-287).
+  `removeComposerAnimations`, :248-258): `finish_together`. It runs for a
+  notification whose begin and end frames are already off screen (:287-298)
+  and on `didHide` (:300-302).
 - Lockstep: `applyComposerInset` copies the viewport animation onto the
-  bar's position and height (:234-241, `animateComposerProperty`
-  :259-270), the same begin, duration, speed and curve, so
+  bar's position and height (:249-256, `animateComposerProperty`
+  :274-285), the same begin, duration, speed and curve, so
   `ListPass.lockstep_iff` applies; the bar's start includes the residual of
-  its running animation (`composerAnimationResidual`, :251-258), read from
+  its running animation (`composerAnimationResidual`, :266-273), read from
   the same curve.
 
 What the follow-up's models say: `Ev.resume` keeps the first drag's start
@@ -1325,44 +1326,44 @@ from `composerInset`, which nothing changes while the gesture waits
 `slot_once`: every resolution waiting a turn for its timing is applied
 exactly once, in order; `begin_flushes`: none waits past the next drag.
 
-Momentum rows at `44e5d85` (the section at `b896af1` maps the earlier
+Momentum rows at `843e14a` (the section at `b896af1` maps the earlier
 controller; `f683c2f`'s rows are superseded): `Ev.dragBegin` is
-`willBeginDragging` (ListChatController.swift:97-102), `Ev.drag` the
-`onUserScrollDelta` guard (:103-106), the layout check (:169) and a tracked
-sample's (:307), `Ev.release` `didEndDragging` (:107-111), `Ev.keyboard`
-`keyboardFrameChanged` (:366-398, a growing overlap with the finger up at
-:371) and `applyComposerInset`'s `compensatesInsetChange` (:232: the
+`willBeginDragging` (ListChatController.swift:111-116), `Ev.drag` the
+`onUserScrollDelta` guard (:117-120), the layout check (:184) and a tracked
+sample's (:322), `Ev.release` `didEndDragging` (:121-125), `Ev.keyboard`
+`keyboardFrameChanged` (:381-413, a growing overlap with the finger up at
+:386) and `applyComposerInset`'s `compensatesInsetChange` (:247: the
 caller's, else `!isTrackingKeyboard && followsComposer`), and `Ev.explicit`
-the hide button (:122), `textViewDidChange` (:401), `sendMessage` (:495)
-and a resolved return (:352, applied with compensation forced on, :358). A
-resolved dismissal (:362) turns compensation off and applies uncompensated
-(:363), as the release does. `isTrackingKeyboard` (:30) is the gesture's
+the hide button (:137), `textViewDidChange` (:416), `sendMessage` (:510)
+and a resolved return (:367, applied with compensation forced on, :373). A
+resolved dismissal (:377) turns compensation off and applies uncompensated
+(:378), as the release does. `isTrackingKeyboard` (:31) is the gesture's
 own tracking or the list's touch before `didEndDragging`. While a drag runs
 every inset goes in uncompensated, so `tracking_never_writes` holds; a
 return applied under a touch that has not become a drag is the one
 compensated write with the finger down (above).
 
-**Finishing the viewport track at `44e5d85`.**
+**Finishing the viewport track at `44e5d85`** (lines as of `843e14a`).
 `UltraListView.finishViewportTransition()` (UltraListView.swift:225-229)
 replaces a running viewport track with one from 0 to 0 at once, re-renders
 attachments and reports visibility, and makes no engine call; with no
 track it does nothing. It is `Ev.finishViewport`: `finish_keeps_engine`
 (the offset, the flight and its velocity, and every flag unchanged), and
 `run_keeps_velocity` and `dismissed_never_moved` include it. The chat
-calls it from `applyComposerInset`'s `finishesAnimation` (ListChatController.swift:210-216)
+calls it from `applyComposerInset`'s `finishesAnimation` (ListChatController.swift:225-231)
 in the same transaction that removes the bar's animations, for a
 notification whose begin and end frames are already off screen
-(:272-283) and on `didHide` (:285-287): `ListPass.finish_together`
+(:287-298) and on `didHide` (:300-302): `ListPass.finish_together`
 (landing both in one turn keeps their distance). `finish_alone`: landing
 one leaves the gap off by `Δ (1 - q)`, the 90 points the bar's clock left
 before, with the same-inset guard.
 
 A running hide interrupted by that zero-duration notification lands at
-once. `keyboardFrameChanged` with `finishesHide` (ListChatController.swift:366-368)
+once. `keyboardFrameChanged` with `finishesHide` (ListChatController.swift:381-383)
 takes duration 0 and calls `applyComposerInset` with `.none`: if the
 inset changes, the list's immediate inset change removes the viewport track
-and `removeComposerAnimations` the bar's (:233, :240-241); if it doesn't,
-`finishesAnimation` removes both (:211-215). Either way, in one
+and `removeComposerAnimations` the bar's (:248, :255-256); if it doesn't,
+`finishesAnimation` removes both (:226-230). Either way, in one
 transaction: `interrupt_lands` (bar and content on their settled values,
 so the bar is at the final inset) and `interrupt_keeps_gap` (the bar's
 residual is a copy of the viewport's, so they share one; their distance
@@ -1644,7 +1645,15 @@ overwriting the end samples, so the profile's ends are the computed ones.
   the bar never follows the finger and no return is made. At `44e5d85` no
   production view depended on the guide (only the opt-in geometry probe's
   constraint did), so on device the bar didn't move during an interactive
-  dismissal; agfv's fix adds a production guide consumer.
+  dismissal. Since `843e14a` the chat's `keyboardLayoutInput`
+  (ListChatController.swift:11, constrained at :85-97), a transparent,
+  non-interactive 1-point view whose top is pinned to the guide's top, is
+  that dependent view: it makes UIKit lay the chat out as the guide moves.
+  It positions nothing; the bar is still placed by the owned inset. The
+  geometry probe observes it and adds no guide constraint of its own, so
+  the instrumented and uninstrumented runs schedule the same layouts.
+  `UninstrumentedKeyboardInteractionTests` drives the gesture with no probe
+  or marker.
 
 ## Abstractions
 
