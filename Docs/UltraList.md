@@ -502,7 +502,9 @@ departing row against its neighbours on every frame. The demo's
 - reveal followed by a tap elsewhere, and reveal followed by a vertical scroll;
 - a full-swipe delete, also with momentum in flight and while the row below
   resizes (`-listSwipeStress fling|resize`);
-- the chat with the keyboard up.
+- the chat with the keyboard up;
+- the Across screen's fling, insert, delete, move, resize and Start, with
+  cards checked for contiguity at rest.
 
 On an iPhone 17 Pro simulator (Debug) these interactions ran with zero layout,
 text or drawing on main. Main-thread p99 while swiping and deleting was

@@ -236,6 +236,48 @@ final class SwipeInteractionTests: XCTestCase {
         }
     }
 
+    @MainActor func testAcrossScreenMutationsKeepCardsContiguous() throws {
+        for engine in engines {
+            let app = XCUIApplication()
+            app.launchArguments = ["-screen", "lists", "-listScreen", "horizontal", "-listEngine", engine, "-listSwipeProbe", "YES"]
+            app.launch()
+            let list = app.otherElements["horizontalList"]
+            XCTAssertTrue(list.waitForExistence(timeout: 10))
+            settle(1.5)
+            func cards() throws -> (count: Int, position: Double, frames: [(x: Double, width: Double)]) {
+                let text = try XCTUnwrap(app.staticTexts["horizontalProbe"].value as? String)
+                let json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
+                let frames = ((json["frames"] as? [[String: Double]]) ?? []).map { (x: $0["x"] ?? 0, width: $0["width"] ?? 0) }.sorted { $0.x < $1.x }
+                return (json["cards"] as? Int ?? 0, json["position"] as? Double ?? 0, frames)
+            }
+            func checkContiguous(_ label: String) throws {
+                let state = try cards()
+                XCTAssertGreaterThan(state.frames.count, 2, label)
+                for (a, b) in zip(state.frames, state.frames.dropFirst()) {
+                    XCTAssertEqual(b.x, a.x + a.width, accuracy: 0.5, "\(engine) \(label): cards don't touch")
+                }
+            }
+            let f = list.frame
+            // A fling to the left moves the list along x and lands at rest.
+            drag(app, from: .init(x: f.maxX - 20, y: f.midY), to: .init(x: f.minX + 40, y: f.midY), speed: 1200)
+            settle(2)
+            let flung = try cards()
+            XCTAssertGreaterThan(flung.position, 200, engine)
+            try checkContiguous("fling")
+            for (button, change) in [("horizontalInsert", 1), ("horizontalDelete", -1), ("horizontalMove", 0), ("horizontalResize", 0)] {
+                let before = try cards().count
+                app.buttons[button].tap()
+                settle(0.8)
+                XCTAssertEqual(try cards().count, before + change, "\(engine) \(button)")
+                try checkContiguous(button)
+            }
+            app.buttons["horizontalStart"].tap()
+            settle(2)
+            XCTAssertEqual(try cards().position, 0, accuracy: 0.5, "\(engine): Start")
+            app.terminate()
+        }
+    }
+
     @MainActor func testChatSwipesWorkWithTheKeyboardUp() throws {
         for engine in engines {
             let app = launch("chat", engine: engine)
