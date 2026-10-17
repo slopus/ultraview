@@ -12,6 +12,10 @@ final class ListInteractionTests: XCTestCase {
     @MainActor private func settle(_ seconds: Double = 0.4) {
         RunLoop.current.run(until: Date().addingTimeInterval(seconds))
     }
+    private func logGeometry(_ label: String, _ state: [String: Any]) throws {
+        let data = try JSONSerialization.data(withJSONObject: state, options: [.sortedKeys])
+        print("\(label): \(String(decoding: data, as: UTF8.self))")
+    }
     @MainActor func testKeyboardTracksComposerAndViewportDuringShowHideAndInteractiveDismissal() throws {
         let app = XCUIApplication()
         for mode in ["uiKit", "stepped", "keyframe"] {
@@ -23,13 +27,13 @@ final class ListInteractionTests: XCTestCase {
             XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
             settle()
             let shown = try keyboardGeometry(app)
-            print("Keyboard shown \(mode): \(shown)")
+            try logGeometry("Keyboard shown \(mode)", shown)
             XCTAssertGreaterThan(shown["keyboardSpringSamples"] as? Int ?? 0, 0, "\(mode): first show must animate the rows")
             XCTAssertLessThanOrEqual(shown["rowGap"] as? Double ?? 1000, 1.5, "\(mode): first show \(shown)")
             app.buttons["dismissKeyboard"].tap()
             settle()
             let hiddenState = try keyboardGeometry(app)
-            print("Keyboard hidden \(mode): \(hiddenState)")
+            try logGeometry("Keyboard hidden \(mode)", hiddenState)
             XCTAssertGreaterThan(hiddenState["keyboardSpringSamples"] as? Int ?? 0, shown["keyboardSpringSamples"] as? Int ?? 0, "\(mode): hide must animate the rows")
             composer.tap(); settle()
             let reshown = try keyboardGeometry(app)
@@ -49,7 +53,7 @@ final class ListInteractionTests: XCTestCase {
             let hidden = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: app.keyboards.firstMatch)
             XCTAssertEqual(XCTWaiter.wait(for: [hidden], timeout: 5), .completed, mode)
             let state = try keyboardGeometry(app)
-            print("Keyboard dismissed \(mode): \(state)")
+            try logGeometry("Keyboard dismissed \(mode)", state)
             XCTAssertGreaterThan(state["movingSamples"] as? Int ?? 0, 5, "\(mode): \(state)")
             XCTAssertGreaterThan(state["dragSamples"] as? Int ?? 0, 5, "\(mode): \(state)")
             XCTAssertGreaterThan(state["dragKeyboardTravel"] as? Double ?? 0, 20, "\(mode): \(state)")
@@ -63,8 +67,11 @@ final class ListInteractionTests: XCTestCase {
             XCTAssertGreaterThan(state["keyboardSpringSamples"] as? Int ?? 0, 0, "\(mode): \(state)")
             XCTAssertEqual(state["keyboardSpringCorrect"] as? Bool, true, "\(mode): \(state)")
             XCTAssertLessThan(state["insetP99"] as? Double ?? 1000, 2, "\(mode): \(state)")
-            XCTAssertGreaterThan(state["stoppedReleases"] as? Int ?? 0, 0, "\(mode): dismissed keyboard must stop this release: \(state)")
-            XCTAssertLessThanOrEqual(state["coast"] as? Double ?? 1000, 3, "\(mode): dismissal release kept coasting: \(state)")
+            XCTAssertEqual(state["stoppedReleases"] as? Int, 0, "\(mode): \(state)")
+            XCTAssertGreaterThan(state["coast"] as? Double ?? 0, 8, "\(mode): dismissal release lost momentum: \(state)")
+            XCTAssertEqual(state["newestSnaps"] as? Int, 0, "\(mode): a fling must not snap to newest: \(state)")
+            XCTAssertEqual((state["handoffSamples"] as? [[String: Double]])?.count, 4, "\(mode): \(state)")
+            XCTAssertLessThanOrEqual(state["detachedAnimationAmplitude"] as? Double ?? 1000, 1, "\(mode): dismissal added content motion: \(state)")
             let afterStart = origin.withOffset(.init(dx: x, dy: composer.frame.minY - 40))
             let afterEnd = origin.withOffset(.init(dx: x, dy: composer.frame.minY - 220))
             afterStart.press(forDuration: 0.03, thenDragTo: afterEnd, withVelocity: .fast, thenHoldForDuration: 0)
@@ -97,16 +104,108 @@ final class ListInteractionTests: XCTestCase {
             app.terminate()
         }
     }
-    @MainActor func testMultilineComposerKeepsTrailingButtonsInside() {
-        let app = XCUIApplication(); app.launchArguments = ["-screen", "lists", "-listScreen", "chat"]
+    @MainActor func testFastKeyboardDismissalKeepsMomentumAwayFromNewest() throws {
+        try checkKeyboardDismissal(stationaryRelease: false, initialRow: 25)
+    }
+    @MainActor func testFastKeyboardDismissalKeepsMomentumFromNewest() throws {
+        try checkKeyboardDismissal(stationaryRelease: false)
+    }
+    @MainActor func testStationaryKeyboardDismissalPreservesTheReleasePosition() throws {
+        try checkKeyboardDismissal(stationaryRelease: true)
+    }
+    @MainActor private func checkKeyboardDismissal(stationaryRelease: Bool, initialRow: Int = 0) throws {
+        let app = XCUIApplication()
+        for mode in ["uiKit", "stepped", "keyframe"] {
+            app.launchArguments = ["-screen", "lists", "-listScreen", "chat", "-listEngine", mode, "-listKeyboardGeometryProbe", "YES"]
+            if initialRow > 0 { app.launchArguments += ["-listInitialRow", "\(initialRow)"] }
+            app.launch()
+            let composer = app.textViews["composer"]
+            XCTAssertTrue(composer.waitForExistence(timeout: 10))
+            if initialRow > 0 {
+                settle()
+                XCTAssertGreaterThan(try keyboardGeometry(app)["firstIndex"] as? Int ?? 0, 10, "\(mode): the away-from-newest scenario did not start away")
+            }
+            composer.tap(); XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5)); settle()
+            let origin = app.coordinate(withNormalizedOffset: .zero), x = app.frame.midX
+            let start = origin.withOffset(.init(dx: x, dy: composer.frame.minY - 90))
+            let end = origin.withOffset(.init(dx: x, dy: app.frame.maxY - (stationaryRelease ? 70 : 180)))
+            start.press(forDuration: 0.05, thenDragTo: end, withVelocity: stationaryRelease ? .slow : .fast, thenHoldForDuration: stationaryRelease ? 0.5 : 0)
+            let hidden = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: app.keyboards.firstMatch)
+            XCTAssertEqual(XCTWaiter.wait(for: [hidden], timeout: 5), .completed, mode)
+            settle(0.7)
+            let state = try keyboardGeometry(app)
+            try logGeometry("Keyboard release \(mode) stationary=\(stationaryRelease)", state)
+            XCTAssertEqual(state["stoppedReleases"] as? Int, 0, "\(mode): \(state)")
+            XCTAssertEqual(state["keyboardSpringCorrect"] as? Bool, true, "\(mode): \(state)")
+            XCTAssertEqual((state["handoffSamples"] as? [[String: Double]])?.count, 4, "\(mode): \(state)")
+            XCTAssertLessThanOrEqual(state["detachedAnimationAmplitude"] as? Double ?? 1000, 1, "\(mode): \(state)")
+            XCTAssertLessThanOrEqual(state["composerGap"] as? Double ?? 1000, 1.5, "\(mode): \(state)")
+            let frames = try XCTUnwrap(state["releaseFrames"] as? [[String: Double]])
+            XCTAssertGreaterThan(frames.count, 10, mode)
+            let firstTime = try XCTUnwrap(frames.first?["time"]), lastTime = try XCTUnwrap(frames.last?["time"])
+            XCTAssertGreaterThan(lastTime - firstTime, 0.45, "\(mode): release sampling ended too early")
+            if let hideTime = state["keyboardHideTime"] as? Double, hideTime > 0 {
+                XCTAssertGreaterThanOrEqual(lastTime, hideTime + 0.45, "\(mode): missing frames after keyboard hide")
+            }
+            if stationaryRelease {
+                XCTAssertLessThanOrEqual(state["handoffExcess"] as? Double ?? 1000, 1, "\(mode): stationary content moved between samples: \(state)")
+                XCTAssertLessThan(abs(state["releaseVelocity"] as? Double ?? 1000), 250, "\(mode): \(state)")
+                XCTAssertLessThanOrEqual(state["coast"] as? Double ?? 1000, 3, "\(mode): \(state)")
+                XCTAssertLessThanOrEqual(abs((state["position"] as? Double ?? 1000) - (state["releasePosition"] as? Double ?? 0)), 3, "\(mode): release position changed: \(state)")
+                XCTAssertGreaterThan(state["newestGap"] as? Double ?? -1, 8, "\(mode): content must stay away from newest: \(state)")
+                XCTAssertEqual(state["followsComposer"] as? Bool, false, "\(mode): \(state)")
+            } else {
+                XCTAssertGreaterThan(abs(state["releaseVelocity"] as? Double ?? 0), 250, "\(mode): \(state)")
+                XCTAssertGreaterThan(state["coast"] as? Double ?? 0, 8, "\(mode): \(state)")
+                XCTAssertEqual(state["newestSnaps"] as? Int, 0, "\(mode): \(state)")
+                let deadline = Date().addingTimeInterval(6)
+                var final = state
+                while final["decelerating"] as? Bool == true, Date() < deadline {
+                    settle(0.1); final = try keyboardGeometry(app)
+                }
+                XCTAssertEqual(final["decelerating"] as? Bool, false, "\(mode): \(final)")
+                XCTAssertTrue((final["newestGap"] as? Double ?? -1) < 0 || (final["newestGap"] as? Double ?? 0) > 8, "\(mode): coast returned to newest: \(final)")
+            }
+            app.terminate()
+        }
+    }
+    @MainActor func testUndismissedKeyboardDragCanReturnToTheNewestEdge() throws {
+        let app = XCUIApplication()
+        for mode in ["uiKit", "stepped", "keyframe"] {
+            app.launchArguments = ["-screen", "lists", "-listScreen", "chat", "-listEngine", mode, "-listKeyboardGeometryProbe", "YES"]
+            app.launch()
+            let composer = app.textViews["composer"]
+            XCTAssertTrue(composer.waitForExistence(timeout: 10))
+            composer.tap(); XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5)); settle()
+            let origin = app.coordinate(withNormalizedOffset: .zero), x = app.frame.midX, y = composer.frame.minY - 90
+            let high = origin.withOffset(.init(dx: x, dy: y)), low = origin.withOffset(.init(dx: x, dy: y + 35))
+            high.press(forDuration: 0.05, thenDragTo: low, withVelocity: .slow, thenHoldForDuration: 0.2)
+            low.press(forDuration: 0.05, thenDragTo: high, withVelocity: .slow, thenHoldForDuration: 0.2)
+            settle()
+            XCTAssertTrue(app.keyboards.firstMatch.exists)
+            var state = try keyboardGeometry(app)
+            XCTAssertEqual(state["followsComposer"] as? Bool, true, "\(mode): \(state)")
+            XCTAssertLessThanOrEqual(state["newestGap"] as? Double ?? 1000, 1.5, "\(mode): \(state)")
+            app.buttons["dismissKeyboard"].tap(); settle()
+            state = try keyboardGeometry(app)
+            XCTAssertLessThanOrEqual(state["newestGap"] as? Double ?? 1000, 1.5, "\(mode): \(state)")
+            app.terminate()
+        }
+    }
+    @MainActor func testMultilineComposerKeepsTrailingButtonsInside() throws {
+        let app = XCUIApplication(); app.launchArguments = ["-screen", "lists", "-listScreen", "chat", "-listComposerMetrics", "YES"]
         app.launch()
         let composer = app.textViews["composer"], send = app.buttons["Send"], stream = app.buttons["Stream"]
         XCTAssertTrue(composer.waitForExistence(timeout: 10))
+        settle()
         let initial = composer.frame.height
+        let line = try keyboardGeometry(app)["composerLineHeight"] as? Double ?? 0
+        XCTAssertGreaterThan(line, 0)
         composer.tap()
         composer.typeText("First line\nSecond line\nThird line\nFourth line\nFifth line\nSixth line with a long continuation that wraps inside the composer.")
         XCTAssertGreaterThan(composer.frame.height, initial + 20)
-        XCTAssertLessThan(composer.frame.height, initial + 120)
+        XCTAssertLessThanOrEqual(composer.frame.height, ceil(line * 5 + 16) + 1)
+        XCTAssertLessThanOrEqual(composer.frame.height, max(initial, app.frame.height * 0.4) + 1)
         let bar = app.otherElements["composerBar"]
         XCTAssertTrue(bar.frame.contains(send.frame))
         XCTAssertEqual(send.frame.maxX, bar.frame.maxX, accuracy: 2)
@@ -115,6 +214,7 @@ final class ListInteractionTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(stream.frame.minX, composer.frame.maxX)
         XCTAssertEqual(send.frame.maxY, composer.frame.maxY, accuracy: 2)
         app.buttons["Send"].tap()
+        settle()
         XCTAssertLessThanOrEqual(composer.frame.height, initial + 2)
     }
     @MainActor func testSharedCompareTouchAndBlocker() {

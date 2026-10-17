@@ -61,6 +61,14 @@ public final class MainThreadMonitor {
     public var threshold: Double = 1000 / 60
     /// Called for every stall, after its turn ends.
     public var onStall: ((Stall) -> Void)?
+    /// Optional detailed observations for an opt-in interaction probe.
+    public struct Turn: Sendable {
+        /// Monotonic media time, in seconds.
+        public var startTime: Double
+        public var milliseconds: Double
+        public var notes: [String]
+    }
+    public var onTurn: ((Turn) -> Void)?
     public private(set) var isRunning = false
     public private(set) var stalls: [Stall] = []
 
@@ -175,7 +183,7 @@ public final class MainThreadMonitor {
 
     /// Records something the main thread did in the current turn, for the
     /// stall report. Cheap when the monitor isn't running.
-    func note(_ what: @autoclosure () -> String) {
+    public func note(_ what: @autoclosure () -> String) {
         guard isRunning else { return }
         notes.append(what())
     }
@@ -195,6 +203,7 @@ public final class MainThreadMonitor {
         let milliseconds = (CACurrentMediaTime() - start) * 1000
         guard let phase = phases.last else { return }
         phase.turns.append(milliseconds)
+        onTurn?(.init(startTime: start, milliseconds: milliseconds, notes: notes))
         if milliseconds > threshold {
             let stall = Stall(phase: phase.name, milliseconds: milliseconds, startTime: start - startTime, notes: notes)
             stalls.append(stall)

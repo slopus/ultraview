@@ -4,7 +4,7 @@ import UltraView
 import os
 
 @MainActor
-final class ListChatController: UIViewController, UITextViewDelegate {
+final class ListChatController: UIViewController, UITextViewDelegate, ListChaosRowHost {
     let list: UltraListView
     private let composer = UITextView(), send = UIButton(type: .system), stream = UIButton(type: .system)
     private let composerBar = UIStackView()
@@ -13,12 +13,14 @@ final class ListChatController: UIViewController, UITextViewDelegate {
     private var keyboardProbe: ListKeyboardGeometryProbe?
     private var keyboardTransition: ListTransition?
     private var keyboardHeight = 0.0
-    private var gestureHadKeyboard = false, gestureDismissedKeyboard = false, gestureAtNewest = false
-    private var needsNewestSnap = false
+    private var gestureAtNewest = false, followsComposer = true
+    private var gestureTravel = 0.0
+    private var gestureKeyboardTop = 0.0
     private var rows: [DemoListRow] = []
     private var nextID = 100
     private var streaming: Task<Void, Never>?
     private let monitor = ListFrameMonitor(name: "chat")
+    var chaosRows: [DemoListRow] { get { rows } set { rows = newValue } }
     private var composerInset = 0.0
     private var hostProbe: Bool { UserDefaults.standard.bool(forKey: "listHostProbe") }
     init(mode: ScrollEngineMode) { list = UltraListView(engineMode: mode); super.init(nibName: nil, bundle: nil) }
@@ -58,7 +60,8 @@ final class ListChatController: UIViewController, UITextViewDelegate {
         for control in [composer, stream, send] { composerBar.addArrangedSubview(control) }
         composerBar.spacing = 8; composerBar.alignment = .bottom; composerBar.accessibilityIdentifier = "composerBar"
         for v in [list, composerBar] { v.translatesAutoresizingMaskIntoConstraints = false; view.addSubview(v) }
-        let height = composerBar.heightAnchor.constraint(equalToConstant: 44); composerHeight = height
+        let initialHeight = max(44, ceil((composer.font?.lineHeight ?? 21) + composer.textContainerInset.top + composer.textContainerInset.bottom))
+        let height = composerBar.heightAnchor.constraint(equalToConstant: initialHeight); composerHeight = height
         NSLayoutConstraint.activate([
             list.topAnchor.constraint(equalTo: view.topAnchor), list.leadingAnchor.constraint(equalTo: view.leadingAnchor), list.trailingAnchor.constraint(equalTo: view.trailingAnchor), list.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             composerBar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12), composerBar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12), composerBar.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor, constant: -8), height,
@@ -68,19 +71,26 @@ final class ListChatController: UIViewController, UITextViewDelegate {
         list.applyChanges(items: rows, scrollTo: initialIndex > 0 ? .init(index: initialIndex) : nil)
         list.willBeginDragging = { [weak self] in
             guard let self else { return }
-            gestureHadKeyboard = composer.isFirstResponder; gestureDismissedKeyboard = false
-            gestureAtNewest = list.settledFrame(at: 0).map { abs($0.minY - list.viewportInsets.top) <= 10 } ?? false
+            gestureAtNewest = isAtNewestEdge(); gestureTravel = 0
+            gestureKeyboardTop = view.keyboardLayoutGuide.layoutFrame.minY
+            followsComposer = gestureAtNewest
         }
-        list.shouldStopScrolling = { [weak self] _ in self?.shouldStopForKeyboard() ?? false }
+        list.onUserScrollDelta = { [weak self] delta, _ in
+            guard let self, list.isTracking else { return }
+            gestureTravel += delta
+            let keyboardStayed = abs(view.keyboardLayoutGuide.layoutFrame.minY - gestureKeyboardTop) <= 1
+            followsComposer = gestureAtNewest && abs(gestureTravel) <= 1 || keyboardStayed && isAtNewestEdge()
+        }
         list.didEndDragging = { [weak self] in
             guard let self else { return }
-            needsNewestSnap = gestureDismissedKeyboard && gestureAtNewest
+            if abs(view.keyboardLayoutGuide.layoutFrame.minY - gestureKeyboardTop) <= 1, isAtNewestEdge() { followsComposer = true }
         }
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardWillChange(_:)), name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
-        NotificationCenter.default.addObserver(self, selector: #selector(keyboardDidHide), name: UIResponder.keyboardDidHideNotification, object: nil)
-        if UserDefaults.standard.bool(forKey: "listKeyboardGeometryProbe") {
-            keyboardProbe = ListKeyboardGeometryProbe(owner: view, composer: composerBar, list: list)
+        if UserDefaults.standard.bool(forKey: "listKeyboardGeometryProbe") || UserDefaults.standard.bool(forKey: "listComposerMetrics") {
+            keyboardProbe = ListKeyboardGeometryProbe(owner: view, composer: composerBar, list: list, followsComposer: { [weak self] in self?.followsComposer ?? false })
             keyboardProbe?.start()
+        }
+        if UserDefaults.standard.bool(forKey: "listKeyboardGeometryProbe") {
             let dismiss = UIButton(type: .system)
             dismiss.setTitle("Hide", for: .normal)
             dismiss.accessibilityIdentifier = "dismissKeyboard"
@@ -91,6 +101,8 @@ final class ListChatController: UIViewController, UITextViewDelegate {
             composerBar.addArrangedSubview(dismiss)
         }
         monitor.start()
+        ListStreamSendProbe.startIfRequested(chat: self)
+        ListComposerTimingProbe.startIfRequested(chat: self)
         if UserDefaults.standard.bool(forKey: "listProbe") {
             Task { [weak self] in
                 let delay = UserDefaults.standard.double(forKey: "listProbeDelay")
@@ -121,39 +133,42 @@ final class ListChatController: UIViewController, UITextViewDelegate {
         }
     }
     override func viewDidLayoutSubviews() {
+        let started = CACurrentMediaTime()
+        defer { MainThreadMonitor.shared.note("composer layout \((CACurrentMediaTime() - started) * 1000) ms") }
         super.viewDidLayoutSubviews()
         updateComposerHeight()
         // The guide can lay out its destination before our keyboard notification.
         // Only tracking reads it directly; notifications own animated targets.
         let inset = list.isTracking
             ? max(0, view.bounds.maxY - composerBar.frame.minY)
-            : max(keyboardHeight, view.safeAreaInsets.bottom) + composerBar.bounds.height + 8
+            : max(keyboardHeight, view.safeAreaInsets.bottom) + (composerHeight?.constant ?? composerBar.bounds.height) + 8
         applyComposerInset(inset, transition: list.isTracking ? .none : keyboardTransition ?? .none)
     }
     private func applyComposerInset(_ inset: Double, transition: ListTransition) {
         guard abs(inset - composerInset) > 0.5 else { return }
         composerInset = inset
         let start = CACurrentMediaTime()
-        list.applyChanges(newInsets: .init(top: inset), compensatesInsetChange: !list.isTracking, transition: transition)
+        list.applyChanges(newInsets: .init(top: inset), compensatesInsetChange: !list.isTracking && followsComposer, transition: transition)
         keyboardProbe?.recordInsetUpdate(milliseconds: (CACurrentMediaTime() - start) * 1000)
     }
-    private func shouldStopForKeyboard() -> Bool {
-        let hidden = view.keyboardLayoutGuide.layoutFrame.minY >= view.bounds.maxY - 1
-        let stopped = gestureHadKeyboard && (gestureDismissedKeyboard || !composer.isFirstResponder || hidden)
-        if stopped { gestureDismissedKeyboard = true; keyboardProbe?.recordStoppedRelease() }
-        return stopped
-    }
-    @objc private func keyboardDidHide() {
-        guard needsNewestSnap else { return }
-        needsNewestSnap = false; list.scrollTo(.init(index: 0), transition: .none)
+    private func isAtNewestEdge() -> Bool {
+        guard let frame = list.settledFrame(at: 0) else { return false }
+        if abs(frame.minY - list.viewportInsets.top) <= 1 { return true }
+        guard list.items.first?.pinsToBottomEdge == true else { return false }
+        let visible = max(0, list.bounds.height - list.viewportInsets.top - list.viewportInsets.bottom)
+        let extensionHeight = max(0, frame.height - visible / 2)
+        return abs(frame.maxY - (list.bounds.height - list.viewportInsets.bottom + extensionHeight)) <= 1
     }
     @objc private func keyboardWillChange(_ notification: Notification) {
+        let started = CACurrentMediaTime()
+        defer { MainThreadMonitor.shared.note("keyboard frame handler \((CACurrentMediaTime() - started) * 1000) ms") }
         guard view.window != nil, let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
         let local = view.convert(frame, from: nil)
         let overlap = max(0, view.bounds.maxY - local.minY)
+        if !list.isTracking, overlap > keyboardHeight + 1 { followsComposer = isAtNewestEdge() }
         keyboardHeight = max(overlap, view.safeAreaInsets.bottom)
+        updateComposerHeight()
         if list.isTracking {
-            if gestureHadKeyboard, overlap == 0, !composer.isFirstResponder { gestureDismissedKeyboard = true }
             keyboardTransition = ListTransition.none
             return
         }
@@ -163,15 +178,19 @@ final class ListChatController: UIViewController, UITextViewDelegate {
         keyboardTransition = transition
         UIView.animate(withDuration: duration, delay: 0, options: [.init(rawValue: raw << 16), .beginFromCurrentState, .allowUserInteraction]) {
             self.view.layoutIfNeeded()
-            self.applyComposerInset(self.keyboardHeight + self.composerBar.bounds.height + 8, transition: transition)
+            self.applyComposerInset(self.keyboardHeight + (self.composerHeight?.constant ?? self.composerBar.bounds.height) + 8, transition: transition)
         }
     }
     func textViewDidChange(_ textView: UITextView) { updateComposerHeight(animated: true) }
     private func updateComposerHeight(animated: Bool = false) {
+        let started = CACurrentMediaTime()
+        defer { MainThreadMonitor.shared.note("composer measure \((CACurrentMediaTime() - started) * 1000) ms") }
         placeholder.isHidden = !(composer.text ?? "").isEmpty
         guard composer.bounds.width > 0, let composerHeight else { return }
         let line = composer.font?.lineHeight ?? 21
-        let maximum = ceil(line * 5 + composer.textContainerInset.top + composer.textContainerInset.bottom)
+        let singleLine = max(44, ceil(line + composer.textContainerInset.top + composer.textContainerInset.bottom))
+        let available = max(0, view.bounds.height - max(keyboardHeight, view.safeAreaInsets.bottom))
+        let maximum = min(ceil(line * 5 + composer.textContainerInset.top + composer.textContainerInset.bottom), max(singleLine, floor(available * 0.4)))
         let measured = ceil(composer.sizeThatFits(.init(width: composer.bounds.width, height: .greatestFiniteMagnitude)).height)
         let desired = max(44, min(maximum, measured))
         let scrolls = measured > maximum + 0.5
@@ -213,6 +232,7 @@ final class ListChatController: UIViewController, UITextViewDelegate {
     }
     override func viewDidDisappear(_ animated: Bool) { super.viewDidDisappear(animated); streaming?.cancel(); monitor.finish(); keyboardProbe?.stop() }
     @objc private func sendMessage() {
+        followsComposer = true
         nextID += 1
         let body = monitor.measureAction("send-read-composer") { let text = composer.text ?? ""; return text.isEmpty ? "A new message" : text }
         if let pinned = rows.firstIndex(where: \.pinsToBottomEdge) { rows[pinned].pinsToBottomEdge = false }
@@ -224,6 +244,7 @@ final class ListChatController: UIViewController, UITextViewDelegate {
         monitor.measureAction("send-insert-animation") { list.animateInsertedBlock(identities: [rows[0].identity], from: .top) }
     }
     @objc private func beginStreaming() {
+        followsComposer = true
         streaming?.cancel()
         nextID += 1
         let id = "stream-\(nextID)"

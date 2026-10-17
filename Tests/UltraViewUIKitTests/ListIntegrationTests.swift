@@ -112,15 +112,22 @@ private actor MeasurementGate: NodeRowMeasuring {
         for _ in 0..<100 where list.items.first?.revision != 20 { try await Task.sleep(for: .milliseconds(10)) }
         #expect(list.items.first?.revision == 20)
     }
-    @Test func aSupersededSendKeepsItsIdentityTargetAndInsertedBlock() async throws {
+    @Test func aScrollTargetSubmittedBeforeTheFirstLayoutIsRetained() {
+        let list = UltraListView()
+        list.applyChanges(items: (0..<100).map { FixedRow(identity: "\($0)") }, scrollTo: .init(index: 25), transition: .none)
+        list.frame = .init(x: 0, y: 0, width: 320, height: 400)
+        list.layoutIfNeeded()
+        #expect(abs((list.settledFrame(at: 25)?.minY ?? -1000) - list.viewportInsets.top) < 0.5)
+    }
+    @Test(arguments: [false, true]) func aSupersededSendKeepsItsIdentityTargetAndInsertedBlock(olderFinishesFirst: Bool) async throws {
         let list = list(count: 100)
         list.scrollTo(.init(index: 40), transition: .none)
         let old = list.items
-        let sent: [any ListRow] = [DelayedRevisionRow(identity: "sent", revision: 1, delay: .milliseconds(200))]
+        let sent: [any ListRow] = [DelayedRevisionRow(identity: "sent", revision: 1, delay: .milliseconds(olderFinishesFirst ? 75 : 200))]
         list.applyChanges(items: sent + old,
             scrollTo: .init(index: 0), animatesInsertions: false, transition: .easeInOut(1))
         list.animateInsertedBlock(identities: ["sent"], from: .top, transition: .easeInOut(1))
-        let newest: [any ListRow] = [FixedRow(identity: "header"), DelayedRevisionRow(identity: "sent", revision: 2, delay: .milliseconds(75))]
+        let newest: [any ListRow] = [FixedRow(identity: "header"), DelayedRevisionRow(identity: "sent", revision: 2, delay: .milliseconds(olderFinishesFirst ? 200 : 75))]
         list.applyChanges(items: newest + old,
             transition: .easeInOut(1))
         for _ in 0..<100 where list.items.first?.identity != "header" { try await Task.sleep(for: .milliseconds(10)) }
@@ -321,6 +328,7 @@ private actor MeasurementGate: NodeRowMeasuring {
         list.receiveScrollInput(.init(time: 0, phase: .began, velocity: .init(y: -3000)))
         list.receiveScrollInput(.init(time: 0.02, phase: .changed, translation: .init(y: -80), velocity: .init(y: -3000)))
         list.receiveScrollInput(.init(time: 0.03, phase: .ended, translation: .init(y: -80), velocity: .init(y: -3000)))
+        #expect(list.isDecelerating)
         func progress() -> Double {
             guard let index = list.loadedIndexRange.first, let frame = list.settledFrame(at: index) else { return 0 }
             return Double(index * 50) - Double(frame.minY)
@@ -329,6 +337,7 @@ private actor MeasurementGate: NodeRowMeasuring {
         try await Task.sleep(for: .milliseconds(120))
         #expect(progress() > released + 30)
         list.haltScrolling()
+        #expect(!list.isDecelerating)
     }
     @Test func insetExposureDoesNotAnimateRowsInFromTheWindowEdge() {
         let list = list()

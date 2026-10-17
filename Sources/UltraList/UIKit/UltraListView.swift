@@ -298,6 +298,7 @@ public final class UltraListView: UltraScrollView {
             }
         }
         guard !items.isEmpty, viewport.contentWidth > 0, viewport.height > 0 else {
+            pendingTarget = items.isEmpty ? nil : target
             engine.halt()
             for (identity, view) in views { view.visibleRectUpdated(nil); view.removeFromSuperview(); animations.unbind(.row(identity), removeModel: true) }
             views.removeAll(); settledWindow = .init(); origin = 0
@@ -494,6 +495,8 @@ public final class UltraListView: UltraScrollView {
 
     private func updateViewportInsets(_ insets: ListInsets, compensates: Bool, transition: ListTransition) {
         guard insets != viewport.insets else { return }
+        let started = CACurrentMediaTime()
+        defer { MainThreadMonitor.shared.note("list inset compensates=\(compensates) \((CACurrentMediaTime() - started) * 1000) ms") }
         passing = true
         defer {
             passing = false
@@ -524,11 +527,13 @@ public final class UltraListView: UltraScrollView {
 
     public override func handleScroll(_ offset: Double) {
         guard !passing, !settledWindow.rows.isEmpty else { return }
+        let started = CACurrentMediaTime(), oldRange = settledWindow.range
         passing = true
         CATransaction.begin(); CATransaction.setDisableActions(true)
         defer {
             CATransaction.commit()
             passing = false
+            MainThreadMonitor.shared.note("list scroll \(oldRange)->\(settledWindow.range) \((CACurrentMediaTime() - started) * 1000) ms")
             if !deferred.isEmpty {
                 let queued = deferred; deferred.removeAll()
                 DispatchQueue.main.async { for operation in queued { operation() } }
@@ -639,6 +644,13 @@ public final class UltraListView: UltraScrollView {
             }
             guard let ready = preparationQueue.takeReady(merge: Self.mergePreparedMutations) else { return }
             let mutation = ready.value, currentViewport = mutation.viewportRequest == viewportRequest
+            if let target = mutation.target, let identity = mutation.targetIdentity {
+                preparationQueue.updateNewest { successor in
+                    if successor.target == nil, successor.items.contains(where: { $0.identity == identity }) {
+                        successor.target = target; successor.targetIdentity = identity
+                    }
+                }
+            }
             applyingPreparedMutation = true
             applyChanges(items: mutation.items, newSize: currentViewport ? mutation.size : nil, newInsets: currentViewport ? mutation.insets : nil,
                 scrollTo: preparedTarget(mutation), additionalScrollDistance: mutation.additionalDistance, anchorMode: mutation.anchorMode,

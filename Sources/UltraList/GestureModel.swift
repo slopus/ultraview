@@ -10,6 +10,7 @@ public struct ScrollVector: Sendable, Equatable, Codable {
 
 /// Gesture history belongs to the input stream, independently of axis rebuilds.
 public struct ReleaseDecision: Sendable {
+    public static let minimumDecelerationSpeed = 250.0
     public private(set) var latest = ScrollVector.zero
     public private(set) var previous = ScrollVector.zero
     public private(set) var streakCount = 0
@@ -45,7 +46,8 @@ public struct ReleaseDecision: Sendable {
     public mutating func release(recognizerVelocity: ScrollVector, at time: Double) -> Release {
         if recognizerVelocity == .zero { latest = .zero }
         let magnitude = latest.magnitudeSquared
-        guard magnitude >= 0.0625 else {
+        let threshold = Self.minimumDecelerationSpeed * 0.001
+        guard magnitude >= threshold * threshold else {
             latest = .zero; previous = .zero; resetStreak()
             return Release(decelerates: false, velocity: .zero, multiplier: 1)
         }

@@ -206,6 +206,15 @@ simulator tests check release-turn mounting and finite-edge discovery.
 All 98 theorems pass at this review. The scroll driver, opacity lifetime,
 render-server playback and keyboard integration remain outside the model.
 
+Integration rechecked at `bc756b6`: `applyChanges` also keeps a scroll target
+requested before the first layout through `pendingTarget` in the zero-viewport
+guard. The List models cover passes with non-empty items and a positive
+viewport. Retaining a target before layout, then resolving it, is outside
+them; the UIKit first-layout test checks this behavior. Prepared mutations
+also carry a still-present identity target to a pending successor when the
+older preparation finishes first. The preparation queue and its target policy
+remain outside these models.
+
 ## Immediate passes and retiming's selection at `8afead2`
 
 These rows pin `8afead2` plus the commit that adds this section.

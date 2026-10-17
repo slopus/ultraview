@@ -9,6 +9,7 @@ protocol ScrollEngine: AnyObject {
     var activeFlight: ScrollFlight? { get }
     func coveredOffsets(horizon: Double) -> ClosedRange<Double>?
     var dragging: Bool { get }
+    var decelerating: Bool { get }
     var tracking: Bool { get }
     var onScroll: ((Double) -> Void)? { get set }
     var onFlightChanged: ((ScrollFlight?) -> Void)? { get set }
@@ -75,6 +76,7 @@ final class PhysicsEngine: NSObject, ScrollEngine, UIGestureRecognizerDelegate {
     var offset: Double { core.offset }
     var activeFlight: ScrollFlight? { flightState?.flight }
     var dragging: Bool { core.isDragging }
+    var decelerating: Bool { core.isDecelerating }
     var tracking: Bool { pan.state == .began || pan.state == .changed }
     var onScroll: ((Double) -> Void)?
     var onFlightChanged: ((ScrollFlight?) -> Void)?
@@ -345,6 +347,7 @@ final class PlatformEngine: NSObject, ScrollEngine, UIScrollViewDelegate {
     var activeFlight: ScrollFlight? { nil }
     var tracking: Bool { scroll.panGestureRecognizer.state == .began || scroll.panGestureRecognizer.state == .changed }
     var dragging: Bool { scroll.isDragging }
+    var decelerating: Bool { nativeDecelerating || scroll.isDecelerating || replay?.decelerating == true || coveragePrediction != nil }
     var onScroll: ((Double) -> Void)?
     var onFlightChanged: ((ScrollFlight?) -> Void)?
     var willBeginDragging: (() -> Void)?
@@ -357,6 +360,7 @@ final class PlatformEngine: NSObject, ScrollEngine, UIScrollViewDelegate {
     private var edges: ScrollEdges?
     private var replay: PhysicsEngine?
     private var coveragePrediction: ScrollFlight?
+    private var nativeDecelerating = false
     func coveredOffsets(horizon: Double) -> ClosedRange<Double>? {
         if let coverage = replay?.coveredOffsets(horizon: horizon) { return coverage }
         return coveragePrediction?.coveredOffsets(at: scroll.layer.convertTime(CACurrentMediaTime(), from: nil), horizon: horizon)
@@ -400,7 +404,7 @@ final class PlatformEngine: NSObject, ScrollEngine, UIScrollViewDelegate {
         if scroll.contentSize != size { scroll.contentSize = size }
         writing = false
     }
-    func halt() { replay?.teardown(); replay = nil; setOffset(offset) }
+    func halt() { nativeDecelerating = false; replay?.teardown(); replay = nil; setOffset(offset) }
     func sync() {}
     func reanchorDrag() {}
     func teardown() { halt() }
@@ -453,12 +457,14 @@ final class PlatformEngine: NSObject, ScrollEngine, UIScrollViewDelegate {
     }
     func containerOrigin(height: Double, top: Bool, bottom: Bool) -> Double { top ? 0 : bottom ? 10_000_000 - height : 5_000_000 - height / 2 }
     func scrollViewDidScroll(_ scrollView: UIScrollView) { if !writing { onScroll?(offset) } }
-    func scrollViewWillBeginDragging(_ scrollView: UIScrollView) { coveragePrediction = nil; willBeginDragging?() }
+    func scrollViewWillBeginDragging(_ scrollView: UIScrollView) { nativeDecelerating = false; coveragePrediction = nil; willBeginDragging?() }
     func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate: Bool) {
+        nativeDecelerating = willDecelerate
+        if !willDecelerate { coveragePrediction = nil }
         didEndDragging?()
-        if !willDecelerate { coveragePrediction = nil; didEndScrolling?() }
+        if !willDecelerate { didEndScrolling?() }
     }
-    func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) { coveragePrediction = nil; didEndScrolling?() }
+    func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) { nativeDecelerating = false; coveragePrediction = nil; didEndScrolling?() }
     func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) { coveragePrediction = nil; didEndScrolling?() }
     func scrollViewWillEndDragging(_ scrollView: UIScrollView, withVelocity velocity: CGPoint, targetContentOffset: UnsafeMutablePointer<CGPoint>) {
         if shouldStopOnRelease?(velocity.y * 1000) == true {

@@ -28,6 +28,7 @@ final class ListsScreenController: UIViewController {
             blocker.topAnchor.constraint(equalTo: engines.bottomAnchor, constant: 8), blocker.leadingAnchor.constraint(equalTo: tabs.leadingAnchor), blocker.trailingAnchor.constraint(equalTo: tabs.trailingAnchor),
         ])
         showScreen()
+        ListChaosDriver.startIfRequested(lists: self)
     }
     override func viewDidAppear(_ animated: Bool) { super.viewDidAppear(animated); updateBlocker() }
     override func viewDidDisappear(_ animated: Bool) { super.viewDidDisappear(animated); blocking?.cancel(); blocking = nil }
@@ -148,12 +149,13 @@ final class DemoHeaderView: ListAttachmentView {
 }
 
 @MainActor
-final class LargeListController: UIViewController {
+final class LargeListController: UIViewController, ListChaosRowHost {
     let list: UltraListView
     private let actions = UIStackView(), status = UILabel()
     private var rows: [DemoListRow] = []
     private var counter = 10_000
     private let monitor = ListFrameMonitor(name: "feed")
+    var chaosRows: [DemoListRow] { get { rows } set { rows = newValue } }
     init(mode: ScrollEngineMode) { list = UltraListView(engineMode: mode); super.init(nibName: nil, bundle: nil) }
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
     override func viewDidLoad() {

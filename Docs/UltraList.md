@@ -243,6 +243,21 @@ records 60 samples of flight state, loaded indices and finite row geometry.
 Adding `-listStall YES` blocks main for 250 ms during that flight. Supply a unique
 `-listProbeRunID` and check the exported value to reject a previous launch's data.
 
+For randomized demo runs, launch with `-screen lists -listChaos <seed>
+-listChaosMinutes 5 -listChaosChecks YES`. The driver interleaves collection
+changes, scrolling, streaming, composer edits, keyboard actions, screen and
+engine changes, traits and deliberate main-thread stalls. It checks settled
+geometry, collection freshness and visible readiness after quiet periods,
+and checks structural geometry after each action. The first failed required
+check writes its seed and state before trapping. Coverage and resting
+overscroll findings are advisory and remain visible in the report.
+
+Each run writes `Documents/list-chaos-<seed>.jsonl` and a matching summary JSON.
+The summary includes action counts, readiness and settle times, memory
+footprint and weak host/root counts. Host counts cover hosts observed in the
+window and are lower bounds; the driver does not impose a memory or host-count
+limit. Add `-listHostProbe YES` for chat headers and a pinned streaming row.
+
 The keyboard and node-ownership changes passed 205 Linux tests and 295 simulator
 tests, plus nine interaction tests using actual input gestures. The 44 list
 integration and ownership tests passed separately with Address Sanitizer and
@@ -250,16 +265,33 @@ Thread Sanitizer. The interaction checks include native coast after release,
 one drag across all Compare panes, the main blocker, keyboard actions and the
 composer's growth, height cap, button positions and shrink after Send.
 
-The keyboard probe samples presentation layers during first show, hide, repeated
+An earlier keyboard probe sampled presentation layers during first show, hide, repeated
 show and an interactive dismissal in all three engines. Its maximum resting-row
 gap from the composer was below 0.001 point; the composer-to-guide gap was below
 0.001 point. Dismissal moved the keyboard through 252 points with 55 tracked
 samples, no cancelled list pans, no individual row position animations and no
 full collection passes during keyboard motion. Inset-update p99 was 0.505 ms for
-UIKit, 0.473 ms for stepped and 0.506 ms for keyframe. A drag ending above the
-keyboard kept it open and retained momentum; a completed dismissal suppressed
-that release, and the next ordinary release retained momentum. These numbers
-describe the simulator scenario, not device keyboard costs.
+UIKit, 0.473 ms for stepped and 0.506 ms for keyframe. These measurements predate
+the current release policy and describe the simulator scenario, not device
+keyboard costs.
+
+Keyboard dismissal preserves the drag's release velocity in every engine.
+Content dragged away from newest keeps its position as the keyboard inset
+shrinks; the demo performs no end-drag or keyboard-hide scroll. A gesture that
+stays at newest, or returns there with the keyboard open, keeps following the
+composer. Only the scroll engine corrects a genuine edge overscroll. The
+opt-in keyboard geometry probe records row presentation frames through release
+and for half a second after keyboard hide. Fast-release speed bounds remain
+diagnostic: presentation snapshots can repeat and catch up, and the probe does
+not reconstruct the exact rendered coast curve. The interaction tests assert
+that detached content gains no viewport or row motion animation, retains
+momentum, and stays away from newest after the coast ends. Stationary releases
+also assert a one-point maximum step between presentation samples.
+
+This follow-up passed 218 Linux tests, 328 simulator unit tests, all 64 focused
+list tests with each sanitizer, and 104 Lean theorems. The randomized and
+Stream/Send probes are available for subsequent runs; those build checks alone
+do not validate their runtime findings.
 
 Both rapid carousel return and delete/reinsert of the same node row trapped
 before the ownership repair. The regression tests now pass, including under
@@ -326,7 +358,7 @@ bundle identifier so independent test runners retain their own identities.
 
 | Area | Implemented | Deferred or not yet validated |
 |---|---|---|
-| Keyboard | The composer follows the keyboard layout guide. The fixed inverted list receives the notified occlusion as its top inset and follows the keyboard spring. Interactive guide updates disable anchor compensation; only a gesture that dismisses the keyboard suppresses its release. Presentation-layer interaction checks cover all three engines. | The configuration matrix and current physical-device interaction remain to be measured. Earlier device cold entry and UIKit keyboard/input costs exceed 16.7 ms; measured limits are described below. |
+| Keyboard | The composer follows the keyboard layout guide. The fixed inverted list receives the notified occlusion as its top inset. Content at newest follows the keyboard spring; content dragged away keeps its position and release momentum. Presentation-layer interaction checks cover all three engines. | The configuration matrix and current physical-device interaction remain to be measured. Earlier device cold entry and UIKit keyboard/input costs exceed 16.7 ms; measured limits are described below. |
 | Accessibility | Hosted nodes apply accessibility properties; text nodes publish labels and static-text traits. Viewport-sized scroll actions follow screen direction, including inverted lists. Logical row focus survives virtualization and returns to a recreated descendant when available. | Physical VoiceOver interaction coverage, including custom accessibility-element containers. |
 | Node row revisions | Ready content remains visible until the newest replacement applies its visible commit; superseded candidates are discarded. | Node-internal property and text animations. Custom row hosts receive the pass transition; the default bridge animates its outer row geometry. |
 | Trackpad | Continuous indirect pan input has its own drag baseline and rubber-band coefficient. The physics model supports indirect replay. | Physical trackpad parity, indirect recording fixtures and discrete wheel input. The committed public gesture fixtures use direct touch. |

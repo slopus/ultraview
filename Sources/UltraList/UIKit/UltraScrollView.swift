@@ -9,6 +9,7 @@ open class UltraScrollView: UIView {
     public var currentScrollOffset: Double { engine.offset }
     public var isScrollFlightActive: Bool { engine.activeFlight != nil }
     public var isDragging: Bool { engine.dragging }
+    public var isDecelerating: Bool { engine.decelerating }
     public var isTracking: Bool { engine.tracking }
     private var keyboardInput: UIScrollView?
     /// Uses the system's keyboard interaction while the selected engine owns list motion.
