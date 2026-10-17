@@ -85,10 +85,11 @@ import UltraView
         #expect(texts[49 % texts.count].view?.accessibilityLabel == "Round 49")
     }
 
-    @Test func viewsWaitForAWindow() async throws {
+    @Test func viewsWaitForAWindowWhenAskedTo() async throws {
         let child = UltraNode(style: styled { $0.height = 20 })
         let root = UltraNode(children: [child])
         let host = NodeHostView(rootNode: root)
+        host.keepsContentOutsideWindow = false
         host.frame = CGRect(x: 0, y: 0, width: 100, height: 100)
         host.layoutIfNeeded()
         await host.settle()
@@ -99,7 +100,7 @@ import UltraView
         window.frame = host.frame
         window.addSubview(host)
         window.isHidden = false
-        // The host waits for the first commit before returning to the run loop.
+        await host.settle()
         #expect(child.view != nil)
         #expect(child.interfaceState == .all)
 
@@ -108,10 +109,75 @@ import UltraView
         #expect(child.view == nil)
     }
 
+    @Test func contentIsPreparedOutsideAWindowAndKept() async throws {
+        let label = UltraTextNode("Prepared ahead")
+        let root = UltraNode(children: [label])
+        let host = NodeHostView(rootNode: root)
+        host.prepare(size: CGSize(width: 200, height: 100))
+        await host.settle()
+        #expect(host.hasContent)
+        #expect(label.interfaceState == [.preload, .display])
+        let view = try #require(label.view)
+        #expect(view.layer.contents != nil)
+
+        // In a window, the prepared views are shown as they are, before any
+        // pass runs.
+        let window = makeWindow()
+        window.frame = CGRect(x: 0, y: 0, width: 200, height: 100)
+        host.frame = window.bounds
+        window.addSubview(host)
+        window.isHidden = false
+        host.layoutIfNeeded()
+        #expect(label.view === view)
+        #expect(root.view?.superview === host)
+        await host.settle()
+        #expect(label.view === view)
+        #expect(label.interfaceState == .all)
+
+        host.removeFromSuperview()
+        await host.settle()
+        #expect(label.view === view)
+        #expect(view.layer.contents != nil)
+    }
+
+    @Test func theHostNeverWaitsForThePipeline() async throws {
+        let rasterizer = HeldRasterizer()
+        let label = UltraTextNode("Held")
+        let host = NodeHostView(rootNode: UltraNode(children: [label]), rasterizer: rasterizer)
+        let window = makeWindow()
+        window.frame = CGRect(x: 0, y: 0, width: 200, height: 100)
+        host.frame = window.bounds
+        window.addSubview(host)
+        window.isHidden = false
+
+        // Drawing is held, so no commit can arrive; layout returns anyway.
+        let start = Date()
+        host.layoutIfNeeded()
+        #expect(Date().timeIntervalSince(start) < 0.1)
+        #expect(!host.hasContent)
+        #expect(label.view == nil)
+
+        rasterizer.release.signal()
+        await host.settle()
+        #expect(host.hasContent)
+        #expect(label.view?.layer.contents != nil)
+    }
+
     @Test func listViewTakesGeometry() throws {
         let list = ListView(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
         list.setGeometry(ListGeometry(itemExtents: [10, 20]))
         #expect(list.geometry.contentExtent == 30)
+    }
+}
+/// Holds the first drawing until released.
+private final class HeldRasterizer: Rasterizer {
+    let release = DispatchSemaphore(value: 0)
+    private let base = BitmapRasterizer()
+
+    func rasterize(_ drawing: any Drawing, size: CGSize, scale: CGFloat, isCancelled: () -> Bool) -> Contents? {
+        release.wait()
+        release.signal()
+        return base.rasterize(drawing, size: size, scale: scale, isCancelled: isCancelled)
     }
 }
 #endif

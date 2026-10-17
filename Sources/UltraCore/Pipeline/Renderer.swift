@@ -49,6 +49,11 @@ final class Renderer: @unchecked Sendable {
         var width: CGFloat?
         var height: CGFloat?
         var inWindow = false
+        /// The interface state of nodes outside scroll nodes while the
+        /// host isn't in a window. Empty drops every view and bitmap;
+        /// `[.preload, .display]` keeps them, so the host shows its content
+        /// in its first frame back in a window.
+        var outsideWindow: InterfaceState = []
         var environment = RenderEnvironment()
         /// Bumped by every `update`; commits report the newest they reflect.
         var request: UInt64 = 0
@@ -110,10 +115,9 @@ final class Renderer: @unchecked Sendable {
             inputs.request += 1
             return inputs.request
         }
-        // Straight to the layout queue, even from the main thread: the host
-        // may block the main thread waiting for this pass.
-        if automatic {
-            passScheduled.store(true, ordering: .sequentiallyConsistent)
+        // Straight to the layout queue, even from the main thread, and
+        // coalesced with any pass already due.
+        if automatic, !passScheduled.exchange(true, ordering: .sequentiallyConsistent) {
             Pipeline.layoutQueue.async { self.runPass() }
         }
         return request
@@ -163,6 +167,10 @@ final class Renderer: @unchecked Sendable {
         dispatchPrecondition(condition: .onQueue(Pipeline.layoutQueue))
         passScheduled.store(false, ordering: .sequentiallyConsistent)
         guard root.state.withLock({ $0.renderer === self }) else { return }
+        Signposts.interval("Pass") { runPassSteps() }
+    }
+
+    private func runPassSteps() {
         Diagnostics.shared.recordPass()
         passCount.add(1, ordering: .relaxed)
 
@@ -187,56 +195,75 @@ final class Renderer: @unchecked Sendable {
         #endif
 
         // 1. Sync.
-        if firstPass {
-            attach(root, parent: nil, pass: pass)
-        }
-        sync(root, forced: firstPass || environmentChanged, pass: pass)
-        if previous?.width != inputs.width || previous?.height != inputs.height, let state = root.shadow.snapshot {
-            root.shadow.layout.style = layoutStyle(for: root, state: state, inputs: inputs)
+        Signposts.interval("Sync") {
+            if firstPass {
+                attach(root, parent: nil, pass: pass)
+            }
+            sync(root, forced: firstPass || environmentChanged, pass: pass)
+            if previous?.width != inputs.width || previous?.height != inputs.height, let state = root.shadow.snapshot {
+                root.shadow.layout.style = layoutStyle(for: root, state: state, inputs: inputs)
+            }
         }
 
         // 2. Layout.
-        prepareText(pass)
-        root.shadow.layout.calculateLayout(
-            width: inputs.width,
-            height: inputs.height,
-            direction: inputs.environment.isRightToLeft ? .rightToLeft : .leftToRight
-        )
+        Signposts.interval("Text") { prepareText(pass) }
+        Signposts.interval("Layout") {
+            root.shadow.layout.calculateLayout(
+                width: inputs.width,
+                height: inputs.height,
+                direction: inputs.environment.isRightToLeft ? .rightToLeft : .leftToRight
+            )
+        }
 
         // 3. Frames.
-        collectFrames(root, force: firstPass || environmentChanged, pass: pass)
+        Signposts.interval("Frames") {
+            collectFrames(root, force: firstPass || environmentChanged, pass: pass)
+        }
 
         // 4. Interface states.
-        if firstPass || environmentChanged || previous?.inWindow != inputs.inWindow {
-            assignState(root, inputs.inWindow ? .all : [], force: true, pass: pass)
-        } else {
-            for node in pass.attached where node.shadow.isAttached {
-                assignInheritedState(node, pass: pass)
+        Signposts.interval("Ranges") {
+            if firstPass || environmentChanged || previous?.inWindow != inputs.inWindow
+                || previous?.outsideWindow != inputs.outsideWindow {
+                assignState(root, rootState(inputs), force: true, pass: pass)
+            } else {
+                for node in pass.attached where node.shadow.isAttached {
+                    assignInheritedState(node, pass: pass)
+                }
             }
-        }
-        for scroll in pass.rangeUpdates where scroll.shadow.isAttached {
-            updateRanges(scroll, force: false, pass: pass)
+            for scroll in pass.rangeUpdates where scroll.shadow.isAttached {
+                updateRanges(scroll, force: false, pass: pass)
+            }
         }
 
         // 5. Properties.
-        var index = 0
-        while index < pass.toEvaluate.count {
-            evaluate(pass.toEvaluate[index], pass: pass)
-            index += 1
-        }
-        for parent in pass.childrenChanged where parent.shadow.isMounted && parent.shadow.isAttached {
-            let mounted = parent.shadow.children.filter { $0.shadow.isMounted }
-            pass.commit.update(parent) { $0.children = mounted }
+        Signposts.interval("Props") {
+            var index = 0
+            while index < pass.toEvaluate.count {
+                evaluate(pass.toEvaluate[index], pass: pass)
+                index += 1
+            }
+            for parent in pass.childrenChanged where parent.shadow.isMounted && parent.shadow.isAttached {
+                let mounted = parent.shadow.children.filter { $0.shadow.isMounted }
+                pass.commit.update(parent) { $0.children = mounted }
+            }
         }
 
         // 6. Bitmaps.
-        draw(pass)
+        Signposts.interval("Draw") { draw(pass) }
 
-        // 7. Hand over.
+        // 7. Hand over, marking what's on screen: the main thread applies
+        // that first.
+        pass.commit.updateAll { entry in
+            entry.isVisible = entry.node.shadow.interfaceState.contains(.visible)
+        }
         if !pass.commit.isEmpty || inputs.request > lastServedRequest {
             lastServedRequest = inputs.request
             sink(pass.commit)
         }
+    }
+
+    private func rootState(_ inputs: Inputs) -> InterfaceState {
+        inputs.inWindow ? .all : inputs.outsideWindow
     }
 
     // MARK: 1. Sync
@@ -385,7 +412,7 @@ final class Renderer: @unchecked Sendable {
 
     private func assignInheritedState(_ node: UltraNode, pass: Pass) {
         guard let parent = node.shadow.parent else {
-            assignState(node, pass.inputs.inWindow ? .all : [], force: true, pass: pass)
+            assignState(node, rootState(pass.inputs), force: true, pass: pass)
             return
         }
         if parent is ScrollContentNode, let scroll = parent.shadow.parent as? UltraScrollNode {
@@ -456,6 +483,10 @@ final class Renderer: @unchecked Sendable {
             if let parent = shadow.parent {
                 pass.childrenDidChange(parent)
             }
+        } else if shadow.isMounted && new.contains(.visible) != old.contains(.visible) {
+            // The entry carries the node's visibility to the main thread,
+            // which may still be holding back the node's mount.
+            pass.commit.update(node) { _ in }
         }
 
         if new.contains(.display) && !old.contains(.display) {
@@ -593,7 +624,16 @@ final class Renderer: @unchecked Sendable {
 
     private func prepareText(_ pass: Pass) {
         #if canImport(UIKit)
-        guard let measurer = measurer as? CoreTextMeasurer, !pass.textPreparations.isEmpty else { return }
+        guard let measurer = measurer as? CoreTextMeasurer else { return }
+        // New text: build the attributed strings and typesetters, the
+        // costly part of measuring, in parallel. Yoga then only breaks lines.
+        if !pass.textSources.isEmpty {
+            let sources = parallelWork(pass.textSources) { CoreTextSource($0.text) }
+            for (preparation, source) in zip(pass.textSources, sources) {
+                preparation.node.shadow.textSource = source
+            }
+        }
+        guard !pass.textPreparations.isEmpty else { return }
         let scale = pass.environment.scale
         let layouts = parallelWork(pass.textPreparations) { preparation -> [TextLayout] in
             Diagnostics.shared.recordMeasurement()
@@ -650,7 +690,10 @@ final class Pass {
     let config: LayoutConfig
     var commit: Commit
     var measuresTextInParallel = false
+    /// Text measured before at a known width: measured again in parallel.
     var textPreparations: [TextPreparation] = []
+    /// New text: its typesetter is built in parallel before layout.
+    var textSources: [TextPreparation] = []
 
     /// Nodes attached in this pass whose parents were already attached.
     var attached: [UltraNode] = []

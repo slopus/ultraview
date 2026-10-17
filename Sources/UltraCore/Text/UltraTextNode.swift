@@ -131,16 +131,25 @@ public final class UltraTextNode: UltraNode, @unchecked Sendable {
 
     override func syncContent(previous: NodeState?, current: NodeState, pass: Pass) {
         guard let content = current.text else { return }
-        guard content.version != shadow.textVersion || pass.environmentChanged || shadow.attributedText == nil else { return }
+        // The text's layouts outlive a host: another host (or a measurement)
+        // in the same environment keeps them.
+        guard content.version != shadow.textVersion || shadow.textEnvironment != pass.environment
+            || shadow.attributedText == nil else { return }
         shadow.textVersion = content.version
+        shadow.textEnvironment = pass.environment
         shadow.attributedText = content.attributedText(
             fontScale: pass.environment.fontScale,
             isDark: pass.environment.isDark
         )
+        shadow.textSource = nil
         #if canImport(UIKit)
-        if pass.measuresTextInParallel, !shadow.textLayouts.isEmpty, let text = shadow.attributedText {
-            let width = shadow.hasTextMeasureWidth ? shadow.textMeasureWidth : shadow.textLayout?.maxWidth
-            pass.textPreparations.append(TextPreparation(node: self, text: text, width: width))
+        if pass.measuresTextInParallel, let text = shadow.attributedText, text.length > 0 {
+            if !shadow.textLayouts.isEmpty {
+                let width = shadow.hasTextMeasureWidth ? shadow.textMeasureWidth : shadow.textLayout?.maxWidth
+                pass.textPreparations.append(TextPreparation(node: self, text: text, width: width))
+            } else {
+                pass.textSources.append(TextPreparation(node: self, text: text, width: nil))
+            }
         }
         #endif
         shadow.textLayouts = []
@@ -178,7 +187,15 @@ public final class UltraTextNode: UltraNode, @unchecked Sendable {
         let layout: TextLayout
         #if canImport(UIKit)
         if let measurer = measurer as? CoreTextMeasurer {
-            layout = measurer.layout(text, maxWidth: width, scale: renderer?.environment.scale ?? 1, reusing: shadow.textLayouts.first)
+            layout = measurer.layout(
+                text,
+                maxWidth: width,
+                scale: renderer?.environment.scale ?? 1,
+                reusing: shadow.textLayouts.first,
+                source: shadow.textSource as? CoreTextSource
+            )
+            // The layout keeps the source for later widths.
+            shadow.textSource = nil
         } else {
             layout = measurer.layout(text, maxWidth: width, scale: renderer?.environment.scale ?? 1)
         }

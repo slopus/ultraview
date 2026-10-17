@@ -13,51 +13,64 @@ public struct Commit: Sendable {
     /// Increases with every pass of a tree.
     public private(set) var generation: UInt64
     /// The newest host request (size, window, appearance) this commit
-    /// reflects. A host waiting for a request waits for a commit with at
-    /// least that number.
+    /// reflects.
     public private(set) var request: UInt64
-    public private(set) var entries: [ObjectIdentifier: CommitEntry]
-    private var order: [ObjectIdentifier]
+    /// Entries in the order they were first recorded, with an index by node.
+    private var storage: [CommitEntry] = []
+    private var index: [ObjectIdentifier: Int] = [:]
 
     init(generation: UInt64, request: UInt64) {
         self.generation = generation
         self.request = request
-        entries = [:]
-        order = []
     }
 
-    public var isEmpty: Bool { entries.isEmpty }
+    public var isEmpty: Bool { storage.isEmpty }
+
+    /// The number of nodes the commit touches.
+    public var count: Int { storage.count }
+
+    public var entries: [ObjectIdentifier: CommitEntry] {
+        Dictionary(uniqueKeysWithValues: storage.map { (ObjectIdentifier($0.node), $0) })
+    }
 
     public func entry(for node: UltraNode) -> CommitEntry? {
-        entries[ObjectIdentifier(node)]
+        index[ObjectIdentifier(node)].map { storage[$0] }
     }
 
     /// Entries in the order they were first recorded.
     public var orderedEntries: [CommitEntry] {
-        order.compactMap { entries[$0] }
+        storage
     }
 
     /// Records `entry`, folding it into an existing entry for the same node.
     mutating func record(_ entry: CommitEntry) {
         let key = ObjectIdentifier(entry.node)
-        if var existing = entries[key] {
-            existing.merge(entry)
-            entries[key] = existing
+        if let position = index[key] {
+            storage[position].merge(entry)
         } else {
-            entries[key] = entry
-            order.append(key)
+            index[key] = storage.count
+            storage.append(entry)
         }
     }
 
     /// Changes the entry for `node`, creating an update entry if needed.
     mutating func update(_ node: UltraNode, _ body: (inout CommitEntry) -> Void) {
         let key = ObjectIdentifier(node)
-        var entry = entries[key] ?? CommitEntry(kind: .update, node: node)
-        body(&entry)
-        if entries[key] == nil {
-            order.append(key)
+        if let position = index[key] {
+            body(&storage[position])
+        } else {
+            var entry = CommitEntry(kind: .update, node: node)
+            body(&entry)
+            index[key] = storage.count
+            storage.append(entry)
         }
-        entries[key] = entry
+    }
+
+    /// Changes every entry in place.
+    mutating func updateAll(_ body: (inout CommitEntry) -> Void) {
+        for position in storage.indices {
+            body(&storage[position])
+        }
     }
 
     /// Folds a newer commit into this one. Where both touch a node, the newer
@@ -67,7 +80,7 @@ public struct Commit: Sendable {
         precondition(newer.generation > generation, "commits must be merged in generation order")
         generation = newer.generation
         request = max(request, newer.request)
-        for entry in newer.orderedEntries {
+        for entry in newer.storage {
             record(entry)
         }
     }
@@ -95,6 +108,10 @@ public struct CommitEntry: Sendable {
     public internal(set) var contents: ContentsChange?
     /// The node's mounted children in order, when that list changed.
     public internal(set) var children: [UltraNode]?
+    /// Whether the node was on screen as of the pass. The main thread
+    /// applies everything for nodes on screen at once, and may spread the
+    /// creation of other views over several frames.
+    public internal(set) var isVisible = false
 
     init(kind: Kind, node: UltraNode) {
         self.kind = kind
@@ -113,6 +130,7 @@ public struct CommitEntry: Sendable {
             props = newer.props ?? props
             contents = newer.contents ?? contents
             children = newer.children ?? children
+            isVisible = newer.isVisible
         }
     }
 }
@@ -129,6 +147,9 @@ public enum ContentsChange: Sendable {
 /// Hands commits from the layout queue to the main thread. Holds at most one
 /// commit: a newer one posted before the main thread took the last is merged
 /// into it, so outdated values are dropped instead of applied.
+///
+/// The main thread never waits on it: it takes what's there when it's told
+/// something was posted.
 public final class CommitMailbox: Sendable {
     private let pending = Mutex<Commit?>(nil)
     private let posted = DispatchSemaphore(value: 0)
@@ -148,7 +169,9 @@ public final class CommitMailbox: Sendable {
             pending = commit
             return true
         }
-        posted.signal()
+        if wasEmpty {
+            posted.signal()
+        }
         return wasEmpty
     }
 
@@ -168,7 +191,9 @@ public final class CommitMailbox: Sendable {
         }
     }
 
-    /// Waits until something is posted or `deadline` passes.
+    /// Waits until something is posted or `deadline` passes. For consumers
+    /// on background threads, such as tests; never call it on the main
+    /// thread.
     public func waitForPost(until deadline: DispatchTime) -> Bool {
         posted.wait(timeout: deadline) == .success
     }

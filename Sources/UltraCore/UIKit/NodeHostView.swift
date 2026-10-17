@@ -4,28 +4,58 @@ import Synchronization
 import UIKit
 import UltraLayout
 
-/// Shows a node tree. The root is laid out to the host's bounds; views are
-/// created for nodes once the host is in a window.
+/// Shows a node tree. The root is laid out to the host's bounds.
 ///
-/// Commits from the pipeline are applied on the main thread as they arrive.
-/// When the host first appears in a window, and whenever its size changes,
-/// it waits (up to `firstCommitTimeout`) for the commit that reflects the new
-/// state and applies it before returning from layout, so the first frame is
-/// never blank. The waiting is the only thing the main thread does; the pass
-/// itself runs on the pipeline's queues.
+/// The main thread never waits for the pipeline. Commits are applied as they
+/// arrive: a change of size, window or appearance only asks for a pass, and
+/// the host keeps showing what it has until the pass's commit comes in.
+/// Views for nodes on screen are created in the turn their commit arrives;
+/// views for nodes off screen (ahead in a scroll node, or everything while
+/// the host is outside a window) are created a few at a time, within
+/// `mountBudget` per frame.
+///
+/// While outside a window, a host that has a size keeps its views and
+/// bitmaps, or prepares them before it first appears (see
+/// `keepsContentOutsideWindow` and `prepare(size:)`), so that it shows its
+/// content in its first frame in a window.
 @MainActor
 public final class NodeHostView: UIView {
     public let rootNode: UltraNode
     /// Main-thread cost of applying commits.
     public let statistics = CommitStatistics()
-    /// How long layout may block waiting for the first commit at a new size.
-    public var firstCommitTimeout: TimeInterval = 1
+
+    /// Whether the host keeps views and bitmaps while it's outside a window:
+    /// drawn ahead before it first appears, and kept when it leaves, so it
+    /// shows its content in its first frame in a window. Turn it off for
+    /// hosts that spend long out of a window, to give the memory back; they
+    /// then show nothing for the first frames after they come back.
+    public var keepsContentOutsideWindow = true {
+        didSet {
+            guard keepsContentOutsideWindow != oldValue else { return }
+            let state = outsideWindowState
+            renderer.update { $0.outsideWindow = state }
+        }
+    }
+
+    /// Main-thread seconds per frame for creating views of nodes that aren't
+    /// on screen yet.
+    public var mountBudget: TimeInterval = 0.004
+
+    /// Called on the main thread after each commit is applied.
+    public var onCommit: (@MainActor () -> Void)?
+
+    /// Whether the host shows a layout for its current size: a commit made
+    /// for that size has been applied (its on-screen part, at least).
+    public private(set) var hasContent = false
 
     private let mailbox = CommitMailbox()
     private let link = HostLink()
     let renderer: Renderer
+    private var queue = CommitQueue()
+    private var frameLink: CADisplayLink?
     private var laidOutSize: CGSize?
-    private var lastAppliedGeneration: UInt64 = 0
+    /// The request that set the current size.
+    private var sizeRequest: UInt64 = .max
 
     public init(rootNode: UltraNode, measurer: (any TextMeasurer)? = nil, rasterizer: (any Rasterizer)? = nil) {
         self.rootNode = rootNode
@@ -39,7 +69,7 @@ public final class NodeHostView: UIView {
             if mailbox.post(commit) {
                 DispatchQueue.main.async {
                     MainActor.assumeIsolated {
-                        link.host?.applyPendingCommit()
+                        link.host?.commitArrived()
                     }
                 }
             }
@@ -47,7 +77,12 @@ public final class NodeHostView: UIView {
         super.init(frame: .zero)
         link.host = self
         clipsToBounds = true
-        renderer.update { $0.environment = currentEnvironment() }
+        let environment = currentEnvironment()
+        let state = outsideWindowState
+        renderer.update {
+            $0.environment = environment
+            $0.outsideWindow = state
+        }
         registerForTraitChanges([
             UITraitPreferredContentSizeCategory.self,
             UITraitUserInterfaceStyle.self,
@@ -66,6 +101,7 @@ public final class NodeHostView: UIView {
     deinit {
         renderer.detach()
         MainActor.assumeIsolated {
+            frameLink?.invalidate()
             rootNode.unmountView()
         }
     }
@@ -74,15 +110,24 @@ public final class NodeHostView: UIView {
 
     public override func layoutSubviews() {
         super.layoutSubviews()
-        let size = bounds.size
+        setSize(bounds.size)
+    }
+
+    /// Lays the tree out at `size` and draws it ahead of time, before the
+    /// host has that size or is in a window, so it shows its content as
+    /// soon as it appears at that size. Returns at once; the work runs off
+    /// the main thread and views are created within `mountBudget` per frame.
+    public func prepare(size: CGSize) {
+        setSize(size)
+    }
+
+    private func setSize(_ size: CGSize) {
         guard size != laidOutSize else { return }
         laidOutSize = size
-        let request = renderer.update { inputs in
+        hasContent = false
+        sizeRequest = renderer.update { inputs in
             inputs.width = size.width
             inputs.height = size.height
-        }
-        if window != nil {
-            waitForCommit(serving: request)
         }
     }
 
@@ -90,13 +135,14 @@ public final class NodeHostView: UIView {
         super.didMoveToWindow()
         let inWindow = window != nil
         let environment = currentEnvironment()
-        let request = renderer.update { inputs in
+        renderer.update { inputs in
             inputs.inWindow = inWindow
             inputs.environment = environment
         }
-        if inWindow, laidOutSize != nil {
-            waitForCommit(serving: request)
-        }
+    }
+
+    private var outsideWindowState: InterfaceState {
+        keepsContentOutsideWindow ? [.preload, .display] : []
     }
 
     private func environmentDidChange() {
@@ -117,49 +163,82 @@ public final class NodeHostView: UIView {
 
     // MARK: Commits
 
-    /// Blocks until the pipeline has posted a commit reflecting `request`,
-    /// then applies it. Gives up after `firstCommitTimeout`; the commit is
-    /// then applied whenever it arrives.
-    private func waitForCommit(serving request: UInt64) {
-        let deadline = DispatchTime.now() + firstCommitTimeout
-        while true {
-            if let commit = mailbox.take(servingRequest: request) {
-                apply(commit)
-                return
-            }
-            guard mailbox.waitForPost(until: deadline) else { return }
-        }
-    }
-
-    func applyPendingCommit() {
+    private func commitArrived() {
         if let commit = mailbox.take() {
-            apply(commit)
+            queue.add(commit)
         }
+        applyTurn(budget: mountBudget)
     }
 
-    private func apply(_ commit: Commit) {
-        guard commit.generation > lastAppliedGeneration else { return }
-        lastAppliedGeneration = commit.generation
+    /// Applies what's queued: everything on screen, and views off screen
+    /// while `budget` lasts. Leaves the rest for the next frames.
+    private func applyTurn(budget: TimeInterval) {
+        guard let turn = queue.takeTurn() else {
+            frameLink?.isPaused = true
+            return
+        }
         let start = CACurrentMediaTime()
-        CommitApplier.apply(commit, root: rootNode, in: self)
-        statistics.record(seconds: CACurrentMediaTime() - start, entries: commit.entries.count)
+        let mounted = Signposts.mainInterval("Apply") {
+            CommitApplier.apply(turn, in: self, until: start + budget)
+        }
+        queue.putBack(turn.later.dropFirst(mounted), of: turn)
+        let seconds = CACurrentMediaTime() - start
+        let entries = turn.now.count + mounted
+        statistics.record(seconds: seconds, entries: entries)
+        MainThreadMonitor.shared.note(String(
+            format: "applied %d entries (%d of %d views off screen) in %.1f ms",
+            entries, mounted, turn.later.count, seconds * 1000
+        ))
+
+        if queue.hasWork {
+            startFrameLink()
+        } else {
+            frameLink?.isPaused = true
+        }
+        if turn.request >= sizeRequest {
+            hasContent = true
+        }
+        onCommit?()
     }
 
-    /// Waits until the pipeline is idle and applies what it produced. For
-    /// tests: the waiting happens on a background thread.
+    private func startFrameLink() {
+        if let frameLink {
+            frameLink.isPaused = false
+            return
+        }
+        let frameLink = CADisplayLink(target: link, selector: #selector(HostLink.frame))
+        frameLink.add(to: .main, forMode: .common)
+        self.frameLink = frameLink
+    }
+
+    fileprivate func frame() {
+        applyTurn(budget: mountBudget)
+    }
+
+    /// Waits until the pipeline is idle and applies everything it produced,
+    /// with no budget. For tests: the waiting happens on a background thread.
     public func settle() async {
         let renderer = renderer
         await Task.detached { renderer.waitUntilIdle() }.value
-        applyPendingCommit()
+        if let commit = mailbox.take() {
+            queue.add(commit)
+        }
+        while queue.hasWork {
+            applyTurn(budget: .infinity)
+        }
     }
 }
 
-/// Lets the commit sink, which runs on the layout queue, reach the host on
-/// the main thread without keeping it alive.
-private final class HostLink: @unchecked Sendable {
+/// Lets the commit sink, which runs on the layout queue, and the display
+/// link reach the host on the main thread without keeping it alive.
+private final class HostLink: NSObject, @unchecked Sendable {
     // @unchecked Sendable: `host` is set once on the main thread, before the
     // first commit can be posted, and read only on the main thread.
     weak var host: NodeHostView?
+
+    @MainActor @objc func frame() {
+        host?.frame()
+    }
 }
 
 /// Main-thread milliseconds spent applying commits.

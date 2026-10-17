@@ -4,19 +4,21 @@ import UIKit
 import UltraLayout
 
 /// Applies commits to views on the main thread. The work is proportional to
-/// the entries in the commit: it assigns frames, properties and contents,
-/// creates or removes views, and reorders subviews. It never measures, lays
-/// out or draws.
+/// the entries applied: it assigns frames, properties and contents, creates
+/// or removes views, and reorders subviews. It never measures, lays out or
+/// draws.
 @MainActor
 enum CommitApplier {
-    /// Applies `commit` in one Core Animation transaction without implicit
-    /// animations. `rootContainer` receives the root node's view.
-    static func apply(_ commit: Commit, root: UltraNode, in rootContainer: UIView) {
+    /// Applies a turn in one Core Animation transaction without implicit
+    /// animations: all of `turn.now`, then mounts from `turn.later` until
+    /// `deadline` (at least one). Returns how many of `turn.later` it
+    /// applied. `rootContainer` receives the root node's view.
+    static func apply(_ turn: CommitQueue.Turn, in rootContainer: UIView, until deadline: CFTimeInterval) -> Int {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }
 
-        let entries = commit.orderedEntries
+        let entries = turn.now
         for entry in entries where entry.kind == .unmount {
             entry.node.unmountView()
         }
@@ -27,16 +29,19 @@ enum CommitApplier {
         for entry in entries where entry.kind != .unmount {
             entry.node.apply(entry)
         }
+        for entry in mounts {
+            entry.node.placeView(parent: entry.parent, rootContainer: rootContainer)
+        }
 
-        if let rootView = root.mountedView {
-            if rootView.superview !== rootContainer {
-                rootContainer.addSubview(rootView)
-            }
+        var applied = 0
+        for entry in turn.later {
+            guard applied == 0 || CACurrentMediaTime() < deadline else { break }
+            entry.node.ensureView()
+            entry.node.apply(entry)
+            entry.node.placeView(parent: entry.parent, rootContainer: rootContainer)
+            applied += 1
         }
-        // A view whose parent didn't take it can't be shown; let it go.
-        for entry in mounts where entry.node !== root && entry.node.mountedView?.superview == nil {
-            entry.node.unmountView()
-        }
+        return applied
     }
 }
 
@@ -46,6 +51,39 @@ extension UltraNode {
         if mountedView == nil {
             mountedView = makeView()
         }
+    }
+
+    /// Puts a newly mounted node's view into its parent's view, among its
+    /// siblings, unless the parent already placed it while ordering its
+    /// children. A view whose parent has no view, or doesn't list it, can't
+    /// be shown: it is let go.
+    @MainActor
+    func placeView(parent: UltraNode?, rootContainer: UIView) {
+        guard let view = mountedView, view.superview == nil else { return }
+        guard let parent else {
+            rootContainer.addSubview(view)
+            return
+        }
+        guard let parentView = parent.mountedView,
+              let position = parent.mountedChildren.firstIndex(where: { $0 === self })
+        else {
+            unmountView()
+            return
+        }
+        let siblings = parent.mountedChildren
+        for sibling in siblings[..<position].reversed() {
+            if let siblingView = sibling.mountedView, siblingView.superview === parentView {
+                parentView.insertSubview(view, aboveSubview: siblingView)
+                return
+            }
+        }
+        for sibling in siblings[(position + 1)...] {
+            if let siblingView = sibling.mountedView, siblingView.superview === parentView {
+                parentView.insertSubview(view, belowSubview: siblingView)
+                return
+            }
+        }
+        parentView.insertSubview(view, at: 0)
     }
 
     /// Removes the node's view and its mounted descendants' views.
