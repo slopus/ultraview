@@ -349,6 +349,7 @@ open UltraProofs
 #print axioms ListReturn.sstep_inv
 #print axioms ListReturn.slot_once
 #print axioms ListReturn.begin_flushes
+#print axioms ListReturn.no_samples_no_return
 #print axioms ListReturn.touch_loses
 #print axioms ListReturn.touch_drops
 #print axioms ListProfile.profile_exact

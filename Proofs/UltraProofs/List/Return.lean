@@ -47,6 +47,9 @@ notifications and layouts do nothing.
 * `slot_once`, `begin_flushes`: a resolution that waits a turn for its
   timing is applied exactly once, in order, and never past the next drag's
   begin.
+* `no_samples_no_return`: the model takes the controller's events as
+  given; a drag whose finger motion never reaches it as tracked samples
+  returns 0 or nothing.
 * `touch_loses`, `touch_drops`: an outcome that resolves while a new touch
   is down after the release, and whose return the controller does not
   apply, loses the return for good.
@@ -698,5 +701,48 @@ theorem slot_once : ∀ (evs : List SEv) (b : Slot), b.Inv →
 empty. -/
 theorem begin_flushes (b : Slot) : (sstep b .begin).pending = none := by
   simp only [sstep, Slot.flush]; split <;> simp_all
+
+/-! ## When no tracked sample arrives
+
+The model takes the controller's events as given. On the device, a tracked
+sample is a layout of the chat while the keyboard guide moves under the
+finger, which UIKit runs only if some view depends on the guide. With no
+sample delivered the gesture records nothing the finger did. -/
+
+/-- **Without tracked samples nothing is returned**: a drag that sees no
+tracked sample before its release returns 0 or nothing, whatever follows. -/
+theorem no_samples_no_return (s h r gd : Rat) (post : List Ev) (hb : ∀ e ∈ post, e.isBegin = false) :
+    ∀ x ∈ (run ⟨none, []⟩ (.begin s h r :: .release gd :: post)).shifts, x = 0 := by
+  by_cases hk : r + 1 / 2 < h
+  · have hg : (step ⟨none, []⟩ (.begin s h r)).gesture = some ⟨s, h, r, s, none, false⟩ := by simp [step, hk]
+    obtain ⟨g', h1, h2, -, -, -, h5⟩ :=
+      resolution (step ⟨none, []⟩ (.begin s h r)) _ hg rfl [] post (by simp) hb gd
+    simp only [run, List.foldl] at h1
+    have hlat : g'.latest = s := by
+      rw [hg] at h1; cases h1; rfl
+    have hst : g'.start = s := h2
+    have hrun : run ⟨none, []⟩ (.begin s h r :: .release gd :: post) =
+        run (step ⟨none, []⟩ (.begin s h r)) ([] ++ .release gd :: post) := rfl
+    rw [hrun, h5]
+    intro x hx
+    simp only [step, hk, ite_true, List.nil_append] at hx
+    have : ∀ hs, ∀ y ∈ verdict g' hs, y = 0 := by
+      intro hs; induction hs with
+      | nil => simp [verdict]
+      | cons a t ih =>
+        simp only [verdict]; split
+        · intro y hy; simp only [List.mem_singleton] at hy; rw [hy, hlat, hst]; grind
+        · split
+          · simp
+          · exact ih
+    exact this _ x hx
+  · intro x hx
+    have hq : run ⟨none, []⟩ (.begin s h r :: .release gd :: post) =
+        run (step ⟨none, []⟩ (.begin s h r)) (.release gd :: post) := rfl
+    rw [hq, cleared_quiet _ _ (by simp [step, hk]) (by
+      intro e he; simp only [List.mem_cons] at he; rcases he with rfl | he
+      · rfl
+      · exact hb e he)] at hx
+    simp [step, hk] at hx
 
 end UltraProofs.ListReturn

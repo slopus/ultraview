@@ -1239,7 +1239,9 @@ Resolving clears the gesture, and a new drag replaces it.
   now does, the release returns `start - latest`.
 
 The Swift calls `end` once per `begin` (`didEndDragging` follows
-`willBeginDragging`); the model ignores a second release. The return runs
+`willBeginDragging`); the model ignores a second release. The models take the chat's
+events as delivered; that the guide's moves reach the chat as layouts is
+a hypothesis ("Keyboard guide delivery" below), which `44e5d85` broke. The return runs
 the inset-only path with compensation and a screen move of
 `start - latest`: `ListMomentum.keyboard_keeps_velocity` and
 `run_keeps_velocity` (a flight is translated and keeps its velocity),
@@ -1604,6 +1606,17 @@ overwriting the end samples, so the profile's ends are the computed ones.
   parents involved. Finding 9 is what goes wrong when a move races a pass.
 - **No cancellation in the last pass**: a cancellation comes from a mutation
   during the pass, which schedules another pass.
+- **Keyboard guide delivery** (the chat's events, `Return.Ev`,
+  `Momentum.Ev`): every move of the keyboard layout guide under the finger
+  reaches the chat as a layout (`viewDidLayoutSubviews`), and the will-change
+  notifications arrive. The first holds only if a view in the chat's
+  hierarchy is constrained to the guide, which is wiring the proofs can't
+  see: the dispatch theorems describe what happens to the events that come,
+  not that they come. `Return.no_samples_no_return`: with no tracked sample
+  the bar never follows the finger and no return is made. At `44e5d85` no
+  production view depended on the guide (only the opt-in geometry probe's
+  constraint did), so on device the bar didn't move during an interactive
+  dismissal; agfv's fix adds a production guide consumer.
 
 ## Abstractions
 
