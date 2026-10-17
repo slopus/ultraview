@@ -1,15 +1,25 @@
 # Proofs: model to code
 
-Machine-checked Lean 4 proofs that UltraView's pipeline is correct and does
-no more work than it has to, plus the places where the Swift does more.
+Machine-checked Lean 4 proofs of correctness and work bounds for an
+algorithmic model of UltraView's pipeline, under the hypotheses below.
 `scripts/proofs.sh` builds them and fails on any `sorry`, `admit`, new
 `axiom`, or a theorem depending on an axiom other than Lean's `propext`,
 `Classical.choice` and `Quot.sound`.
 
 The model follows the **algorithms and invariants**, not the Swift line by
 line: the same flags, caches, comparisons and keys, in the same order. The
-table pins each model definition to the Swift **as of commit `22e6866`**.
-When the Swift changes, re-check the rows whose files changed.
+historical table pins each model definition to the Swift **as of commit
+`22e6866`**. The later review below records coverage at **`a8fc6d3`**;
+it does not replace the historical mapping or establish a formal refinement
+from the newer Swift to Lean. When the Swift changes, re-check the rows
+whose files changed.
+
+The cost results count specific operations in the model: visits, scheduled
+passes, drawing jobs and commit entries. They do not prove minimum total
+CPU work, memory traffic, latency or electrical energy. There is no hardware
+energy model, compiler proof, or proof that all work is performed only once.
+In particular, the text-cache bound requires at most four distinct widths,
+and the newer percentage-edge repair can invoke Yoga repeatedly in one pass.
 
 ## Map
 
@@ -45,6 +55,56 @@ When the Swift changes, re-check the rows whose files changed.
 | `Text.request`, `run` | `UltraTextNode.textLayout(fitting:)` (UltraTextNode.swift:170-193): reuse the first layout that `fits`, else build, keep four |
 | `Power.Idle` | no pass running or queued, no `setNeedsSync` in flight |
 | `Optimality.roundGrid` | Yoga's `roundLayoutResultsToPixelGrid` (yoga 3.2.1, PixelGrid.cpp) |
+
+## Review at `a8fc6d3`
+
+The following references are to files at this exact commit. This is a
+source review of the changed mechanisms, not a new machine-checked proof
+of the implementation. No claim here covers subsequent changes or the
+separate list implementation.
+
+| Mechanism | Swift at `a8fc6d3` | Coverage and limits |
+| --- | --- | --- |
+| Host-update coalescing (finding 1) | `Renderer.update` (Renderer.swift:112-123), `setNeedsPass` (135-144), `runPass` (166-170) | The atomic false-to-true guard now follows `Corrected.FixedStep.update`. `fixed_passes_le` gives the model's bound with guarded updates. The original `Scheduling.Step.hostUpdate` still describes the historical unguarded implementation; queue hops and dispatch fairness remain abstractions. |
+| Sync and range scans (findings 2 and 3) | `Renderer.sync` (273-297), `updateRanges` (468-486) | Still walks children of marked ancestors and scans every scroll-content child for range updates. The dirty-queue model and contiguous-range theorem describe possible improvements, not implemented optimizations. |
+| Mailbox and host waiting (finding 4) | `CommitMailbox.post` (Commit.swift:163-176), `waitForPost` (195-200), `NodeHostView.commitArrived` (NodeHostView.swift:170-175) | The host no longer blocks waiting for a commit. Signals occur only on empty-to-full transitions. This is different from `Corrected.permitsFixed`, which models signalling only with a registered waiter: background consumers that take without waiting can still accumulate semaphore permits. `fixed_spins` does not certify this implementation. |
+| Rounding, moves and appearance (findings 5, 6 and 7) | `Renderer.runPassSteps` (Renderer.swift:186-215), `attach` / `detach` (348-395) | Yoga still rounds; moving a subtree still detaches, remounts and redraws it; appearance changes still force sync and text preparation. The corrected rounding and retained-move models have not been implemented here. |
+| Percentage edges and other layout outputs (finding 8) | `LayoutNode.calculateLayout` (LayoutNode.swift:141-152), percentage-edge tracking (173-234), `Renderer.collectFrames` (Renderer.swift:400-434) | The wrapper invalidates stale percentage edges and retries Yoga; changed padding plus border now queues evaluation even when the frame is unchanged. This addresses the reproduced dependency gap using the mechanism required by `deps_of_inputs`. The invalidation algorithm and convergence are not proved: the retry loop has a fixed limit of three additional layout calls. Arbitrary nested or cyclic percentage dependencies remain outside the guarantee. |
+| Reparenting race (finding 9) | `Renderer.attach` (Renderer.swift:348-370), `collectFrames` (432-434), `assignState` (461-464), `updateRanges` (479-485) | Removes a moved child from its former parent's shadow list and checks actual parent identity during walks. This addresses the reproduced stale-parent assignment. `Walks.assign_correct` still assumes a fixed tree and assignments from each node's actual parent; arbitrary concurrent structural changes are not proved safe. |
+| Commit representation and application | `Commit.record` / `merge` (Commit.swift:43-86), `CommitQueue` (CommitQueue.swift:17-95), `CommitApplier.apply` (CommitApplier.swift:17-54), `NodeHostView.applyTurn` (NodeHostView.swift:186-214) | Per-node merge semantics remain the relevant model, but the new queue applies visible work immediately and defers offscreen mounts and unmounts. Splitting, returning remainders and merging later commits into partially applied work are not modeled by `Commits.Sys`, `Global` or `EndToEnd`. |
+| Text layout cache | `UltraTextNode.textLayout(fitting:)` (UltraTextNode.swift:179-209), `updateContentForFrame` (229-236) | Retains four layouts and reuses a fitting layout. `Text.builds_le_distinct` models requests from an empty cache with fixed content and at most four distinct widths. Preparation in parallel, cache invalidation and eviction across more widths need separate reasoning. |
+| Offline measurement | `NodeMeasurement.measure` / `measureNow` (NodeMeasurement.swift:14-53) | Runs an unhosted tree through a temporary renderer. Ownership handoff, measurement followed by hosting, and reuse of these caches are outside the model. Changes to this API after this commit require a separate review. |
+
+The three regression cases in `ProvenPropertyTests.swift` are ordinary
+assertions at `a8fc6d3`, following their import in `f026507` and repair in
+`301f4f3`. They exercise percentage padding after a resize, text links
+inside a fixed frame, and a simulated reparenting interleaving. They support
+these particular repairs; they do not discharge the universal hypotheses.
+The historical tests on the proof branch retain their known-issue markers.
+
+### Consequences for the theorem claims
+
+- `Global.run_sound` and `EndToEnd.quiescent_shows_fresh_render` apply to
+  the whole-commit model. A proof for the newer host must additionally model
+  deferred entries, parent availability, newer commits overtaking deferred
+  work, and eventual application. An idle renderer alone is insufficient:
+  the mailbox and `CommitQueue` must also have drained. Even that condition
+  needs a refinement proof before the theorem can be claimed for this host.
+- `Renderer.transition` (Renderer.swift:515-518) now emits visibility-only
+  updates so a deferred mount can be promoted. The original
+  `entry_only_if_changed` spec records frame, props, key and children, but
+  not this scheduling state. Its entry-minimality result cannot be applied
+  unchanged to these entries.
+- `Power.idle_only_client` is a property of the scheduling model. The newer
+  host has a display link while deferred work remains and pauses it once
+  drained. That delivery mechanism is outside the model.
+- `Power.apply_local` states that an absent entry leaves that node's value
+  unchanged in a functional map. It does not bound UIKit traversal cost:
+  subtree removal, sibling search, ordering and framework work can touch
+  more views than the number of commit entries.
+- `LayoutNode.calculateLayout` can call Yoga once initially plus up to
+  three retries. Neither a single Yoga call per pipeline pass nor absence
+  of repeated measurement follows for this implementation.
 
 ## Theorems
 
@@ -91,13 +151,20 @@ When the Swift changes, re-check the rows whose files changed.
   iff it is in the display range and its key differs from its bitmap's.
 - `Pass.nodePass_unchanged`, `clean_not_evaluated`: an unchanged node gets
   no entry and no drawing; a clean one is not evaluated.
-- `Optimality.must_read`, `must_send`: any correct algorithm must read every
-  node whose change matters and send an entry for every changed view.
-  `Optimality.entry_only_if_changed`: the pipeline sends no others.
-- `Text.builds_le_distinct`: at most one text layout per distinct width.
+- `Optimality.must_read`, `must_send`: within the stated input-reading and
+  per-node commit models, a correct algorithm must read each relevant input
+  and include an entry for each changed view. `entry_only_if_changed`:
+  without cancellation and given `Deps` and `KidsOk`, an entry implies a
+  changed modeled view or a reported child-list change. It does not prove
+  that reported child-list changes are necessary or that bitmap pixels
+  differ whenever a drawing key differs.
+- `Text.builds_le_distinct`: from an empty cache with fixed text and
+  measurer, requests confined to at most four distinct widths build no more
+  layouts than that number. More widths can evict a layout and later
+  rebuild the same width; the theorem does not exclude this.
 - `Power.idle_only_client`, `idle_clean`: when idle only a client can cause
-  a step, and nothing is owed. `Power.apply_local`: the main thread touches
-  only nodes in the commit.
+  a step, and nothing is owed in the scheduling model. `Power.apply_local`:
+  the modeled view value is unchanged at any node without a commit entry.
 
 ## Hypotheses (theorem arguments or structure fields, never axioms)
 
@@ -143,6 +210,9 @@ When the Swift changes, re-check the rows whose files changed.
   enqueueing on the layout queue; the model folds the hop into the enqueue.
 
 ## Findings (Swift at `22e6866` against the optimal model)
+
+These are historical findings. The review at `a8fc6d3` above identifies
+which repairs are present and which proposed improvements remain absent.
 
 1. `Renderer.update` (Renderer.swift:115-118) enqueues a pass on every call,
    bypassing `passScheduled`. Corrected model: `Corrected.FixedStep`,
