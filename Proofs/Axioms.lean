@@ -252,3 +252,13 @@ open UltraProofs
 #print axioms ListRubber.reanchor_idle
 #print axioms ListRubber.reanchor_capped
 #print axioms ListRubber.capped_jump
+#print axioms ListDecel.coast_compose
+#print axioms ListDecel.spring_compose
+#print axioms ListDecel.coast_frames
+#print axioms ListDecel.spring_frames
+#print axioms ListDecel.engines_agree
+#print axioms ListDecel.springs_agree
+#print axioms ListDecel.sixty_is_two_onetwenty
+#print axioms ListDecel.coast_monotone
+#print axioms ListDecel.coast_rest
+#print axioms ListDecel.coast_between

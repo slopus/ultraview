@@ -600,13 +600,15 @@ ticks is the physics' own, and the `maximumAdditionalRows: 64` budget, which
 `rebalanceIn_keeps` does not need (it bounds new rows, never removes loaded
 ones).
 
-The flight-publication follow-up after `460d78f` groups `startMotion`,
+The flight-publication follow-up at `a75c785` groups `startMotion`,
 `catchMotion`, `shift`, `setEdges` and `tick` in outer Core Animation
 transactions. A parked bounds origin, its compensating animation and the
 synchronous rows and attachments mounted by their callbacks reach the render
 server together. The trajectory and coverage equations above are unchanged;
 they assume UIKit's transaction semantics and do not model intermediate
-render-server commits or pixels.
+render-server commits or pixels. A rendered probe on `460d78f` showed a
+fully blank list at one frame of the first release (3.197 s); at
+`a75c785` none of 359 frames was blank.
 
 ## Independent size and position motion at `460d78f`
 
@@ -938,6 +940,36 @@ anchor and proposed together, so the model's `Drag` is the state after it.
 Gesture delivery (that the next sample repeats the current translation when
 the finger has not moved) is outside the model.
 
+## Deceleration frame by frame at `a75c785`
+
+`Proofs/UltraProofs/List/Decel.lean` models the coast and spring branches
+of `ScrollAxis.step(milliseconds:)` (ScrollMath.swift, unchanged since
+`b82d7b9`), apart from the step that crosses an edge.
+
+| Model (`Proofs/UltraProofs/List/Decel.lean`) | Swift |
+| --- | --- |
+| `coast` | the inside branch of `step` when the destination stays inside (ScrollMath.swift:94-97): `offset + v·rate·(1 - decay)/(1 - rate)·multiplier`, `velocity *= decay` |
+| `spring` | `spring(milliseconds:)` (:114-118) |
+| `Decay` (structure fields: `pow` of a sum is the product) | `pow(rate, dt)` and `pow(0.99, dt)` for `dt ≥ 0` |
+| `coasts`, `springs` over frame lengths | the stepped engine's display-link steps (UIKit/ScrollEngine.swift:270, at least 1/120 s), and the `1/120` s steps of `ScrollTrajectory(baking:)` (ScrollTrajectory.swift:16-27) that the keyframe engine plays and the stepped engine predicts coverage from (ScrollEngine.swift:231, :235) |
+
+- `coast_frames`, `spring_frames`, `engines_agree`, `springs_agree`: steps
+  compose, so frames of any lengths with the same total time give the same
+  offset and velocity. The stepped engine's frames and the baked
+  trajectory's vertices agree exactly at every time both reach, while both
+  coast inside the edges or both spring toward the same boundary: the
+  motion does not depend on the display's frame rate.
+- `coast_monotone`, `coast_rest`: a coast never reverses or speeds up and
+  never passes `o + v·rate·m/(1 - rate)`. `coast_between`: a frame between
+  two others of one coast lies between their offsets, so splitting a coast
+  that stays inside the edges never takes another branch, and a frame
+  between two baked vertices lies between them.
+
+Not covered: the step that reaches an edge interpolates its coast time
+linearly in the offset (:99-104), so where it switches to the spring depends
+on the frame lengths; and the settling frame (`|v| < 0.01`, then a snap of
+at most half a point, :108-109) depends on them too.
+
 ## Theorems
 
 **Correctness**
@@ -1020,6 +1052,8 @@ the finger has not moved) is outside the model.
   list composes from settled places, moves, height followers and a shared
   layout layer touch at every frame with any shared term. `kink_bound`: a pinned anchor's chord is off
   its boundary only across half the viewport, and by a stated bound.
+- `ListDecel.engines_agree`, `springs_agree`: deceleration and bounce do not
+  depend on the frame rate between edge crossings.
 - `ListRubber.reanchor_no_jump`, `reanchor_idle`: an edge change during a
   drag moves nothing under the finger, and re-anchoring never drifts it.
 - `ListDepartures.inv_run`, `no_cycle`, `weld_block`, `collect_empties`:

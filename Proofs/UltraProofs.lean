@@ -27,3 +27,4 @@ import UltraProofs.List.Swipe
 import UltraProofs.List.Content
 import UltraProofs.List.Departures
 import UltraProofs.List.Rubber
+import UltraProofs.List.Decel
