@@ -949,6 +949,12 @@ drag. Swipe reveals use the same pair (SwipeReveal.swift at `76eab99`).
   that drag (`reanchor_idle` with it) and reset when a drag begins.
   `adapt_depth`: there the band's slope is a quarter of its slope at the
   edge, so the content keeps following the finger.
+- `begin_catches` (also for that change): a drag that begins on
+  overscrolled content (anchor and proposed at the shown offset,
+  translation 0) and re-anchors with the adapted range shows the caught
+  offset at once; it is `adapt_no_jump` at translation 0.
+  `begin_unanchored_jumps`: without the re-anchor the first sample shows
+  less overscroll than was caught (for coefficients at most 1).
 
 The shift before the re-anchor (`ScrollAxis.shift(by:)`, :78) moves offset,
 anchor and proposed together, so the model's `Drag` is the state after it.

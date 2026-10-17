@@ -34,6 +34,10 @@ Swift's `ulpOfOne` guard is `0 < r` here.
   twice the shown overscroll when that is past the cap (`adapt`) meets the
   cap for any overscroll, so nothing jumps; `adapt_example` is the
   500-point case. `adapt_idle`: within the cap the range is kept.
+* `begin_catches`: a drag that begins on overscrolled content and
+  re-anchors with the adapted range shows the caught offset at once.
+  `begin_unanchored_jumps`: without that re-anchor, the first sample shows
+  less overscroll than was caught.
 -/
 
 namespace UltraProofs.ListRubber
@@ -383,5 +387,43 @@ theorem adapt_depth {b c : Rat} (hb : 0 < b) (hc : 0 < c) : unband (2 * b) c b =
   have h1 : c ≠ 0 := by grind
   have h2 : b ≠ 0 := by grind
   simp only [unband]; grind
+
+/-! ## Catching overscrolled content -/
+
+/-- **Catching re-anchors to what is shown**: a drag that begins at the
+shown offset `o` (anchor and proposed both `o`, translation 0) and
+re-anchors with the adapted range shows `o` at once, however far past the
+edge `o` is. -/
+theorem begin_catches {e : Edges} {R c cap : Rat} (hR : 0 < R) (hc : 0 < c) (hcap0 : 1 / 2 ≤ cap)
+    (hcap : cap < 1) (o : Rat) :
+    let R' := adapt R cap (absR (o - clamp e o))
+    (drag e R' c (reanchor e R' c cap ⟨o, o, o⟩) 0).offset = o := by
+  intro R'
+  exact adapt_no_jump (e := e) hR hc hcap0 hcap ⟨o, o, o⟩ 0 (by simp only; grind)
+
+theorem band_lt {r c d : Rat} (hr : 0 < r) (hc : 0 < c) (hc1 : c ≤ 1) (hd : 0 < d) : band r c d < d := by
+  have hcd : 0 < c * d := Rat.mul_pos hc hd
+  have hden : r + c * d ≠ 0 := by grind
+  have hb : band r c d * (r + c * d) = r * c * d := by
+    rw [band_eq hr hc (Rat.le_of_lt hd)]; exact Rat.div_mul_cancel hden
+  have h1 : 0 < c * d * d := Rat.mul_pos hcd hd
+  have h2 : 0 ≤ d * r * (1 - c) := Rat.mul_nonneg (Rat.mul_nonneg (Rat.le_of_lt hd) (Rat.le_of_lt hr)) (by grind)
+  apply Rat.not_le.mp
+  intro hle
+  have := Rat.mul_le_mul_of_nonneg_right hle (show 0 ≤ r + c * d by grind)
+  grind
+
+/-- **Without the re-anchor, catching jumps toward the edge**: with the
+anchor at the shown offset `o` past an edge, the first drag sample bands
+`o` again and shows less overscroll than was shown, for the Swift's
+coefficient (at most 1). -/
+theorem begin_unanchored_jumps {e : Edges} {r c : Rat} (hr : 0 < r) (hc : 0 < c) (hc1 : c ≤ 1) {o : Rat}
+    (ho : clamp e o < o) : (drag e r c ⟨o, o, o⟩ 0).offset < o := by
+  have hrc : 0 < r ∧ 0 < c := ⟨hr, hc⟩
+  simp only [drag, show o - 0 = o by grind, rubber, hrc, and_self, ite_true]
+  generalize hE : clamp e o = E at ho
+  rw [if_f (show ¬o < E by grind), absR_nonneg (by grind)]
+  have := band_lt hr hc hc1 (show 0 < o - E by grind)
+  grind
 
 end UltraProofs.ListRubber
