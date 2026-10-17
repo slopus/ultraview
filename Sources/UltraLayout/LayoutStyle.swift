@@ -53,6 +53,11 @@ public struct LayoutStyle: Sendable, Equatable {
 
     public init() {}
 
+    /// Whether some padding, margin or inset is a percentage.
+    var hasPercentEdges: Bool {
+        insets.hasPercent || margins.hasPercent || paddings.hasPercent
+    }
+
     public enum Direction: Sendable, Equatable, CaseIterable {
         case inherit
         case leftToRight
@@ -173,6 +178,14 @@ public struct Edges<Value: Sendable & Equatable>: Sendable, Equatable {
         self.right = right
         self.start = start
         self.end = end
+    }
+}
+
+extension Edges where Value == Dimension {
+    var hasPercent: Bool {
+        [all, horizontal, vertical, top, left, bottom, right, start, end].contains { value in
+            if case .percent? = value { true } else { false }
+        }
     }
 }
 

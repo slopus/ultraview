@@ -38,6 +38,7 @@ targets:
   UltraViewDemoApp:
     type: application
     platform: iOS
+    productName: UltraViewDemoApp
     sources:
       - path: Sources/UltraViewDemo
     dependencies:
@@ -84,6 +85,19 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         PRODUCT_BUNDLE_IDENTIFIER: dev.ultraview.tests.UltraListInteractionTests
         TEST_TARGET_NAME: UltraViewDemoApp
+  UltraViewPerformanceTests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: Tests/UltraViewPerformanceTests
+    dependencies:
+      - target: UltraViewDemoApp
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: dev.ultraview.performance
+        CODE_SIGN_STYLE: Automatic
+        TEST_TARGET_NAME: UltraViewDemoApp
 schemes:
   UltraViewDemo:
     build:
@@ -94,14 +108,26 @@ schemes:
         UltraListTests: [test]
         UltraViewUIKitTests: [test]
         UltraListInteractionTests: [test]
+        UltraViewPerformanceTests: [test]
     run:
       config: Debug
       executable: UltraViewDemoApp
     test:
       config: Debug
       targets:
-        - UltraLayoutTests
-        - UltraCoreTests
-        - UltraListTests
-        - UltraViewUIKitTests
-        - UltraListInteractionTests
+        - name: UltraLayoutTests
+        - name: UltraCoreTests
+        - name: UltraListTests
+        - name: UltraViewUIKitTests
+        - name: UltraListInteractionTests
+        - name: UltraViewPerformanceTests
+          skipped: true
+  UltraViewPerformance:
+    build:
+      targets:
+        UltraViewDemoApp: all
+        UltraViewPerformanceTests: [test]
+    test:
+      config: Release
+      targets:
+        - name: UltraViewPerformanceTests

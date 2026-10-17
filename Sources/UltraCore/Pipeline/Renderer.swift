@@ -251,10 +251,12 @@ final class Renderer: @unchecked Sendable {
         // 6. Bitmaps.
         Signposts.interval("Draw") { draw(pass) }
 
-        // 7. Hand over, marking what's on screen: the main thread applies
-        // that first.
+        // 7. Hand over, marking what's on screen (for an unmount: what was):
+        // the main thread applies that first.
         pass.commit.updateAll { entry in
-            entry.isVisible = entry.node.shadow.interfaceState.contains(.visible)
+            if entry.kind != .unmount {
+                entry.isVisible = entry.node.shadow.interfaceState.contains(.visible)
+            }
         }
         if !pass.commit.isEmpty || inputs.request > lastServedRequest {
             lastServedRequest = inputs.request
@@ -346,8 +348,17 @@ final class Renderer: @unchecked Sendable {
     private func attach(_ node: UltraNode, parent: UltraNode?, pass: Pass) {
         let shadow = node.shadow
         if shadow.isAttached {
-            // Moved from somewhere else, in this tree or another.
+            // Moved from somewhere else, in this tree or another. The old
+            // parent may not be synced in this pass: take the node out of
+            // its list now. Another tree's own pass updates its views.
+            let oldParent = shadow.parent
             detach(node, pass: pass)
+            if let oldParent, oldParent !== parent {
+                oldParent.shadow.children.removeAll { $0 === node }
+                if oldParent.shadow.renderer === self {
+                    pass.childrenDidChange(oldParent)
+                }
+            }
         }
         shadow.isAttached = true
         shadow.parent = parent
@@ -365,7 +376,9 @@ final class Renderer: @unchecked Sendable {
         let shadow = node.shadow
         if shadow.isMounted {
             shadow.isMounted = false
-            pass.commit.record(CommitEntry(kind: .unmount, node: node))
+            var entry = CommitEntry(kind: .unmount, node: node)
+            entry.isVisible = shadow.interfaceState.contains(.visible)
+            pass.commit.record(entry)
         }
         shadow.interfaceState = []
         node.publish([])
@@ -389,6 +402,19 @@ final class Renderer: @unchecked Sendable {
         guard force || shadow.layout.hasNewLayout else { return }
         shadow.layout.hasNewLayout = false
         let frame = shadow.layout.frame
+        let padding = shadow.layout.resolvedPadding
+        let border = shadow.layout.resolvedBorder
+        let insets = Insets(
+            top: padding.top + border.top,
+            left: padding.left + border.left,
+            bottom: padding.bottom + border.bottom,
+            right: padding.right + border.right
+        )
+        if insets != shadow.contentInsets {
+            // Content (text, drawn borders) moves inside an unchanged frame.
+            shadow.contentInsets = insets
+            pass.evaluate(node)
+        }
         if frame != shadow.frame || force {
             shadow.frame = frame
             pass.evaluate(node)
@@ -403,7 +429,7 @@ final class Renderer: @unchecked Sendable {
                 pass.needsRangeUpdate(scroll)
             }
         }
-        for child in shadow.children {
+        for child in shadow.children where child.shadow.parent === node {
             collectFrames(child, force: force, pass: pass)
         }
     }
@@ -432,7 +458,8 @@ final class Renderer: @unchecked Sendable {
         if node is ScrollContentNode, let scroll = shadow.parent as? UltraScrollNode {
             updateRanges(scroll, force: force, pass: pass)
         } else {
-            for child in shadow.children {
+            // A child moved away in this pass is the new parent's to assign.
+            for child in shadow.children where child.shadow.parent === node {
                 assignState(child, state, force: force, pass: pass)
             }
         }
@@ -449,7 +476,7 @@ final class Renderer: @unchecked Sendable {
             width: scroll.shadow.frame.width,
             height: scroll.shadow.frame.height
         )
-        for child in content.shadow.children {
+        for child in content.shadow.children where child.shadow.parent === content {
             let state = cap.isEmpty
                 ? []
                 : configuration.rangeTuning
@@ -479,7 +506,9 @@ final class Renderer: @unchecked Sendable {
             shadow.isMounted = false
             shadow.sentProps = nil
             shadow.sentFrame = nil
-            pass.commit.record(CommitEntry(kind: .unmount, node: node))
+            var entry = CommitEntry(kind: .unmount, node: node)
+            entry.isVisible = old.contains(.visible)
+            pass.commit.record(entry)
             if let parent = shadow.parent {
                 pass.childrenDidChange(parent)
             }

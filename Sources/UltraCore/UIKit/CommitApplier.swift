@@ -10,10 +10,16 @@ import UltraLayout
 @MainActor
 enum CommitApplier {
     /// Applies a turn in one Core Animation transaction without implicit
-    /// animations: all of `turn.now`, then mounts from `turn.later` until
-    /// `deadline` (at least one). Returns how many of `turn.later` it
-    /// applied. `rootContainer` receives the root node's view.
-    static func apply(_ turn: CommitQueue.Turn, in rootContainer: UIView, until deadline: CFTimeInterval) -> Int {
+    /// animations: all of `turn.now`, then entries from `turn.later` until
+    /// `deadline`, at least `minimum` of them. Returns how many of
+    /// `turn.later` it applied. `rootContainer` receives the root node's
+    /// view.
+    static func apply(
+        _ turn: CommitQueue.Turn,
+        in rootContainer: UIView,
+        until deadline: CFTimeInterval,
+        minimum: Int
+    ) -> Int {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }
@@ -35,10 +41,14 @@ enum CommitApplier {
 
         var applied = 0
         for entry in turn.later {
-            guard applied == 0 || CACurrentMediaTime() < deadline else { break }
-            entry.node.ensureView()
-            entry.node.apply(entry)
-            entry.node.placeView(parent: entry.parent, rootContainer: rootContainer)
+            guard applied < minimum || CACurrentMediaTime() < deadline else { break }
+            if entry.kind == .unmount {
+                entry.node.unmountView()
+            } else {
+                entry.node.ensureView()
+                entry.node.apply(entry)
+                entry.node.placeView(parent: entry.parent, rootContainer: rootContainer)
+            }
             applied += 1
         }
         return applied
@@ -86,16 +96,22 @@ extension UltraNode {
         parentView.insertSubview(view, at: 0)
     }
 
-    /// Removes the node's view and its mounted descendants' views.
+    /// Removes the node's view and its mounted descendants' views. Only the
+    /// node's own view leaves its superview; the descendants' views go with
+    /// it, which saves UIKit a window change per view.
     @MainActor
     func unmountView() {
+        mountedView?.removeFromSuperview()
+        forgetViews()
+    }
+
+    @MainActor
+    private func forgetViews() {
         let view = mountedView
-        let children = mountedChildren
-        mountedChildren = []
-        for child in children where child.mountedView?.superview === view {
-            child.unmountView()
+        for child in mountedChildren where child.mountedView?.superview === view {
+            child.forgetViews()
         }
-        view?.removeFromSuperview()
+        mountedChildren = []
         mountedView = nil
         appliedProps = nil
     }

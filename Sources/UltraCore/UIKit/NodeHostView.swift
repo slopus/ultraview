@@ -9,9 +9,9 @@ import UltraLayout
 /// The main thread never waits for the pipeline. Commits are applied as they
 /// arrive: a change of size, window or appearance only asks for a pass, and
 /// the host keeps showing what it has until the pass's commit comes in.
-/// Views for nodes on screen are created in the turn their commit arrives;
-/// views for nodes off screen (ahead in a scroll node, or everything while
-/// the host is outside a window) are created a few at a time, within
+/// Views for nodes on screen are created and removed in the turn their
+/// commit arrives; views for nodes off screen (ahead in a scroll node, or
+/// everything while the host is outside a window) a few at a time, within
 /// `mountBudget` per frame.
 ///
 /// While outside a window, a host that has a size keeps its views and
@@ -37,8 +37,8 @@ public final class NodeHostView: UIView {
         }
     }
 
-    /// Main-thread seconds per frame for creating views of nodes that aren't
-    /// on screen yet.
+    /// Main-thread seconds per frame for creating and removing views of
+    /// nodes that aren't on screen.
     public var mountBudget: TimeInterval = 0.004
 
     /// Called on the main thread after each commit is applied.
@@ -54,6 +54,8 @@ public final class NodeHostView: UIView {
     private var queue = CommitQueue()
     private var frameLink: CADisplayLink?
     private var laidOutSize: CGSize?
+    /// Main-thread seconds spent applying since the last frame.
+    private var spentSinceFrame: CFTimeInterval = 0
     /// The request that set the current size.
     private var sizeRequest: UInt64 = .max
 
@@ -163,31 +165,41 @@ public final class NodeHostView: UIView {
 
     // MARK: Commits
 
+    /// Applies what is on screen at once; views off screen wait for the
+    /// next frame.
     private func commitArrived() {
         if let commit = mailbox.take() {
             queue.add(commit)
         }
-        applyTurn(budget: mountBudget)
+        applyTurn(budget: 0, minimum: 0)
+    }
+
+    fileprivate func frame() {
+        let budget = max(0, mountBudget - spentSinceFrame)
+        spentSinceFrame = 0
+        applyTurn(budget: budget, minimum: 1)
     }
 
     /// Applies what's queued: everything on screen, and views off screen
-    /// while `budget` lasts. Leaves the rest for the next frames.
-    private func applyTurn(budget: TimeInterval) {
+    /// while `budget` lasts (at least `minimum` of them). Leaves the rest
+    /// for the next frames.
+    private func applyTurn(budget: TimeInterval, minimum: Int) {
         guard let turn = queue.takeTurn() else {
             frameLink?.isPaused = true
             return
         }
         let start = CACurrentMediaTime()
-        let mounted = Signposts.mainInterval("Apply") {
-            CommitApplier.apply(turn, in: self, until: start + budget)
+        let applied = Signposts.mainInterval("Apply") {
+            CommitApplier.apply(turn, in: self, until: start + budget, minimum: minimum)
         }
-        queue.putBack(turn.later.dropFirst(mounted), of: turn)
+        queue.putBack(turn.later.dropFirst(applied), of: turn)
         let seconds = CACurrentMediaTime() - start
-        let entries = turn.now.count + mounted
+        spentSinceFrame += seconds
+        let entries = turn.now.count + applied
         statistics.record(seconds: seconds, entries: entries)
         MainThreadMonitor.shared.note(String(
-            format: "applied %d entries (%d of %d views off screen) in %.1f ms",
-            entries, mounted, turn.later.count, seconds * 1000
+            format: "applied %d entries (%d of %d off screen) in %.1f ms",
+            entries, applied, turn.later.count, seconds * 1000
         ))
 
         if queue.hasWork {
@@ -211,10 +223,6 @@ public final class NodeHostView: UIView {
         self.frameLink = frameLink
     }
 
-    fileprivate func frame() {
-        applyTurn(budget: mountBudget)
-    }
-
     /// Waits until the pipeline is idle and applies everything it produced,
     /// with no budget. For tests: the waiting happens on a background thread.
     public func settle() async {
@@ -224,7 +232,7 @@ public final class NodeHostView: UIView {
             queue.add(commit)
         }
         while queue.hasWork {
-            applyTurn(budget: .infinity)
+            applyTurn(budget: .infinity, minimum: 1)
         }
     }
 }

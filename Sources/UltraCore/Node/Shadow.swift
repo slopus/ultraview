@@ -24,6 +24,8 @@ final class Shadow {
 
     /// Relative to the parent, from the last layout.
     var frame = CGRect.zero
+    /// Padding plus border from the last layout: where content sits.
+    var contentInsets = Insets.zero
     var interfaceState: InterfaceState = []
     /// Whether the main thread has (or is about to have) a view for it.
     var isMounted = false

@@ -108,9 +108,10 @@ public struct CommitEntry: Sendable {
     public internal(set) var contents: ContentsChange?
     /// The node's mounted children in order, when that list changed.
     public internal(set) var children: [UltraNode]?
-    /// Whether the node was on screen as of the pass. The main thread
-    /// applies everything for nodes on screen at once, and may spread the
-    /// creation of other views over several frames.
+    /// Whether the node is on screen as of the pass; for an unmount,
+    /// whether it was. The main thread applies everything for nodes on
+    /// screen at once, and may spread the creation and removal of other
+    /// views over several frames.
     public internal(set) var isVisible = false
 
     init(kind: Kind, node: UltraNode) {
