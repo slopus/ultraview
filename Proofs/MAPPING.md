@@ -106,6 +106,23 @@ The historical tests on the proof branch retain their known-issue markers.
   three retries. Neither a single Yoga call per pipeline pass nor absence
   of repeated measurement follows for this implementation.
 
+## Host lifetime review at `7238cbe`
+
+`Renderer.detach()` now schedules a bitmap purge on the serial layout queue.
+It checks that the root still has no renderer before clearing contents, drawing
+keys, published interface state, mount state and sent properties/frames for the
+shadow subtree. Layout and text caches remain available. A replacement renderer
+registers synchronously before its first queued pass, so an earlier purge skips
+that root. The pipeline's existing per-pass subtree `detach(_:pass:)` algorithm
+is unchanged. Linux regressions cover bitmap release with retained text layout
+and detachment followed by registration of a replacement host before the queued
+purge runs.
+
+The offline-measurement and host-lifetime mapping remains outside the formal
+model. These tests do not establish a refinement theorem for renderer ownership,
+queued purging or the list-owned preparation cache. All 57 existing theorems were
+checked after this change, with no new axiom dependencies.
+
 ## Theorems
 
 **Correctness**
