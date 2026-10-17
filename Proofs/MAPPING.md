@@ -246,6 +246,54 @@ size would go below zero the key lands at once (`aGrowingRowSetImmediatelyToZero
 then `now_nonneg` does not apply and the relation can break for the rest of
 that slide. `now_nonneg` needs a curve that does not overshoot.
 
+## Inset-only path at `76bac32`
+
+`Proofs/UltraProofs/List/Insets.lean` models `updateViewportInsets`
+(UltraListView.swift:496-526), which handles an inset change that touches
+nothing else without a full pass, and `ListWindow.rebalance` with its
+covered offsets (ListWindow.swift:107-123).
+
+| Model (`Proofs/UltraProofs/List/Insets.lean`) | Swift |
+| --- | --- |
+| `Edges`, `clamp` | `ScrollEdges`, `clamped` (ScrollMath.swift:11-14) |
+| `edgesAt` | `ListWindow.edges` with `origin = base + minY` (ListWindow.swift:53-59) |
+| `move` | `resolveY`'s `compensatesInsetChange` term, `Δtop + updatedSlack − oldSlack` (UltraListView.swift, `build`'s closure) |
+| `fullPass` | the full pass for an inset change: rigid rebuild (`ListPass.rigid`), `destination = newEdges.clamped(newBase) + oldOverscroll` |
+| `cheapSwift` | `updateViewportInsets`'s `shift = oldTop − newTop` with `compensates` (UltraListView.swift:515) |
+| `cheapFixed` | the proposed destination: `clamp(new, clamp(old, offset) − move) + overscroll` |
+| `rebalanceIn` | `ListWindow.rebalance` with `low = min(offset, covered.lower) − margin`, `high = max(offset, covered.upper) + vh + margin`; fuel stands for the row budget |
+
+- `cheap_eq_full`: with `compensates`, every row is drawn where the full pass
+  draws it exactly when the inset-only path moves the offset to `cheapFixed`.
+  `cheapFixed_settled`: settled content stays settled.
+  `uncompensated_keeps_offset`: without `compensates` the offset is left alone
+  and overscroll is the engine's to return (the keyboard's detached-gesture
+  rule).
+- `rebalanceIn_keeps_covered`, `track_in_hull`: if the viewport track's
+  progress stays in `[lo, hi]`, covering the offsets it shows at `lo` and `hi`
+  keeps every row it shows at any time, whatever the budget adds. The
+  progress bound is a hypothesis: `[0, 1]` for curves that do not overshoot,
+  wider for springs and Bézier curves with control points outside it.
+
+**Gaps at `76bac32`** (the Swift at `bc756b6` is the same apart from timing
+instrumentation; repros and fixes are with the list implementation):
+
+1. `cheap_swift_overscrolls`: the inset-only path moves by the inset change
+   alone, ignoring the pin slack and the edges. A short list with its last row
+   pinned, gaining a 100-point top inset, ends 100 points past its top edge;
+   content at its end losing a 252-point top inset ends 252 points past it.
+   Both then bounce back. `cheapFixed` leaves both in place.
+2. `inset_drops_shown`: after the change, `rebalance` covers only the final
+   offset and the engine's flight, while the viewport track still shows the
+   content where it was. A change larger than the preload margin drops rows
+   on screen at its start: with 50-point rows and a 252-point inset, row 7,
+   whose band `[350, 400]` is on screen. The full pass drops the same rows,
+   since it carries outgoing rows only for a target or a row mutation.
+
+**Not covered.** The `holdsPinnedRow` branch (the pinned row's boundary
+formula) is outside `cheap_eq_full`. The momentum flight, the engine bounce
+and the render server's timing are outside the model.
+
 ## Theorems
 
 **Correctness**

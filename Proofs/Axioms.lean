@@ -110,3 +110,12 @@ open UltraProofs
 #print axioms ListPass.lockstep_iff
 #print axioms ListPass.chat_lockstep
 #print axioms ListPass.ghost_follows_witness
+#print axioms ListInsets.edgesAt_translate
+#print axioms ListInsets.cheap_eq_full
+#print axioms ListInsets.cheapFixed_settled
+#print axioms ListInsets.uncompensated_keeps_offset
+#print axioms ListInsets.cheap_swift_overscrolls
+#print axioms ListInsets.rebalanceIn_keeps
+#print axioms ListInsets.rebalanceIn_keeps_covered
+#print axioms ListInsets.track_in_hull
+#print axioms ListInsets.inset_drops_shown
