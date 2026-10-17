@@ -44,6 +44,9 @@ notifications and layouts do nothing.
   begin settles a waiting gesture the guide already decides (a return
   once, or the dismissal) before beginning afresh, resumes it at a partial
   height, and adds at most one return.
+* `slot_once`, `begin_flushes`: a resolution that waits a turn for its
+  timing is applied exactly once, in order, and never past the next drag's
+  begin.
 * `touch_loses`, `touch_drops`: an outcome that resolves while a new touch
   is down after the release, and whose return the controller does not
   apply, loses the return for good.
@@ -608,5 +611,92 @@ theorem touch_drops :
       (run (touchedOutcome (run ⟨none, []⟩ [.begin 300 336 34, .track 200 150, .release 150]) 336)
         [.layout 336, .outcome 336]).shifts = [] := by
   decide +kernel
+
+/-! ## Applying a resolution a turn later
+
+A resolution that comes with no keyboard timing (no animated layout and no
+notification duration) waits one main-queue turn for one, in a single slot
+(`pendingKeyboardResolution`); a notification with a duration, the turn
+itself, or the next drag's begin applies it. The slot holds at most one
+resolution, because a resolution clears the gesture and only a drag begin,
+which empties the slot first, makes a new one. -/
+
+/-- The slot, the applied returns, whether a gesture is held, and every
+resolution so far in order. -/
+structure Slot where
+  pending : Option Rat
+  applied : List Rat
+  gesture : Bool
+  resolved : List Rat
+
+inductive SEv
+  /-- A drag begins: the slot is applied first, then a gesture is held. -/
+  | begin
+  /-- The gesture resolves with a timing: applied at once. -/
+  | now (r : Rat)
+  /-- The gesture resolves without one: it waits in the slot. -/
+  | defer (r : Rat)
+  /-- A notification with a duration or the next turn applies the slot. -/
+  | flush
+
+def Slot.flush (b : Slot) : Slot := match b.pending with
+  | some r => { b with pending := none, applied := b.applied ++ [r] }
+  | none => b
+
+def sstep (b : Slot) : SEv → Slot
+  | .begin => { b.flush with gesture := true }
+  | .now r => if b.gesture then { b with gesture := false, applied := b.applied ++ [r], resolved := b.resolved ++ [r] } else b
+  | .defer r => if b.gesture then { b with gesture := false, pending := some r, resolved := b.resolved ++ [r] } else b
+  | .flush => b.flush
+
+def srun (b : Slot) (evs : List SEv) : Slot := evs.foldl sstep b
+
+/-- What the slot keeps: everything resolved is applied or waiting, in
+order, and a waiting resolution means no gesture is held. -/
+def Slot.Inv (b : Slot) : Prop := b.applied ++ b.pending.toList = b.resolved ∧ (b.pending.isSome → b.gesture = false)
+
+theorem sstep_inv {b : Slot} (h : b.Inv) (e : SEv) : (sstep b e).Inv := by
+  obtain ⟨h1, h2⟩ := h
+  cases e with
+  | begin =>
+    cases hp : b.pending with
+    | none => simp_all [sstep, Slot.flush, Slot.Inv]
+    | some r => simp_all [sstep, Slot.flush, Slot.Inv]
+  | now r =>
+    simp only [sstep]
+    split
+    · rename_i hg
+      have : b.pending = none := by
+        cases hp : b.pending with
+        | none => rfl
+        | some _ => simp_all
+      refine ⟨?_, ?_⟩ <;> simp_all
+    · exact ⟨h1, h2⟩
+  | defer r =>
+    simp only [sstep]
+    split
+    · rename_i hg
+      have : b.pending = none := by
+        cases hp : b.pending with
+        | none => rfl
+        | some _ => simp_all
+      refine ⟨?_, ?_⟩ <;> simp_all
+    · exact ⟨h1, h2⟩
+  | flush =>
+    cases hp : b.pending with
+    | none => simp_all [sstep, Slot.flush, Slot.Inv]
+    | some r => simp_all [sstep, Slot.flush, Slot.Inv]
+
+/-- **Every resolution is applied exactly once, in order**: after any events,
+the applied returns and the one waiting are exactly the resolutions. -/
+theorem slot_once : ∀ (evs : List SEv) (b : Slot), b.Inv →
+    (srun b evs).applied ++ (srun b evs).pending.toList = (srun b evs).resolved
+  | [], _, h => h.1
+  | e :: evs, b, h => slot_once evs (sstep b e) (sstep_inv h e)
+
+/-- **And none waits past the next drag**: a drag's begin leaves the slot
+empty. -/
+theorem begin_flushes (b : Slot) : (sstep b .begin).pending = none := by
+  simp only [sstep, Slot.flush]; split <;> simp_all
 
 end UltraProofs.ListReturn

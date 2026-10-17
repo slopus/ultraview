@@ -1284,7 +1284,11 @@ leaves (`dragBegin_open`: one return, a fresh snapshot; `dragBegin_closed`:
 the dismissal, no return, no gesture since the keyboard is at rest);
 otherwise it resumes from `composerInset`, which nothing changes while the
 gesture waits (`dragBegin_partial`). `dragBegin_Q`: a drag begin adds at
-most one return. The rows map to the Swift when it lands.
+most one return. A resolution that comes with no keyboard timing waits one
+main-queue turn for one in a single slot, applied by a notification with a
+duration, that turn, or the next drag's begin: `slot_once` (every
+resolution applied exactly once, in order) and `begin_flushes` (none waits
+past the next drag). The rows map to the Swift when it lands.
 
 Momentum rows at `f683c2f` (the section at `b896af1` maps the earlier
 controller): the model's tracking is `isTrackingKeyboard` (:23), which adds

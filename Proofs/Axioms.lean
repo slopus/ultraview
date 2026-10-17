@@ -346,5 +346,8 @@ open UltraProofs
 #print axioms ListReturn.dragBegin_closed
 #print axioms ListReturn.dragBegin_partial
 #print axioms ListReturn.dragBegin_Q
+#print axioms ListReturn.sstep_inv
+#print axioms ListReturn.slot_once
+#print axioms ListReturn.begin_flushes
 #print axioms ListReturn.touch_loses
 #print axioms ListReturn.touch_drops
