@@ -8,5 +8,7 @@ xtool/
 *.xcodeproj/
 *.xcworkspace/
 DerivedData/
+# Lean build output
+Proofs/.lake/
 # Local scratch space (temp dirs, notes)
 .context/

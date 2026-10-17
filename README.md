@@ -197,6 +197,18 @@ xcodebuild test -project UltraView.xcodeproj -scheme UltraViewDemo \
     -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
 ```
 
+## Proofs
+
+`Proofs/` contains machine-checked Lean proofs about models of scheduling,
+commit merging, rendering and selected work bounds, under explicit hypotheses.
+These proofs do not establish correctness or global optimality of the whole
+Swift implementation. `Proofs/MAPPING.md` records the historical model mapping
+and the current coverage gaps.
+
+```sh
+scripts/proofs.sh   # lake build, and fails on sorry or extra axioms
+```
+
 ## Clean-room reimplementation
 
 UltraView is a clean-room reimplementation of ideas from three projects:

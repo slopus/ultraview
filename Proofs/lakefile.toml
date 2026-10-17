@@ -1,0 +1,5 @@
+name = "UltraProofs"
+defaultTargets = ["UltraProofs"]
+
+[[lean_lib]]
+name = "UltraProofs"
