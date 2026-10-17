@@ -19,7 +19,7 @@ private func row(_ configure: (inout LayoutStyle) -> Void = { _ in }, children: 
 @Suite struct LayoutNodeTests {
     @Test func rowWithPaddingAndGap() {
         let root = row({
-            $0.padding = LayoutInsets(all: 10)
+            $0.padding = 10
             $0.gap = 5
             $0.alignItems = .flexStart
         }, children: [box(width: 40, height: 20), box(width: 60, height: 30), box(width: 20, height: 10)])
@@ -57,7 +57,9 @@ private func row(_ configure: (inout LayoutStyle) -> Void = { _ in }, children: 
         child.height = .points(30)
         var margin = LayoutStyle()
         margin.height = .percent(50)
-        margin.margin = LayoutInsets(top: 4, left: 8, bottom: 0, right: 12)
+        margin.marginTop = 4
+        margin.marginLeft = 8
+        margin.marginRight = 12
         let root = LayoutNode(children: [LayoutNode(style: child), LayoutNode(style: margin)])
 
         root.calculateLayout(width: 200, height: 100)

@@ -1,14 +1,28 @@
 import Foundation
 internal import yoga
 
+/// How a measure function's size limit is meant, per axis.
+public enum MeasureMode: Sendable, Equatable {
+    /// No limit; the value passed is meaningless.
+    case undefined
+    /// The node gets exactly this size.
+    case exactly
+    /// The node may be at most this size.
+    case atMost
+}
+
+/// Measures a leaf: `(width, widthMode, height, heightMode) -> size`.
+public typealias MeasureFunction = (CGFloat, MeasureMode, CGFloat, MeasureMode) -> CGSize
+
 /// One node of a flexbox tree, backed by a Yoga node.
 ///
 /// Not `Sendable`: a tree belongs to one thread or task at a time. Build and
-/// compute it off the main thread, then send the resulting `LayoutResult`
-/// (a value) to the main thread to apply.
+/// compute it off the main thread, then send the resulting values (frames)
+/// to the main thread to apply.
 public final class LayoutNode {
     let yogaNode: YGNodeRef
     public private(set) var children: [LayoutNode] = []
+    public private(set) weak var parent: LayoutNode?
 
     public var style: LayoutStyle {
         didSet {
@@ -18,9 +32,39 @@ public final class LayoutNode {
         }
     }
 
-    public init(style: LayoutStyle = LayoutStyle(), children: [LayoutNode] = []) {
-        yogaNode = YGNodeNew()
+    /// Sizes a leaf from its content, for example text. A node with a measure
+    /// function can't have children. Call `markDirty()` when the content
+    /// changes.
+    public var measureFunction: MeasureFunction? {
+        didSet {
+            installMeasureFunction()
+        }
+    }
+
+    /// Marks a leaf as text. Yoga then rounds its size up rather than to the
+    /// nearest pixel, so measured text never loses a pixel and wraps.
+    public var isText = false {
+        didSet {
+            YGNodeSetNodeType(yogaNode, isText ? Yoga.nodeTypeText : Yoga.nodeTypeDefault)
+        }
+    }
+
+    /// `nil` uses Yoga's defaults: frames rounded to whole points, no errata.
+    public var config: LayoutConfig? {
+        didSet {
+            if config !== oldValue {
+                YGNodeSetConfig(yogaNode, (config ?? Self.defaultConfig).yogaConfig)
+            }
+        }
+    }
+
+    private static let defaultConfig = LayoutConfig.shared(pointScaleFactor: 1, errata: .none)
+
+    public init(style: LayoutStyle = LayoutStyle(), config: LayoutConfig? = nil, children: [LayoutNode] = []) {
+        yogaNode = YGNodeNewWithConfig((config ?? Self.defaultConfig).yogaConfig)
         self.style = style
+        self.config = config
+        YGNodeSetContext(yogaNode, Unmanaged.passUnretained(self).toOpaque())
         apply(style)
         for child in children {
             addChild(child)
@@ -33,17 +77,42 @@ public final class LayoutNode {
         YGNodeFree(yogaNode)
     }
 
+    // MARK: Children
+
     /// Appends `child`. A node has at most one parent.
     public func addChild(_ child: LayoutNode) {
-        precondition(YGNodeGetOwner(child.yogaNode) == nil, "LayoutNode already has a parent")
-        YGNodeInsertChild(yogaNode, child.yogaNode, children.count)
-        children.append(child)
+        insertChild(child, at: children.count)
+    }
+
+    public func insertChild(_ child: LayoutNode, at index: Int) {
+        precondition(child.parent == nil && YGNodeGetOwner(child.yogaNode) == nil, "LayoutNode already has a parent")
+        precondition(measureFunction == nil, "a node with a measure function can't have children")
+        let index = min(max(index, 0), children.count)
+        YGNodeInsertChild(yogaNode, child.yogaNode, index)
+        children.insert(child, at: index)
+        child.parent = self
+    }
+
+    public func removeChild(_ child: LayoutNode) {
+        guard let index = children.firstIndex(where: { $0 === child }) else { return }
+        YGNodeRemoveChild(yogaNode, child.yogaNode)
+        children.remove(at: index)
+        child.parent = nil
+    }
+
+    public func removeFromParent() {
+        parent?.removeChild(self)
     }
 
     public func removeAllChildren() {
         YGNodeRemoveAllChildren(yogaNode)
+        for child in children {
+            child.parent = nil
+        }
         children.removeAll()
     }
+
+    // MARK: Computing
 
     /// Computes the layout of this subtree. `nil` leaves that axis unbounded.
     public func calculateLayout(
@@ -51,13 +120,29 @@ public final class LayoutNode {
         height: CGFloat? = nil,
         direction: LayoutStyle.Direction = .leftToRight
     ) {
-        YGNodeCalculateLayout(
-            yogaNode,
-            width.map(Float.init) ?? .nan,
-            height.map(Float.init) ?? .nan,
-            direction.yoga
-        )
+        YGNodeCalculateLayout(yogaNode, Yoga.float(width), Yoga.float(height), direction.yoga)
     }
+
+    /// Tells Yoga the measured content changed. Only for nodes with a measure
+    /// function; other nodes are dirtied by their style and children.
+    public func markDirty() {
+        precondition(measureFunction != nil, "only nodes with a measure function can be marked dirty")
+        YGNodeMarkDirty(yogaNode)
+    }
+
+    public var isDirty: Bool {
+        YGNodeIsDirty(yogaNode)
+    }
+
+    /// Set by Yoga on every node whose layout was recomputed. Clear it after
+    /// reading the frame; a subtree whose root doesn't have it set wasn't
+    /// touched by the last calculation.
+    public var hasNewLayout: Bool {
+        get { YGNodeGetHasNewLayout(yogaNode) }
+        set { YGNodeSetHasNewLayout(yogaNode, newValue) }
+    }
+
+    // MARK: Results
 
     /// The frame from the last `calculateLayout`, relative to the parent.
     public var frame: CGRect {
@@ -69,9 +154,59 @@ public final class LayoutNode {
         )
     }
 
+    /// Border widths per physical edge, with `start`/`end` resolved.
+    public var resolvedBorder: Insets {
+        Insets(
+            top: CGFloat(YGNodeLayoutGetBorder(yogaNode, Yoga.edgeTop)),
+            left: CGFloat(YGNodeLayoutGetBorder(yogaNode, Yoga.edgeLeft)),
+            bottom: CGFloat(YGNodeLayoutGetBorder(yogaNode, Yoga.edgeBottom)),
+            right: CGFloat(YGNodeLayoutGetBorder(yogaNode, Yoga.edgeRight))
+        )
+    }
+
+    /// Padding per physical edge, with `start`/`end` and percentages resolved.
+    public var resolvedPadding: Insets {
+        Insets(
+            top: CGFloat(YGNodeLayoutGetPadding(yogaNode, Yoga.edgeTop)),
+            left: CGFloat(YGNodeLayoutGetPadding(yogaNode, Yoga.edgeLeft)),
+            bottom: CGFloat(YGNodeLayoutGetPadding(yogaNode, Yoga.edgeBottom)),
+            right: CGFloat(YGNodeLayoutGetPadding(yogaNode, Yoga.edgeRight))
+        )
+    }
+
+    /// The direction this node was laid out in.
+    public var resolvedDirection: LayoutStyle.Direction {
+        rawYogaValue(YGNodeLayoutGetDirection(yogaNode)) == 2 ? .rightToLeft : .leftToRight
+    }
+
     /// The frames of this subtree from the last `calculateLayout`.
     public var result: LayoutResult {
         LayoutResult(frame: frame, children: children.map(\.result))
+    }
+
+    // MARK: Style
+
+    private func installMeasureFunction() {
+        guard measureFunction != nil else {
+            YGNodeSetMeasureFunc(yogaNode, nil)
+            return
+        }
+        precondition(children.isEmpty, "a node with a measure function can't have children")
+        // A C function pointer can't capture, so the node is found again
+        // through the context pointer set in `init`.
+        YGNodeSetMeasureFunc(yogaNode) { node, width, widthMode, height, heightMode in
+            guard let context = YGNodeGetContext(node) else {
+                return YGSize(width: 0, height: 0)
+            }
+            let owner = Unmanaged<LayoutNode>.fromOpaque(context).takeUnretainedValue()
+            let size = owner.measureFunction?(
+                CGFloat(width),
+                MeasureMode(yoga: widthMode),
+                CGFloat(height),
+                MeasureMode(yoga: heightMode)
+            ) ?? .zero
+            return YGSize(width: Float(size.width), height: Float(size.height))
+        }
     }
 
     private func apply(_ style: LayoutStyle) {
@@ -81,8 +216,21 @@ public final class LayoutNode {
         YGNodeStyleSetJustifyContent(node, style.justifyContent.yoga)
         YGNodeStyleSetAlignItems(node, style.alignItems.yoga)
         YGNodeStyleSetAlignSelf(node, style.alignSelf.yoga)
-        YGNodeStyleSetFlexGrow(node, Float(style.flexGrow))
-        YGNodeStyleSetFlexShrink(node, Float(style.flexShrink))
+        YGNodeStyleSetAlignContent(node, style.alignContent.yoga)
+        YGNodeStyleSetFlexWrap(node, style.flexWrap.yoga)
+        YGNodeStyleSetPositionType(node, style.position.yoga)
+        YGNodeStyleSetDisplay(node, style.display.yoga)
+        YGNodeStyleSetOverflow(node, style.overflow.yoga)
+        YGNodeStyleSetBoxSizing(node, style.boxSizing.yoga)
+
+        YGNodeStyleSetFlex(node, Yoga.float(style.flex))
+        YGNodeStyleSetFlexGrow(node, Yoga.float(style.flexGrow))
+        YGNodeStyleSetFlexShrink(node, Yoga.float(style.flexShrink))
+        switch style.flexBasis {
+        case .auto: YGNodeStyleSetFlexBasisAuto(node)
+        case .points(let value): YGNodeStyleSetFlexBasis(node, Float(value))
+        case .percent(let value): YGNodeStyleSetFlexBasisPercent(node, Float(value))
+        }
 
         switch style.width {
         case .auto: YGNodeStyleSetWidthAuto(node)
@@ -94,14 +242,54 @@ public final class LayoutNode {
         case .points(let value): YGNodeStyleSetHeight(node, Float(value))
         case .percent(let value): YGNodeStyleSetHeightPercent(node, Float(value))
         }
+        setBound(style.minWidth, YGNodeStyleSetMinWidth, YGNodeStyleSetMinWidthPercent)
+        setBound(style.minHeight, YGNodeStyleSetMinHeight, YGNodeStyleSetMinHeightPercent)
+        setBound(style.maxWidth, YGNodeStyleSetMaxWidth, YGNodeStyleSetMaxWidthPercent)
+        setBound(style.maxHeight, YGNodeStyleSetMaxHeight, YGNodeStyleSetMaxHeightPercent)
+        YGNodeStyleSetAspectRatio(node, Yoga.float(style.aspectRatio))
 
-        for (edge, value) in style.padding.yogaEdges {
-            YGNodeStyleSetPadding(node, edge, Float(value))
+        for (edge, value) in style.insets.yogaEdges {
+            switch value {
+            case nil: YGNodeStyleSetPosition(node, edge, .nan)
+            case .auto: YGNodeStyleSetPositionAuto(node, edge)
+            case .points(let value): YGNodeStyleSetPosition(node, edge, Float(value))
+            case .percent(let value): YGNodeStyleSetPositionPercent(node, edge, Float(value))
+            }
         }
-        for (edge, value) in style.margin.yogaEdges {
-            YGNodeStyleSetMargin(node, edge, Float(value))
+        for (edge, value) in style.margins.yogaEdges {
+            switch value {
+            case nil: YGNodeStyleSetMargin(node, edge, .nan)
+            case .auto: YGNodeStyleSetMarginAuto(node, edge)
+            case .points(let value): YGNodeStyleSetMargin(node, edge, Float(value))
+            case .percent(let value): YGNodeStyleSetMarginPercent(node, edge, Float(value))
+            }
         }
-        YGNodeStyleSetGap(node, Yoga.gutterAll, Float(style.gap))
+        for (edge, value) in style.paddings.yogaEdges {
+            switch value {
+            case nil, .auto: YGNodeStyleSetPadding(node, edge, .nan)
+            case .points(let value): YGNodeStyleSetPadding(node, edge, Float(value))
+            case .percent(let value): YGNodeStyleSetPaddingPercent(node, edge, Float(value))
+            }
+        }
+        for (edge, value) in style.borderWidths.yogaEdges {
+            YGNodeStyleSetBorder(node, edge, Yoga.float(value))
+        }
+
+        YGNodeStyleSetGap(node, Yoga.gutterAll, Yoga.float(style.gap))
+        YGNodeStyleSetGap(node, Yoga.gutterRow, Yoga.float(style.rowGap))
+        YGNodeStyleSetGap(node, Yoga.gutterColumn, Yoga.float(style.columnGap))
+    }
+
+    private func setBound(
+        _ value: Dimension,
+        _ setPoints: (YGNodeRef, Float) -> Void,
+        _ setPercent: (YGNodeRef, Float) -> Void
+    ) {
+        switch value {
+        case .auto: setPoints(yogaNode, .nan)
+        case .points(let points): setPoints(yogaNode, Float(points))
+        case .percent(let percent): setPercent(yogaNode, Float(percent))
+        }
     }
 }
 

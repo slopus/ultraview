@@ -64,12 +64,10 @@ final class DemoViewController: UIViewController {
 enum DemoScreen {
     static func layout(size: CGSize, insets: UIEdgeInsets) -> LayoutResult {
         var root = LayoutStyle()
-        root.padding = LayoutInsets(
-            top: insets.top + 16,
-            left: insets.left + 16,
-            bottom: insets.bottom + 16,
-            right: insets.right + 16
-        )
+        root.paddingTop = .points(insets.top + 16)
+        root.paddingLeft = .points(insets.left + 16)
+        root.paddingBottom = .points(insets.bottom + 16)
+        root.paddingRight = .points(insets.right + 16)
         root.gap = 16
 
         var header = LayoutStyle()

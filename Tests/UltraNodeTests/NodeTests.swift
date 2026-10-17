@@ -10,7 +10,7 @@ import UltraNode
         var body = LayoutStyle()
         body.flexGrow = 1
         var root = LayoutStyle()
-        root.padding = LayoutInsets(top: 20, left: 0, bottom: 0, right: 0)
+        root.paddingTop = 20
         let tree = Node(style: root, children: [Node(style: header), Node(style: body)])
 
         let result = tree.layout(width: 320, height: 480)
