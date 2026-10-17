@@ -243,6 +243,13 @@ open UltraProofs
 #print axioms ListContent.join_remap
 #print axioms ListContent.join_within
 #print axioms ListContent.clamp_sample
+#print axioms ListContent.valueProgress_eq
+#print axioms ListContent.bezierSlope_nonneg
+#print axioms ListContent.bezier_rise
+#print axioms ListContent.bezier_mono
+#print axioms ListContent.bezier_bounded
+#print axioms ListContent.solved_mono
+#print axioms ListContent.catchup_ends
 #print axioms ListLayers.follower_exact
 #print axioms ListLayers.prefix_seam
 #print axioms ListLayers.prefix_anchor

@@ -40,6 +40,12 @@ retimings.
   `join_remap`, `join_within`: unclamped, it shows the remaining progress
   rescaled, within `[s, T]` for a forward, non-overshooting curve; an
   overshoot is magnified by `1 / (1 - p)` (`clamp_sample`).
+* `valueProgress_eq`: the row's value progress `(shown - from) / (to - from)`
+  is its curve progress. `bezier_mono`, `bezier_bounded`, `solved_mono`: a
+  Bézier timing curve with control points in `[0, 1]` never moves backward
+  in time and stays in `[0, 1]`, so `join_within` applies to it.
+  `catchup_ends`: the catch-up starts at the snapshot and lands on the
+  target when its own timing ends.
 * `alone_drifts`: retiming the row alone (an inner animation left on the
   old timing) changes the difference mid-flight.
 -/
@@ -331,6 +337,102 @@ theorem clamp_sample :
       (100 : Rat) + (150 - 100) * (21 / 20) = 305 / 2 := by
   refine ⟨by unfold joinStart; decide +kernel, by unfold clampTo joinStart; decide +kernel,
     by decide +kernel, by decide +kernel⟩
+
+/-! ### The planned late join: remap where the row can't overshoot
+
+Content arriving late joins the row's running size animation with the
+corrected start when that animation can't overshoot, taking `p` from the
+row's value, `(presented - from) / (to - from)`; otherwise it catches up on
+a short timing of its own. -/
+
+/-- **The row's value progress is its curve progress**: reading `p` from the
+presented value gives the `progress` `join_remap` uses. -/
+theorem valueProgress_eq (C : Curves) (tr : Track) (time : Rat) (h : tr.dst ≠ tr.src) :
+    (tr.value C time - tr.src) / (tr.dst - tr.src) = tr.progress C time := by
+  have hne : tr.dst - tr.src ≠ 0 := by grind
+  have e : tr.value C time - tr.src = tr.progress C time * (tr.dst - tr.src) := by
+    simp only [Track.value]; grind
+  rw [e, Rat.div_def, Rat.mul_assoc, Rat.mul_inv_cancel _ hne, Rat.mul_one]
+
+/-- A cubic Bézier timing curve's progress at parameter `u`, with control
+points' `y` values `y1` and `y2` (ends at 0 and 1). -/
+def bezierY (y1 y2 u : Rat) : Rat := 3 * y1 * u * (1 - u) * (1 - u) + 3 * y2 * u * u * (1 - u) + u * u * u
+
+/-- Its slope over 3, in Bernstein form. -/
+def bezierSlope (y1 y2 u : Rat) : Rat :=
+  (1 - u) * (1 - u) * y1 + 2 * u * (1 - u) * (y2 - y1) + u * u * (1 - y2)
+
+/-- **With control `y` values in `[0, 1]` the slope is never negative**: as
+`(y1 - y2)(1 - 2u)² + y2 (1 - u)² + (1 - y1) u²` when `y2 < y1`, and term by
+term otherwise. -/
+theorem bezierSlope_nonneg {y1 y2 u : Rat} (h1 : 0 ≤ y1 ∧ y1 ≤ 1) (h2 : 0 ≤ y2 ∧ y2 ≤ 1) (hu : 0 ≤ u ∧ u ≤ 1) :
+    0 ≤ bezierSlope y1 y2 u := by
+  have a := Rat.mul_nonneg (Rat.mul_nonneg (show 0 ≤ 1 - u by grind) (show 0 ≤ 1 - u by grind)) h1.1
+  have c := Rat.mul_nonneg (Rat.mul_nonneg hu.1 hu.1) (show 0 ≤ 1 - y2 by grind)
+  by_cases h : y1 ≤ y2
+  · have b := Rat.mul_nonneg (Rat.mul_nonneg (Rat.mul_nonneg (show (0 : Rat) ≤ 2 by decide) hu.1)
+      (show 0 ≤ 1 - u by grind)) (show 0 ≤ y2 - y1 by grind)
+    simp only [bezierSlope]; grind
+  · have sq : 0 ≤ (1 - 2 * u) * (1 - 2 * u) := by
+      by_cases hs : 0 ≤ 1 - 2 * u
+      · exact Rat.mul_nonneg hs hs
+      · have : 0 ≤ -(1 - 2 * u) := by grind
+        have := Rat.mul_nonneg this this; grind
+    have d' := Rat.mul_nonneg (show 0 ≤ y1 - y2 by grind) sq
+    have e := Rat.mul_nonneg (Rat.mul_nonneg (show 0 ≤ 1 - u by grind) (show 0 ≤ 1 - u by grind)) h2.1
+    have f := Rat.mul_nonneg (Rat.mul_nonneg hu.1 hu.1) (show 0 ≤ 1 - y1 by grind)
+    have id : bezierSlope y1 y2 u = (y1 - y2) * ((1 - 2 * u) * (1 - 2 * u)) + (1 - u) * (1 - u) * y2 +
+        u * u * (1 - y1) := by simp only [bezierSlope]; grind
+    rw [id]; grind
+
+/-- Simpson's rule is exact for a cubic: the rise over `[a, b]` is the width
+times the slope's weighted mean at the ends and the middle. -/
+theorem bezier_rise (y1 y2 a b : Rat) :
+    2 * (bezierY y1 y2 b - bezierY y1 y2 a) =
+      (b - a) * (bezierSlope y1 y2 a + 4 * bezierSlope y1 y2 ((a + b) / 2) + bezierSlope y1 y2 b) := by
+  simp only [bezierY, bezierSlope]; grind
+
+/-- **A Bézier curve with control `y` values in `[0, 1]` never moves
+backward**, and so stays within `[0, 1]`. -/
+theorem bezier_mono {y1 y2 a b : Rat} (h1 : 0 ≤ y1 ∧ y1 ≤ 1) (h2 : 0 ≤ y2 ∧ y2 ≤ 1) (ha : 0 ≤ a) (hab : a ≤ b)
+    (hb : b ≤ 1) : bezierY y1 y2 a ≤ bezierY y1 y2 b := by
+  have s1 := bezierSlope_nonneg h1 h2 ⟨ha, by grind⟩
+  have s2 := bezierSlope_nonneg h1 h2 (u := (a + b) / 2) ⟨by grind, by grind⟩
+  have s3 := bezierSlope_nonneg h1 h2 ⟨by grind, hb⟩
+  have := Rat.mul_nonneg (show 0 ≤ b - a by grind) (show 0 ≤ bezierSlope y1 y2 a +
+    4 * bezierSlope y1 y2 ((a + b) / 2) + bezierSlope y1 y2 b by grind)
+  have := bezier_rise y1 y2 a b
+  grind
+
+theorem bezier_bounded {y1 y2 u : Rat} (h1 : 0 ≤ y1 ∧ y1 ≤ 1) (h2 : 0 ≤ y2 ∧ y2 ≤ 1) (hu : 0 ≤ u ∧ u ≤ 1) :
+    0 ≤ bezierY y1 y2 u ∧ bezierY y1 y2 u ≤ 1 := by
+  have lo := bezier_mono h1 h2 (Rat.le_refl) hu.1 hu.2
+  have hi := bezier_mono h1 h2 hu.1 hu.2 (Rat.le_refl)
+  simp only [bezierY] at lo hi ⊢; grind
+
+/-- **Solved for time, it still never moves backward**: Core Animation
+finds the parameter whose `x` is the phase; with `x` nondecreasing (its
+control `x` values in `[0, 1]`, the same lemma), a later phase has a later
+parameter, so a later progress. -/
+theorem solved_mono {x y : Rat → Rat} (hx : ∀ a b, 0 ≤ a → a ≤ b → b ≤ 1 → x a ≤ x b)
+    (hy : ∀ a b, 0 ≤ a → a ≤ b → b ≤ 1 → y a ≤ y b) (solve : Rat → Rat) (hs : ∀ φ, x (solve φ) = φ)
+    (hr : ∀ φ, 0 ≤ solve φ ∧ solve φ ≤ 1) {φ1 φ2 : Rat} (h : φ1 ≤ φ2) : y (solve φ1) ≤ y (solve φ2) := by
+  rcases Rat.le_iff_lt_or_eq.mp h with hl | he
+  · have : solve φ1 ≤ solve φ2 := Rat.not_lt.mp fun hlt => by
+      have := hx _ _ (hr φ2).1 (Rat.le_of_lt hlt) (hr φ1).2
+      rw [hs, hs] at this; grind
+    exact hy _ _ (hr φ1).1 this (hr φ2).2
+  · rw [he]; exact Rat.le_refl
+
+/-- **The catch-up starts where the content is and lands on the target**:
+its own track from the snapshot `s` to `T`, begun at the join. -/
+theorem catchup_ends (C : Curves) (s T join d : Rat) (c f : Nat) (hd : 0 < d) :
+    let tr : Track := ⟨0, s, T, join, ⟨d, c, f⟩⟩
+    tr.value C join = s ∧ ∀ time, join + d ≤ time → tr.value C time = T := by
+  refine ⟨value_start C _ hd, fun time ht => value_at_rest C _ fun h => ?_⟩
+  have := h.2; simp only [Track.deadline] at this
+  have : max 0 d = d := by simp only [Rat.max_def]; split <;> grind
+  grind
 
 /-- The sample: a row 100 → 150 over a second, a bubble 10 above its edge.
 At 0.5 s an immediate pass grows the row's destination to 170. Moving both

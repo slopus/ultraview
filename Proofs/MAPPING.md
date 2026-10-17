@@ -1005,7 +1005,19 @@ assumes that is the value at `t0`. Not covered:
   (`join_remap`), which stays within `[s, T]` from the join on for any
   curve that moves forward without overshooting (`join_within`); a spring's
   overshoot past its end is magnified by `1 / (1 - p)` (`clamp_sample`: 25
-  points past at `p = 0.9` where the row is 2.5 past);
+  points past at `p = 0.9` where the row is 2.5 past). f4yx's chosen fix
+  (hash to come, `NodeAnimationTiming.joined(at:)` and
+  `TransitionJoin.start(shown:to:progress:)`): unclamped on the row's timing
+  when it can't overshoot, `p` read from the row's value progress, which is
+  its curve progress (`valueProgress_eq`); a basic curve with control
+  points in `[0, 1]` never moves backward and stays in `[0, 1]`
+  (`bezier_mono`, `bezier_bounded`, `solved_mono`: Simpson's rule on the
+  cubic, and the slope's Bernstein form), so `join_within` holds for it. A
+  critically or overdamped spring from rest not overshooting is an
+  assumption (it needs the exponential). Otherwise (`dampedSpring`, a row
+  moving less than half a point, `p >= 0.98`) a 0.15 s ease-out of its own
+  from `s` to `T`: no jump and lands on `T` (`catchup_ends`), off the row's
+  clock until then. Colors and transforms keep the jump;
 - in `shift`, a child whose parent is unmatched: positions carry only
   within a matched parent (NodeTransitionAnimator.swift:347-352), so its
   position lands at the new value while the row still moves, outside
