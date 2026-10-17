@@ -52,6 +52,9 @@ Events are arbitrary: the theorems hold for every order.
   the offset or the flight: the hide that finishes the dismissal does not
   snap the content. `untouched_drag_resumes`: a drag that leaves the
   keyboard alone turns compensation back on.
+* `finish_keeps_engine`: finishing the viewport track at once makes no
+  engine call, so a flight goes on unchanged; `run_keeps_velocity` covers
+  any mix of it and keyboard changes.
 * `touch_unpins`, `run_unpinned`: after a touch, no event but a scroll
   target to the pinned row sets `holdsPinnedRow`, so the pinned-row branch
   never re-pins content the user moved.
@@ -121,6 +124,9 @@ inductive Ev
   | land (o : Rat)
   /-- `applyChanges(scrollTo:)` to the pinned row. -/
   | pinTarget
+  /-- `finishViewportTransition()`: the viewport track lands at once; no
+  engine call. -/
+  | finishViewport
 
 /-- The chat's `followsComposer` after a keyboard notification:
 `if !isTracking, overlap grows { followsComposer = true }`. -/
@@ -155,6 +161,7 @@ def step (B : Baker) (s : St) : Ev → St
     | none => s
   | .land o => { s with offset := o, flight := none }
   | .pinTarget => { s with holds := true }
+  | .finishViewport => s
 
 def run (B : Baker) (s : St) (evs : List Ev) : St := evs.foldl (step B) s
 
@@ -179,9 +186,10 @@ theorem keyboard_keeps_velocity (B : Baker) (s : St) (f : Flight) (hf : s.flight
   refine ⟨f.shiftBy (kbShift s t e' mv pin grows), by simp [step, hf], fun τ => rfl, fun τ => ?_⟩
   simp only [Flight.offset, Flight.shiftBy]; grind
 
-/-- Keyboard changes only. -/
+/-- Keyboard changes only, and the viewport track finishing. -/
 def Ev.IsKeyboard : Ev → Prop
   | .keyboard .. => True
+  | .finishViewport => True
   | _ => False
 
 /-- **However many keyboard changes arrive during a flight, its velocity at
@@ -197,6 +205,7 @@ theorem run_keeps_velocity (B : Baker) : ∀ (evs : List Ev), (∀ e ∈ evs, e.
       obtain ⟨f1, h1, v1, _⟩ := keyboard_keeps_velocity B s f hf t e' mv pin grows
       obtain ⟨f', h', v'⟩ := run_keeps_velocity B evs (fun e h => hk e (by simp [h])) _ f1 h1
       exact ⟨f', h', fun τ => (v' τ).trans (v1 τ)⟩
+    | finishViewport => exact run_keeps_velocity B evs (fun e h => hk e (by simp [h])) s f hf
     | _ => exact he.elim
 
 /-- **Re-baking is continuous**: the new flight starts at the old one's
@@ -339,11 +348,13 @@ theorem untouched_drag_resumes (B : Baker) (s : St) (ht : s.tracking = true) (u 
   simp [step, ht]
 
 /-- What may follow a dismissal without the user acting again: the keyboard
-finishing its hide, flight ticks and the landing. -/
+finishing its hide, the viewport track finishing, flight ticks and the
+landing. -/
 def Ev.Quiet : Ev → Prop
   | .keyboard _ _ _ _ grows => grows = false
   | .rebake _ => True
   | .land _ => True
+  | .finishViewport => True
   | _ => False
 
 theorem step_quiet (B : Baker) (s : St) (e : Ev) (he : e.Quiet) (ht : s.tracking = false)
@@ -355,6 +366,7 @@ theorem step_quiet (B : Baker) (s : St) (e : Ev) (he : e.Quiet) (ht : s.tracking
     simp [step, keyboardFollows, ht, hh, hf, he]
   | rebake t => simp only [step]; split <;> simp_all
   | land o => simp_all [step]
+  | finishViewport => exact ⟨ht, hh, hf⟩
   | _ => exact he.elim
 
 /-- **No snap after a dismissal.** Once the finger is up after an interactive
@@ -370,6 +382,7 @@ theorem dismissed_never_moved (B : Baker) : ∀ (pre : List Ev) (e : Ev),
     | keyboard t e' mv pin grows =>
       simp only [Ev.Quiet] at he
       exact no_write_unless_following B s t e' mv pin grows hh (by simp [keyboardFollows, ht, hf, he])
+    | finishViewport => exact ⟨rfl, rfl⟩
     | _ => exact hk.elim
   | x :: pre, e, hp, he, hk, s, ht, hh, hf => by
     obtain ⟨ht', hh', hf'⟩ := step_quiet B s x (hp x (by simp)) ht hh hf
@@ -385,6 +398,11 @@ theorem dismissal_then_quiet (B : Baker) (s : St) (ht : s.tracking = true) (hh :
       (step B (run B (step B s (.release u t false)) pre) e).flight = (run B (step B s (.release u t false)) pre).flight :=
   dismissed_never_moved B pre e hp he hk _ (by simp [step, ht]) (by simp [step, ht, hh])
     (by simp [step, ht])
+
+/-- **Finishing the viewport track leaves the engine alone**: the offset,
+the flight (so its velocity at every time) and every flag are as they
+were. -/
+theorem finish_keeps_engine (B : Baker) (s : St) : step B s .finishViewport = s := rfl
 
 /-! ## No re-pinning after a touch -/
 

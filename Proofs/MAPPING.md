@@ -1271,6 +1271,22 @@ off, as the release does. Resolutions apply only with `isTrackingKeyboard`
 false, and while it is true every inset goes in uncompensated, so
 `tracking_never_writes` holds for the new paths.
 
+**Finishing the viewport track (agfv's, hash to come).** As described:
+`UltraListView.finishViewportTransition()` replaces a running viewport
+track with one from 0 to 0 at once (`transition: .none`), re-renders
+attachments and reports visibility, and makes no engine call; with no track
+it does nothing. The chat calls it, with the composer bar's clock ended in
+the same turn, when a keyboard notification reports the keyboard already
+hidden (begin and end frames equal, off screen) or on `didHide`.
+`Ev.finishViewport` steps to the same state: `finish_keeps_engine` (the
+offset, the flight and its velocity, and every flag unchanged), and
+`run_keeps_velocity` and `dismissed_never_moved` include it.
+`ListPass.finish_together`: landing the viewport track and the bar in one
+turn keeps their distance; `finish_alone`: landing one leaves the gap off
+by `Δ (1 - q)`, what is left of the other's move (the 90 points the bar's
+clock left before, with the same-inset guard). The rows map to the Swift
+when it lands.
+
 ## Elastic resize at `44f8a0c`
 
 `Proofs/UltraProofs/List/Elastic.lean` covers a bubble that resizes with its

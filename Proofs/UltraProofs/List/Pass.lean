@@ -40,6 +40,8 @@ All positions here are at one progress `p` of the pass's timing; by
   equals the input's, that is, when the host passes the input's own curve
   and duration and both start in one transaction. `chat_lockstep` applies
   this to the inverted chat, whose top inset is the composer's occlusion.
+  `finish_together`, `finish_alone`: landing both in one turn keeps the
+  distance; landing one alone opens it by what is left of the other's move.
 * `ghost_follows_witness`: a departure block welded to a surviving row's
   edge stays on it through the pass when it starts there.
 * `inserted_gap`, `inserted_once`: an inserted row and its neighbour, both
@@ -255,6 +257,19 @@ theorem lockstep_iff (content input Δ : Rat) (hΔ : Δ ≠ 0) (p q : Rat → Ra
     · grind
     · exact absurd h hΔ
   · exact fun h t => lockstep content input Δ p q h t
+
+/-- **Landing both at once keeps the distance**: content and input in
+lockstep (one progress) that both land, the viewport track finishing and the
+input's clock ending in the same turn, are as far apart after as before. -/
+theorem finish_together (content input Δ p : Rat) :
+    gapAt content input Δ 1 1 = gapAt content input Δ p p := by
+  simp only [gapAt]; grind
+
+/-- **Landing one alone opens the gap** by what is left of the other's move:
+the content landed while the input's clock runs on at progress `q`. -/
+theorem finish_alone (content input Δ q : Rat) :
+    gapAt content input Δ 1 q - (content - input) = Δ * (1 - q) := by
+  simp only [gapAt]; grind
 
 /-- **The inverted chat.** The composer's top is at `c` on screen; the list
 is flipped, so its top inset is the occlusion `H - c + gap` and a content

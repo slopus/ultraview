@@ -108,6 +108,8 @@ open UltraProofs
 #print axioms ListPass.immediate_same_frame
 #print axioms ListPass.lockstep
 #print axioms ListPass.lockstep_iff
+#print axioms ListPass.finish_together
+#print axioms ListPass.finish_alone
 #print axioms ListPass.chat_lockstep
 #print axioms ListPass.ghost_follows_witness
 #print axioms ListInsets.edgesAt_translate
@@ -152,6 +154,7 @@ open UltraProofs
 #print axioms ListMomentum.release_hands_velocity
 #print axioms ListMomentum.keyboard_keeps_velocity
 #print axioms ListMomentum.run_keeps_velocity
+#print axioms ListMomentum.finish_keeps_engine
 #print axioms ListMomentum.rebake_continuous
 #print axioms ListMomentum.edges_keep_finiteness
 #print axioms ListMomentum.no_write_unless_following
