@@ -6,6 +6,8 @@ import UltraView
 final class ListsScreenController: UIViewController {
     private let tabs = UISegmentedControl(items: ["Chat", "10k feed", "Compare", "Record"])
     private let engines = UISegmentedControl(items: ["UIKit", "Stepped", "Keyframe"])
+    private let blocker = UISegmentedControl(items: ["Main off", "50 ms", "100 ms", "250 ms"])
+    private var blocking: Task<Void, Never>?
     private var child: UIViewController?
     override func viewDidLoad() {
         super.viewDidLoad(); view.backgroundColor = .systemBackground
@@ -15,13 +17,31 @@ final class ListsScreenController: UIViewController {
         engines.selectedSegmentIndex = 2
         tabs.addTarget(self, action: #selector(showScreen), for: .valueChanged)
         engines.addTarget(self, action: #selector(showScreen), for: .valueChanged)
-        for control in [tabs, engines] { control.translatesAutoresizingMaskIntoConstraints = false; view.addSubview(control) }
+        blocker.accessibilityIdentifier = "listMainBlocker"; blocker.selectedSegmentIndex = 0
+        blocker.addTarget(self, action: #selector(updateBlocker), for: .valueChanged)
+        for control in [tabs, engines, blocker] { control.translatesAutoresizingMaskIntoConstraints = false; view.addSubview(control) }
         NSLayoutConstraint.activate([
             tabs.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8),
             tabs.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16), tabs.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
             engines.topAnchor.constraint(equalTo: tabs.bottomAnchor, constant: 8), engines.leadingAnchor.constraint(equalTo: tabs.leadingAnchor), engines.trailingAnchor.constraint(equalTo: tabs.trailingAnchor),
+            blocker.topAnchor.constraint(equalTo: engines.bottomAnchor, constant: 8), blocker.leadingAnchor.constraint(equalTo: tabs.leadingAnchor), blocker.trailingAnchor.constraint(equalTo: tabs.trailingAnchor),
         ])
         showScreen()
+    }
+    override func viewDidAppear(_ animated: Bool) { super.viewDidAppear(animated); updateBlocker() }
+    override func viewDidDisappear(_ animated: Bool) { super.viewDidDisappear(animated); blocking?.cancel(); blocking = nil }
+    @objc private func updateBlocker() {
+        blocking?.cancel(); blocking = nil
+        let milliseconds = [0, 50, 100, 250][max(0, blocker.selectedSegmentIndex)]
+        guard milliseconds > 0 else { return }
+        blocking = Task { @MainActor in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(500))
+                guard !Task.isCancelled else { return }
+                // Deliberate, user-selected main-thread stall for visual comparison.
+                ListFrameMonitor.stallForProbe(milliseconds: milliseconds)
+            }
+        }
     }
     @objc private func showScreen() {
         child?.willMove(toParent: nil); child?.view.removeFromSuperview(); child?.removeFromParent()
@@ -35,7 +55,7 @@ final class ListsScreenController: UIViewController {
         }
         addChild(next); next.view.translatesAutoresizingMaskIntoConstraints = false; view.addSubview(next.view)
         NSLayoutConstraint.activate([
-            next.view.topAnchor.constraint(equalTo: engines.bottomAnchor, constant: 8), next.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            next.view.topAnchor.constraint(equalTo: blocker.bottomAnchor, constant: 8), next.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             next.view.trailingAnchor.constraint(equalTo: view.trailingAnchor), next.view.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
         ])
         next.didMove(toParent: self); child = next
@@ -62,7 +82,7 @@ struct DemoListRow: ListRow {
     var attachments: [String: any ListAttachment] { extraAttachments.merging(section.map { ["section": DemoListHeader(title: $0) as any ListAttachment] } ?? [:]) { first, _ in first } }
     var measuresAsynchronously: Bool { true }
     private var nodeRow: NodeRow {
-        if let row = storage.row, storage.revision == revision { return row }
+        if let row = storage.rows[revision] { return row }
         let title = title, body = body, height = height, tint = Color(tint)
         let cardColor = Palette.card, labelColor = Palette.label, secondaryColor = Palette.secondaryLabel
         let row = NodeRow(identity: identity, revision: revision) {
@@ -75,7 +95,8 @@ struct DemoListRow: ListRow {
             let card = UltraNode(style: styled { $0.flex = 1; $0.padding = 14; $0.gap = 6; $0.borderRadius = 16; $0.backgroundColor = cardColor; $0.overflow = .hidden }, children: [heading, text])
             return UltraNode(style: styled { $0.height = .points(height); $0.paddingHorizontal = 12; $0.paddingVertical = 4 }, children: [card])
         }
-        storage.row = row; storage.revision = revision
+        storage.rows[revision] = row
+        for key in storage.rows.keys.sorted().dropLast(3) { storage.rows.removeValue(forKey: key) }
         return row
     }
     func makeView() -> ListRowView { nodeRow.makeView() }
@@ -87,7 +108,7 @@ struct DemoListRow: ListRow {
     func measure(width: Double, environment: RenderEnvironment) async -> Double? { await nodeRow.measure(width: width, environment: environment) }
 }
 @MainActor
-private final class DemoRowStorage { var row: NodeRow?; var revision: UInt64 = 0 }
+private final class DemoRowStorage { var rows: [UInt64: NodeRow] = [:] }
 
 @MainActor
 struct DemoListHeader: ListAttachment {
@@ -141,8 +162,9 @@ final class LargeListController: UIViewController {
             return DemoListRow(identity: String(index), title: "Row \(index.formatted())", body: body, height: height, section: "SECTION \(index / 20 + 1)")
         }
         actions.distribution = .fillEqually
-        for (title, selector) in [("Insert", #selector(insertRows)), ("Delete", #selector(deleteRows)), ("Move", #selector(moveRows)), ("5,000", #selector(jump)), ("Top", #selector(top))] {
+        for (title, selector) in [("Insert", #selector(insertRows)), ("Delete", #selector(deleteRows)), ("Move", #selector(moveRows)), ("Resize", #selector(resizeRow)), ("5,000", #selector(jump)), ("Top", #selector(top))] {
             let button = UIButton(type: .system); button.setTitle(title, for: .normal); button.addTarget(self, action: selector, for: .touchUpInside); actions.addArrangedSubview(button)
+            button.titleLabel?.font = .systemFont(ofSize: 13)
         }
         status.font = .monospacedSystemFont(ofSize: 11, weight: .medium); status.textColor = .secondaryLabel; status.textAlignment = .center
         for v in [actions, status, list] { v.translatesAutoresizingMaskIntoConstraints = false; view.addSubview(v) }
@@ -170,28 +192,73 @@ final class LargeListController: UIViewController {
             }
         }
     }
-    @objc private func insertRows() { counter += 1; rows.insert(.init(identity: String(counter), title: "Inserted \(counter)", body: "A new row at the start.", height: 112, tint: .systemGreen), at: 0); list.applyChanges(items: rows, transition: .easeInOut(0.4)) }
+    private var visibleIndex: Int {
+        list.loadedIndexRange.first(where: { (list.settledFrame(at: $0)?.maxY ?? 0) > 0 }) ?? 0
+    }
+    @objc private func insertRows() { counter += 1; rows.insert(.init(identity: String(counter), title: "Inserted \(counter)", body: "A new row in the visible window.", height: 112, tint: .systemGreen), at: min(visibleIndex + 1, rows.count)); list.applyChanges(items: rows) }
     override func viewDidDisappear(_ animated: Bool) { super.viewDidDisappear(animated); monitor.finish() }
-    @objc private func deleteRows() { if !rows.isEmpty { rows.removeFirst(); list.applyChanges(items: rows, transition: .easeInOut(0.4)) } }
-    @objc private func moveRows() { if rows.count > 5 { rows.insert(rows.remove(at: 1), at: 5); list.applyChanges(items: rows, transition: .easeInOut(0.4)) } }
+    @objc private func deleteRows() { if !rows.isEmpty { rows.remove(at: min(visibleIndex + 1, rows.count - 1)); list.applyChanges(items: rows) } }
+    @objc private func moveRows() { if rows.count > 5 { let index = min(visibleIndex + 1, rows.count - 1); rows.insert(rows.remove(at: index), at: min(index + 4, rows.count)); list.applyChanges(items: rows) } }
+    @objc private func resizeRow() {
+        guard !rows.isEmpty else { return }
+        let index = min(visibleIndex, rows.count - 1)
+        rows[index].height = rows[index].height < 200 ? 240 : 88; rows[index].revision += 1
+        list.applyChanges(items: rows)
+    }
     @objc private func jump() { list.scrollTo(.init(index: min(5000, rows.count - 1)), transition: .smoothDeceleration()) }
     @objc private func top() { list.scrollTo(.init(index: 0), transition: .smoothDeceleration()) }
 }
 
 @MainActor
 final class ListComparisonController: UIViewController {
+    private var lists: [UltraListView] = []
+    private let coast = UILabel()
     override func viewDidLoad() {
         super.viewDidLoad()
         let stack = UIStackView(); stack.axis = .horizontal; stack.spacing = 2; stack.distribution = .fillEqually
-        stack.translatesAutoresizingMaskIntoConstraints = false; view.addSubview(stack)
-        NSLayoutConstraint.activate([stack.topAnchor.constraint(equalTo: view.topAnchor), stack.bottomAnchor.constraint(equalTo: view.bottomAnchor), stack.leadingAnchor.constraint(equalTo: view.leadingAnchor), stack.trailingAnchor.constraint(equalTo: view.trailingAnchor)])
+        coast.text = "Native coast: 0 pt"; coast.accessibilityIdentifier = "nativeCoast"; coast.accessibilityValue = "0"
+        coast.font = .monospacedSystemFont(ofSize: 11, weight: .regular); coast.textAlignment = .center
+        for child in [stack, coast] { child.translatesAutoresizingMaskIntoConstraints = false; view.addSubview(child) }
+        NSLayoutConstraint.activate([stack.topAnchor.constraint(equalTo: view.topAnchor), stack.bottomAnchor.constraint(equalTo: coast.topAnchor), stack.leadingAnchor.constraint(equalTo: view.leadingAnchor), stack.trailingAnchor.constraint(equalTo: view.trailingAnchor), coast.heightAnchor.constraint(equalToConstant: 24), coast.bottomAnchor.constraint(equalTo: view.bottomAnchor), coast.leadingAnchor.constraint(equalTo: view.leadingAnchor), coast.trailingAnchor.constraint(equalTo: view.trailingAnchor)])
         for mode in ScrollEngineMode.allCases {
             let column = UIStackView(); column.axis = .vertical
             let title = UILabel(); title.text = mode.rawValue; title.textAlignment = .center; title.font = .systemFont(ofSize: 12, weight: .bold)
+            title.accessibilityIdentifier = "compare-\(mode.rawValue)"; title.accessibilityValue = "0"
             let list = UltraListView(engineMode: mode)
+            lists.append(list)
+            var starts: [Double] = [0]
+            for index in 0..<1000 {
+                let height: Double = 80 + Double(index % 4) * 20
+                starts.append(starts[index] + height)
+            }
+            let rowStarts = starts
+            list.onScroll = { [weak list, weak title] _ in
+                guard let list, let index = list.loadedIndexRange.first, let frame = list.settledFrame(at: index) else { return }
+                title?.accessibilityValue = String(rowStarts[index] - Double(frame.minY))
+            }
             column.addArrangedSubview(title); column.addArrangedSubview(list); stack.addArrangedSubview(column)
             title.heightAnchor.constraint(equalToConstant: 32).isActive = true
             list.applyChanges(items: (0..<1000).map { DemoListRow(identity: String($0), title: "\($0)", body: "Same rows", height: Double(80 + $0 % 4 * 20)) })
+        }
+        if let reference = lists.first, let scroll = reference.contentView as? UIScrollView {
+            // A common ancestor receives touches from every pane. UIKit remains
+            // the native reference; the two custom engines consume its input.
+            reference.attachScrollInput(to: view)
+            for list in lists.dropFirst() {
+                for pan in list.contentView.gestureRecognizers?.compactMap({ $0 as? UIPanGestureRecognizer }) ?? [] { pan.isEnabled = false }
+            }
+            reference.onScrollInput = { [weak self, weak scroll] event in
+                guard let self else { return }
+                for target in lists.dropFirst() { target.receiveScrollInput(event) }
+                if event.phase == .ended, let scroll {
+                    let release = scroll.contentOffset.y
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self, weak scroll] in
+                        guard let self, let scroll else { return }
+                        let distance = abs(scroll.contentOffset.y - release)
+                        coast.text = "Native coast: \(Int(distance)) pt"; coast.accessibilityValue = String(Double(distance))
+                    }
+                }
+            }
         }
     }
 }

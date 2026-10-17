@@ -3,6 +3,7 @@ import Foundation
 public enum ListCurve: Sendable, Equatable {
     case linear, easeInOut, easeIn, spring, uiKitScroll, smoothDeceleration
     case bezier(Double, Double, Double, Double)
+    case dampedSpring(damping: Double)
 
     public func value(at phase: Double, duration: Double = 0.3) -> Double {
         let x = min(1, max(0, phase))
@@ -20,6 +21,8 @@ public enum ListCurve: Sendable, Equatable {
                 return Self.spring(time: x * duration, stiffness: 555.027, damping: 47.118)
             }
             return Self.solve(x, 0.380, 0.700, 0.125, 1)
+        case .dampedSpring(let damping):
+            return Self.spring(time: x * duration, stiffness: 180, damping: max(0.1, damping))
         }
     }
     /// Closed form of a mass-one oscillator, initially at rest and one unit from its target.
@@ -56,6 +59,7 @@ public enum ListCurve: Sendable, Equatable {
 }
 
 public struct ListTransition: Sendable, Equatable {
+    internal var inheritsDefault = false
     public var duration: Double
     public var curve: ListCurve
     public var durationFactor: Double
@@ -64,8 +68,15 @@ public struct ListTransition: Sendable, Equatable {
         self.duration = duration; self.curve = curve; self.durationFactor = durationFactor
     }
     public static let immediate = ListTransition(duration: 0)
+    public static let none = immediate
+    public static let `default`: ListTransition = {
+        var value = ListTransition.immediate; value.inheritsDefault = true; return value
+    }()
     public static func easeInOut(_ duration: Double) -> Self { .init(duration: duration) }
     public static func spring(_ duration: Double) -> Self { .init(duration: duration, curve: .spring) }
+    public static func spring(_ duration: Double, damping: Double) -> Self {
+        .init(duration: duration, curve: .dampedSpring(damping: damping))
+    }
     public static func uiKitScroll(_ duration: Double = 0.3) -> Self { .init(duration: duration, curve: .uiKitScroll) }
     public static func smoothDeceleration(_ duration: Double = 1.15) -> Self { .init(duration: duration, curve: .smoothDeceleration) }
     public func scaled(by factor: Double) -> Self {

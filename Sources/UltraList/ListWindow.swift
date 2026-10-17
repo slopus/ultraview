@@ -53,7 +53,7 @@ public struct ListWindow: Sendable, Equatable {
     public func edges(origin: Double, count: Int, viewport: ListViewport, pinnedIndex: Int? = nil) -> ScrollEdges {
         guard !rows.isEmpty else { return .init(minimum: 0, maximum: 0) }
         return .init(
-            minimum: range.lowerBound == 0 ? -viewport.insets.top - pinSlack(index: pinnedIndex, viewport: viewport) : nil,
+            minimum: range.lowerBound == 0 ? origin - viewport.insets.top - pinSlack(index: pinnedIndex, viewport: viewport) : nil,
             maximum: range.upperBound == count ? origin + height + viewport.insets.bottom - viewport.height : nil
         )
     }

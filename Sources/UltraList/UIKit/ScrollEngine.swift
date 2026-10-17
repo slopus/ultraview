@@ -15,6 +15,9 @@ protocol ScrollEngine: AnyObject {
     var didEndScrolling: (() -> Void)? { get set }
     var didTouchDown: (() -> Void)? { get set }
     var shouldStopOnRelease: ((Double) -> Bool)? { get set }
+    var onInput: ((GestureRecording.Event) -> Void)? { get set }
+    func receive(_ event: GestureRecording.Event)
+    func attachInput(to view: UIView)
     func setOffset(_ value: Double)
     func shift(by delta: Double)
     func setEdges(_ edges: ScrollEdges)
@@ -76,6 +79,7 @@ final class PhysicsEngine: NSObject, ScrollEngine, UIGestureRecognizerDelegate {
     var didEndScrolling: (() -> Void)?
     var didTouchDown: (() -> Void)?
     var shouldStopOnRelease: ((Double) -> Bool)?
+    var onInput: ((GestureRecording.Event) -> Void)?
     private var link: CADisplayLink?
     private let target = SamplingTarget()
     private var baseline = CGPoint.zero
@@ -98,6 +102,7 @@ final class PhysicsEngine: NSObject, ScrollEngine, UIGestureRecognizerDelegate {
         pan.touchDown = { [weak self] time in
             guard let self else { return false }
             sawDrag = false
+            onInput?(.init(time: time, phase: .touchDown))
             core.touchDown(at: time)
             didTouchDown?()
             let moving = flightState != nil || core.isDecelerating
@@ -112,6 +117,7 @@ final class PhysicsEngine: NSObject, ScrollEngine, UIGestureRecognizerDelegate {
     func containerOrigin(height: Double, top: Bool, bottom: Bool) -> Double {
         ScrollCore.containerOrigin(height: height, topLoaded: top, bottomLoaded: bottom)
     }
+    func attachInput(to view: UIView) { view.addGestureRecognizer(pan) }
     private func writeBase(_ value: Double) {
         CATransaction.begin(); CATransaction.setDisableActions(true)
         host.bounds.origin.y = value
@@ -224,6 +230,18 @@ final class PhysicsEngine: NSObject, ScrollEngine, UIGestureRecognizerDelegate {
         } else { self.link?.invalidate(); self.link = nil }
     }
     @objc private func panned() {
+        let phase: GestureRecording.Event.Phase?
+        switch pan.state {
+        case .began: phase = .began
+        case .changed: phase = .changed
+        case .ended: phase = .ended
+        case .cancelled: phase = .cancelled
+        default: phase = nil
+        }
+        if let phase {
+            let translation = pan.translation(in: host), velocity = pan.velocity(in: host)
+            onInput?(.init(time: CACurrentMediaTime(), phase: phase, translation: .init(x: translation.x, y: translation.y), velocity: .init(x: velocity.x, y: velocity.y)))
+        }
         switch pan.state {
         case .began:
             if pan.indirect { core.touchDown(at: CACurrentMediaTime()); catchMotion(braking: true) }
@@ -240,6 +258,27 @@ final class PhysicsEngine: NSObject, ScrollEngine, UIGestureRecognizerDelegate {
             if moving { startMotion() }
             didEndDragging?()
         default: break
+        }
+    }
+    func receive(_ event: GestureRecording.Event) {
+        switch event.phase {
+        case .touchDown:
+            core.touchDown(at: event.time); catchMotion(braking: true); didTouchDown?()
+        case .began:
+            catchMotion(braking: false)
+            core.viewport = host.bounds.height; core.scale = max(1, host.traitCollection.displayScale)
+            core.touchDown(at: event.time); core.beginDrag(); willBeginDragging?()
+            core.drag(translation: event.translation, velocity: event.velocity)
+            writeBase(offset); onScroll?(offset)
+        case .changed:
+            guard core.isDragging else { return }
+            core.drag(translation: event.translation, velocity: event.velocity)
+            writeBase(offset); onScroll?(offset)
+        case .ended, .cancelled:
+            guard core.isDragging else { return }
+            let suppressed = event.phase == .cancelled || shouldStopOnRelease?(event.velocity.y) == true
+            if core.endDrag(velocity: suppressed ? .zero : event.velocity, at: event.time) { startMotion() }
+            didEndDragging?()
         }
     }
     private func dragSample() {
@@ -272,7 +311,7 @@ private final class TouchObserver: UIGestureRecognizer {
 
 @MainActor
 final class PlatformEngine: NSObject, ScrollEngine, UIScrollViewDelegate {
-    let scroll = UIScrollView()
+    let scroll: UIScrollView
     var host: UIView { scroll }
     var offset: Double { scroll.contentOffset.y }
     var activeFlight: ScrollFlight? { nil }
@@ -284,31 +323,91 @@ final class PlatformEngine: NSObject, ScrollEngine, UIScrollViewDelegate {
     var didEndScrolling: (() -> Void)?
     var didTouchDown: (() -> Void)?
     var shouldStopOnRelease: ((Double) -> Bool)?
+    var onInput: ((GestureRecording.Event) -> Void)?
     private var writing = false
-    override init() {
+    private var edges: ScrollEdges?
+    private var replay: PhysicsEngine?
+    private let touchObserver = TouchObserver()
+    override convenience init() { self.init(scroll: UIScrollView()) }
+    init(scroll: UIScrollView) {
+        self.scroll = scroll
         super.init(); scroll.delegate = self
         scroll.contentInsetAdjustmentBehavior = .never; scroll.alwaysBounceVertical = true
         scroll.showsVerticalScrollIndicator = false; scroll.showsHorizontalScrollIndicator = false
         scroll.clipsToBounds = false; scroll.scrollsToTop = false
-        let observer = TouchObserver(); observer.cancelsTouchesInView = false
-        observer.down = { [weak self] in self?.didTouchDown?() }; scroll.addGestureRecognizer(observer)
+        touchObserver.cancelsTouchesInView = false
+        touchObserver.down = { [weak self] in
+            self?.didTouchDown?(); self?.onInput?(.init(time: CACurrentMediaTime(), phase: .touchDown))
+        }
+        scroll.addGestureRecognizer(touchObserver)
+        scroll.panGestureRecognizer.addTarget(self, action: #selector(panned))
     }
     func setOffset(_ value: Double) { writing = true; scroll.setContentOffset(.init(x: 0, y: value), animated: false); writing = false }
-    func shift(by delta: Double) { setOffset(offset + delta) }
+    func shift(by delta: Double) {
+        guard abs(delta) > 1e-9 else { return }
+        // Reparking changes coordinates, not the gesture's velocity. Calling
+        // setContentOffset here cancels the scroll view's native deceleration.
+        writing = true
+        var bounds = scroll.bounds; bounds.origin.y += delta; scroll.bounds = bounds
+        writing = false
+        replay?.shift(by: delta)
+    }
     func setEdges(_ edges: ScrollEdges) {
+        guard self.edges != edges else { return }
+        self.edges = edges
+        replay?.setEdges(edges)
         writing = true
         let low = edges.minimum ?? 0, high = max(low, edges.maximum ?? 10_000_000 - scroll.bounds.height)
         let height = max(scroll.bounds.height, high + scroll.bounds.height)
-        scroll.contentInset = .init(top: -low, left: 0, bottom: high - (height - scroll.bounds.height), right: 0)
-        scroll.contentSize = .init(width: scroll.bounds.width, height: height)
+        let inset = UIEdgeInsets(top: -low, left: 0, bottom: high - (height - scroll.bounds.height), right: 0)
+        let size = CGSize(width: scroll.bounds.width, height: height)
+        if scroll.contentInset != inset { scroll.contentInset = inset }
+        if scroll.contentSize != size { scroll.contentSize = size }
         writing = false
     }
-    func halt() { setOffset(offset) }
+    func halt() { replay?.teardown(); replay = nil; setOffset(offset) }
     func sync() {}
     func reanchorDrag() {}
     func teardown() { halt() }
     func beginMomentum(velocity: Double) {
         scroll.setContentOffset(.init(x: 0, y: offset + velocity * 0.35), animated: true)
+    }
+    func attachInput(to view: UIView) {
+        view.addGestureRecognizer(scroll.panGestureRecognizer)
+        view.addGestureRecognizer(touchObserver)
+    }
+    @objc private func panned() {
+        let pan = scroll.panGestureRecognizer
+        let phase: GestureRecording.Event.Phase
+        switch pan.state {
+        case .began: phase = .began
+        case .changed: phase = .changed
+        case .ended: phase = .ended
+        case .cancelled: phase = .cancelled
+        default: return
+        }
+        let translation = pan.translation(in: scroll), velocity = pan.velocity(in: scroll)
+        onInput?(.init(time: CACurrentMediaTime(), phase: phase, translation: .init(x: translation.x, y: translation.y), velocity: .init(x: velocity.x, y: velocity.y)))
+    }
+    func receive(_ event: GestureRecording.Event) {
+        // UIKit has no public API for synthesizing touches into its recognizer.
+        // External streams use the measured stepped driver; real touches retain
+        // UIScrollView's own deceleration and bounce.
+        if replay == nil {
+            let driver = PhysicsEngine(mode: .stepped)
+            driver.host.frame = scroll.bounds; driver.setOffset(offset)
+            driver.setEdges(edges ?? .init())
+            driver.onScroll = { [weak self] offset in
+                guard let self else { return }
+                writing = true; scroll.bounds.origin.y = offset; writing = false
+                onScroll?(offset)
+            }
+            driver.willBeginDragging = { [weak self] in self?.willBeginDragging?() }
+            driver.didEndDragging = { [weak self] in self?.didEndDragging?() }
+            driver.didEndScrolling = { [weak self] in self?.didEndScrolling?() }
+            replay = driver
+        }
+        replay?.receive(event)
     }
     func containerOrigin(height: Double, top: Bool, bottom: Bool) -> Double { top ? 0 : bottom ? 10_000_000 - height : 5_000_000 - height / 2 }
     func scrollViewDidScroll(_ scrollView: UIScrollView) { if !writing { onScroll?(offset) } }

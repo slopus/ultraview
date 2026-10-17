@@ -14,7 +14,7 @@ import Testing
         defer { window.isHidden = true }
         let transitions: [ListTransition] = [
             .init(duration: 0.3, curve: .linear), .easeInOut(0.4), .uiKitScroll(),
-            .spring(0.4), .spring(0.5), .spring(0.3832).scaled(by: 3), .smoothDeceleration().scaled(by: 2),
+            .spring(0.4), .spring(0.5), .spring(0.3832).scaled(by: 3), .spring(0.7, damping: 22), .smoothDeceleration().scaled(by: 2),
         ]
         for transition in transitions {
             let layer = CALayer()

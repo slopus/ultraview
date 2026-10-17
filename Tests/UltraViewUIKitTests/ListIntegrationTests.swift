@@ -33,6 +33,28 @@ private final class FixedRowView: ListRowView {
     override func visibleRectUpdated(_ rect: CGRect?) { visible = rect }
 }
 
+@MainActor
+private final class ObservedScrollView: UIScrollView {
+    var explicitStops = 0
+    override func setContentOffset(_ contentOffset: CGPoint, animated: Bool) {
+        if !animated { explicitStops += 1 }
+        super.setContentOffset(contentOffset, animated: animated)
+    }
+}
+
+@MainActor
+private struct AsyncFixedRow: ListRow {
+    var identity: String
+    var revision: UInt64 = 0
+    var height: Double = 50
+    var measuresAsynchronously: Bool { true }
+    func makeView() -> ListRowView { FixedRowView() }
+    func measure(width: Double, environment: RenderEnvironment) async -> Double? {
+        try? await Task.sleep(for: .milliseconds(25))
+        return height
+    }
+}
+
 private actor MeasurementGate: NodeRowMeasuring {
     private var opened = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
@@ -45,11 +67,120 @@ private actor MeasurementGate: NodeRowMeasuring {
 
 @MainActor
 @Suite(.serialized) struct ListIntegrationTests {
+    @Test func supersededAsyncMutationCannotRestoreClearedRows() async throws {
+        let list = list(count: 0)
+        for revision in 0..<20 {
+            list.applyChanges(items: [AsyncFixedRow(identity: "pending", revision: UInt64(revision), height: Double(50 + revision))])
+        }
+        list.applyChanges(items: [], transition: .none)
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(list.items.isEmpty && list.loadedItemViews.isEmpty)
+    }
+    @Test(arguments: [UInt64(7), 643]) func mixedMutationScrollResizeAndInsetStress(seed: UInt64) {
+        let list = list(count: 100)
+        var rows = (0..<100).map { FixedRow(identity: String($0)) }
+        var random = seed, serial = 100
+        func next(_ count: Int) -> Int {
+            random = random &* 6364136223846793005 &+ 1442695040888963407
+            return Int((random >> 32) % UInt64(max(1, count)))
+        }
+        for _ in 0..<500 {
+            switch next(7) {
+            case 0: serial += 1; rows.insert(.init(identity: String(serial)), at: next(rows.count + 1))
+            case 1: if rows.count > 1 { rows.remove(at: next(rows.count)) }
+            case 2: let row = rows.remove(at: next(rows.count)); rows.insert(row, at: next(rows.count + 1))
+            case 3: let index = next(rows.count); rows[index].height = Double(next(300)); rows[index].revision += 1
+            case 4: list.scrollTo(.init(index: next(rows.count)), transition: .none)
+            case 5: list.applyChanges(newInsets: .init(top: Double(next(300))), transition: .easeInOut(0.1))
+            default: list.applyChanges(newSize: .init(width: CGFloat(280 + next(100)), height: CGFloat(300 + next(400))), transition: .spring(0.2, damping: 25))
+            }
+            list.applyChanges(items: rows, transition: .easeInOut(0.1))
+            #expect(list.loadedIndexRange.upperBound <= rows.count)
+            for index in list.loadedIndexRange {
+                let frame = list.settledFrame(at: index)
+                #expect(frame?.minY.isFinite == true && frame.map { Double($0.height) } == rows[index].height)
+            }
+        }
+        list.haltScrolling()
+    }
+    @Test func asyncInsertionAndResizePreserveRequestedCoreAnimations() async throws {
+        let list = list(count: 0)
+        var rows = (0..<40).map { AsyncFixedRow(identity: "a\($0)") }
+        list.applyChanges(items: rows, transition: .none)
+        for _ in 0..<100 where list.items.count != rows.count { try await Task.sleep(for: .milliseconds(10)) }
+        rows.insert(.init(identity: "inserted"), at: 0)
+        list.applyChanges(items: rows, transition: .init(duration: 0.6, curve: .linear))
+        // The old snapshot remains coherent until measurement is ready.
+        #expect(list.items.count == 40)
+        for _ in 0..<100 where list.items.count != rows.count { try await Task.sleep(for: .milliseconds(10)) }
+        let inserted = try #require(list.loadedItemView(at: 0))
+        #expect(inserted.layer.animation(forKey: "ultraview.list.opacity")?.duration == 0.6)
+        #expect(list.loadedItemView(at: 1)?.layer.animation(forKey: "ultraview.list.positionY") != nil)
+        rows.insert(.init(identity: "block"), at: 0)
+        list.applyChanges(items: rows, animatesInsertions: false, transition: .easeInOut(0.3))
+        list.animateInsertedBlock(identities: ["block"], from: .top, transition: .init(duration: 0.8, curve: .linear))
+        for _ in 0..<100 where list.items.count != rows.count { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(list.loadedItemView(at: 0)?.layer.animation(forKey: "ultraview.list.positionY")?.duration == 0.8)
+        list.defaultTransition = .spring(0.7, damping: 22)
+        rows[1].height = 140; rows[1].revision += 1
+        list.applyChanges(items: rows)
+        for _ in 0..<100 where list.settledFrame(at: 1)?.height != 140 { try await Task.sleep(for: .milliseconds(10)) }
+        let spring = try #require(inserted.layer.animation(forKey: "ultraview.list.height") as? CASpringAnimation)
+        #expect(spring.duration == 0.7 && spring.damping == 22)
+        #expect(list.loadedItemView(at: 2)?.layer.animation(forKey: "ultraview.list.positionY") != nil)
+        rows[1].height = 80; rows[1].revision += 1
+        list.applyChanges(items: rows, transition: .none)
+        for _ in 0..<100 where list.settledFrame(at: 1)?.height != 80 { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(inserted.layer.animation(forKey: "ultraview.list.height") == nil)
+    }
+    @Test func nativeWindowMaintenanceDoesNotExplicitlyStopMomentum() {
+        let scroll = ObservedScrollView(frame: .init(x: 0, y: 0, width: 320, height: 400))
+        let engine = PlatformEngine(scroll: scroll), edges = ScrollEdges(minimum: 0, maximum: 10_000)
+        engine.setEdges(edges); engine.setOffset(100)
+        scroll.explicitStops = 0
+        engine.beginMomentum(velocity: 3500)
+        engine.shift(by: 0); engine.setEdges(edges); engine.shift(by: 50)
+        #expect(scroll.explicitStops == 0)
+        engine.halt()
+        #expect(scroll.explicitStops == 1)
+    }
+    @Test(arguments: ScrollEngineMode.allCases) func sharedReleaseKeepsMovingAcrossReparks(mode: ScrollEngineMode) async throws {
+        let list = list(mode)
+        list.receiveScrollInput(.init(time: 0, phase: .began, velocity: .init(y: -3000)))
+        list.receiveScrollInput(.init(time: 0.02, phase: .changed, translation: .init(y: -80), velocity: .init(y: -3000)))
+        list.receiveScrollInput(.init(time: 0.03, phase: .ended, translation: .init(y: -80), velocity: .init(y: -3000)))
+        func progress() -> Double {
+            guard let index = list.loadedIndexRange.first, let frame = list.settledFrame(at: index) else { return 0 }
+            return Double(index * 50) - Double(frame.minY)
+        }
+        let released = progress()
+        try await Task.sleep(for: .milliseconds(120))
+        #expect(progress() > released + 30)
+        list.haltScrolling()
+    }
+    @Test func insetExposureDoesNotAnimateRowsInFromTheWindowEdge() {
+        let list = list()
+        list.scrollTo(.init(index: 100), transition: .none)
+        list.applyChanges(newInsets: .init(top: 240), transition: .easeInOut(0.5))
+        let old = Set(list.loadedIndexRange)
+        list.applyChanges(newInsets: .init(), transition: .easeInOut(0.5))
+        for index in list.loadedIndexRange where !old.contains(index) {
+            #expect(list.loadedItemView(at: index)?.layer.animation(forKey: "ultraview.list.positionY") == nil)
+        }
+    }
+    @Test func delayedSamplerDoesNotHaltAnInvertedFlight() {
+        let list = list()
+        list.contentView.transform = .init(scaleX: 1, y: -1)
+        list.beginMomentum(velocity: 9000)
+        list.handleScroll(list.currentScrollOffset + 900)
+        #expect(list.isScrollFlightActive)
+        list.haltScrolling()
+    }
     func list(_ mode: ScrollEngineMode = .keyframe, count: Int = 1000) -> UltraListView {
         let list = UltraListView(engineMode: mode)
         list.frame = .init(x: 0, y: 0, width: 320, height: 400)
         list.layoutIfNeeded()
-        list.applyChanges(items: (0..<count).map { FixedRow(identity: String($0)) })
+        list.applyChanges(items: (0..<count).map { FixedRow(identity: String($0)) }, transition: .none)
         return list
     }
     @Test(arguments: ScrollEngineMode.allCases) func initialWindowAndFarJump(mode: ScrollEngineMode) {
@@ -206,6 +337,32 @@ private actor MeasurementGate: NodeRowMeasuring {
         #expect(view.subviews.count == 1 && candidate.superview === view)
         #expect(!candidate.isHidden && candidate.hasContent)
     }
+    @Test func nodeRowShrinkKeepsTallReadyContentUntilTheClipFinishes() async throws {
+        func row(_ revision: UInt64, height: Double) -> NodeRow {
+            NodeRow(identity: "resizing", revision: revision) {
+                var style = Style(); style.height = .points(height); style.backgroundColor = .white
+                return UltraNode(style: style, children: [UltraTextNode("Ready content")])
+            }
+        }
+        let list = list(count: 0)
+        let window = makeWindow(); window.frame = .init(x: 0, y: 0, width: 320, height: 400)
+        window.addSubview(list); window.isHidden = false
+        defer { window.isHidden = true }
+        list.applyChanges(items: [row(0, height: 180)], transition: .none)
+        for _ in 0..<100 where list.loadedItemViews.first?.isDisplayReady != true { try await Task.sleep(for: .milliseconds(10)) }
+        let view = try #require(list.loadedItemViews.first)
+        let tall = try #require(view.subviews.first as? NodeHostView)
+        list.applyChanges(items: [row(1, height: 70)], transition: .easeInOut(0.4))
+        for _ in 0..<100 where list.settledFrame(at: 0)?.height != 70 { try await Task.sleep(for: .milliseconds(10)) }
+        list.layoutIfNeeded(); view.layoutIfNeeded()
+        try await Task.sleep(for: .milliseconds(60))
+        #expect(view.clipsToBounds)
+        #expect(tall.superview === view && !tall.isHidden && tall.bounds.height == 180)
+        #expect(view.layer.animation(forKey: "ultraview.list.height") != nil)
+        try await Task.sleep(for: .milliseconds(450))
+        #expect(tall.superview == nil)
+        #expect(view.subviews.count == 1 && view.subviews[0].bounds.height == 70)
+    }
     @Test(arguments: ScrollEngineMode.allCases) func accessibilityPagesUseTheVisibleHeightAndClamp(mode: ScrollEngineMode) throws {
         let list = list(mode, count: 100)
         list.applyChanges(newInsets: .init(top: 20, bottom: 30))
@@ -261,7 +418,7 @@ private actor MeasurementGate: NodeRowMeasuring {
     @Test func pinLatchReleasesOnlyOnDrag() {
         let list = list(count: 3)
         let rows = [FixedRow(identity: "a", height: 100), FixedRow(identity: "b", height: 60, pinsToBottomEdge: true), FixedRow(identity: "c", height: 50)]
-        list.applyChanges(items: rows, scrollTo: .init(index: 1))
+        list.applyChanges(items: rows, scrollTo: .init(index: 1), transition: .none)
         #expect(list.holdsPinnedRow)
         #expect(abs(list.presentedFrame(at: 1)!.maxY - 400) < 0.5)
         list.setScrollOffset(list.currentScrollOffset)
@@ -380,7 +537,7 @@ private actor MeasurementGate: NodeRowMeasuring {
     @Test func emptyAndFullReplaceDoNotRetainLiveViews() {
         let list = autoreleasepool { list(count: 10) }
         let old = WeakReference(list.loadedItemView(at: 0))
-        autoreleasepool { list.applyChanges(items: [FixedRow(identity: "fresh")]) }
+        autoreleasepool { list.applyChanges(items: [FixedRow(identity: "fresh")], transition: .none) }
         #expect(list.loadedItemViews.count == 1)
         #expect(old.value == nil)
         list.applyChanges(items: [])

@@ -21,6 +21,8 @@ public final class UltraListView: UltraScrollView {
     public private(set) var reachedTop = false
     public private(set) var reachedBottom = false
     public private(set) var holdsPinnedRow = false
+    /// Used by mutations and asynchronous row resizes unless a pass overrides it.
+    public var defaultTransition: ListTransition = .easeInOut(0.3)
     public var animationDurationScale: Double {
         get { animations.durationScale }
         set { animations.durationScale = max(0.001, newValue) }
@@ -56,6 +58,11 @@ public final class UltraListView: UltraScrollView {
     private var measurementTasks: [MeasurementKey: Task<Void, Never>] = [:]
     private var pendingTarget: ListScrollTarget?
     private var pendingItems: [any ListRow]?
+    private var pendingMutation: (@MainActor () -> Void)?
+    private var waitingForMeasurements: Set<MeasurementKey> = []
+    private var mutationGeneration: UInt64 = 0
+    private var measurementPassScheduled = false
+    private var pendingBlockAnimations: [() -> Void] = []
     private var serial: UInt64 = 0
     private var runs: [AttachmentRun] = []
     private var attachmentViews: [UInt64: ListAttachmentView] = [:]
@@ -146,14 +153,51 @@ public final class UltraListView: UltraScrollView {
     }
 
     /// All options are captured intact if a callback re-enters the pass.
-    public func applyChanges(items newItems: [any ListRow]? = nil, newSize: CGSize? = nil, newInsets: ListInsets? = nil, scrollTo: ListScrollTarget? = nil, additionalScrollDistance: Double = 0, anchorMode: ListAnchorMode = .automatic, compensatesInsetChange: Bool = true, absorbsEdgeChangeIntoOverscroll: Bool = false, animatesInsertions: Bool = true, transition: ListTransition = .immediate) {
+    public func applyChanges(items newItems: [any ListRow]? = nil, newSize: CGSize? = nil, newInsets: ListInsets? = nil, scrollTo: ListScrollTarget? = nil, additionalScrollDistance: Double = 0, anchorMode: ListAnchorMode = .automatic, compensatesInsetChange: Bool = true, absorbsEdgeChangeIntoOverscroll: Bool = false, animatesInsertions: Bool = true, transition requestedTransition: ListTransition = .default) {
+        let transition = requestedTransition.inheritsDefault ? (newItems == nil ? .immediate : defaultTransition) : requestedTransition
         if passing {
             deferred.append { [weak self] in self?.applyChanges(items: newItems, newSize: newSize, newInsets: newInsets, scrollTo: scrollTo, additionalScrollDistance: additionalScrollDistance, anchorMode: anchorMode, compensatesInsetChange: compensatesInsetChange, absorbsEdgeChangeIntoOverscroll: absorbsEdgeChangeIntoOverscroll, animatesInsertions: animatesInsertions, transition: transition) }
             return
         }
+        // Accept a mutation atomically once its nearby async rows are measured.
+        // Keeping the original pass preserves its curve, duration and anchor.
+        if let newItems {
+            mutationGeneration &+= 1; pendingMutation = nil; waitingForMeasurements.removeAll(); measurementPassScheduled = false
+            if newItems.isEmpty { pendingBlockAnimations.removeAll() }
+        }
+        if let newItems, !newItems.isEmpty {
+            let width = max(0, (newSize.map { Double($0.width) } ?? viewport.width) - (newInsets ?? viewport.insets).left - (newInsets ?? viewport.insets).right)
+            if width > 0 {
+                let witness = settledWindow.rows.first(where: { (settledFrame(at: $0.index)?.maxY ?? 0) > viewport.insets.top })
+                let anchorID = witness.flatMap { items.indices.contains($0.index) ? items[$0.index].identity : nil }
+                let anchor = scrollTo?.index ?? anchorID.flatMap { id in newItems.firstIndex { $0.identity == id } } ?? 0
+                let indices = MeasurementCache.priority(count: newItems.count, anchor: anchor, direction: 1, limit: min(80, max(24, settledWindow.rows.count + 8)))
+                let missing = indices.compactMap { index -> (any ListRow, MeasurementKey)? in
+                    let item = newItems[index]
+                    let key = measurementKey(item, width: width)
+                    return item.measuresAsynchronously && measurements.height(for: key) == nil ? (item, key) : nil
+                }
+                if !missing.isEmpty {
+                    let generation = mutationGeneration
+                    waitingForMeasurements = Set(missing.map { $0.1 })
+                    pendingMutation = { [weak self] in
+                        guard let self, mutationGeneration == generation else { return }
+                        measurementPassScheduled = false
+                        applyChanges(items: newItems, newSize: newSize, newInsets: newInsets, scrollTo: scrollTo, additionalScrollDistance: additionalScrollDistance, anchorMode: anchorMode, compensatesInsetChange: compensatesInsetChange, absorbsEdgeChangeIntoOverscroll: absorbsEdgeChangeIntoOverscroll, animatesInsertions: animatesInsertions, transition: transition)
+                    }
+                    for (item, key) in missing { requestMeasurement(item, key: key, width: width) }
+                    return
+                }
+            }
+            pendingMutation = nil; waitingForMeasurements.removeAll()
+        }
         passing = true; animations.capturePositions()
         defer {
             animations.clearPositions(); passing = false; reportVisibility()
+            if pendingMutation == nil, !measurementPassScheduled, pendingItems == nil, !pendingBlockAnimations.isEmpty {
+                let blocks = pendingBlockAnimations; pendingBlockAnimations.removeAll()
+                for animate in blocks { animate() }
+            }
             if !deferred.isEmpty {
                 let queued = deferred; deferred.removeAll()
                 DispatchQueue.main.async { for operation in queued { operation() } }
@@ -181,10 +225,11 @@ public final class UltraListView: UltraScrollView {
             items = incoming; identities = nextIDs
             identityIndices = Dictionary(uniqueKeysWithValues: nextIDs.enumerated().map { ($0.element, $0.offset) })
             pinnedIndex = incoming.firstIndex(where: \.pinsToBottomEdge); pendingItems = nil
-            measurements.retain(identities: Set(nextIDs))
+            measurements.retain(identities: Set(nextIDs).union(waitingForMeasurements.map(\.identity)))
         }
         let newIDs = identities
         let diff = ItemDiff(old: oldIDs, new: newIDs)
+        let mutatesRows = !diff.inserts.isEmpty || !diff.deletes.isEmpty
         passOldIdentities = oldIDs; passDiff = diff
         let newLookup = identityIndices
         let fullReplace = !oldItems.isEmpty && !items.isEmpty && Set(oldIDs).isDisjoint(with: newIDs)
@@ -265,7 +310,9 @@ public final class UltraListView: UltraScrollView {
         let shared = oldWindow.rows.filter { nextIDs.contains(oldItems[$0.index].identity) }
         let isCarousel = target != nil && shared.isEmpty && !oldWindow.rows.isEmpty
         let destinationNew = nextIDs.isDisjoint(with: oldIDs)
-        let newOrigin = engine.containerOrigin(height: newWindow.height, top: newWindow.range.lowerBound == 0, bottom: newWindow.range.upperBound == items.count)
+        let newOrigin = engineMode == .uiKit && target == nil && !oldWindow.rows.isEmpty
+            ? oldSettled + newWindow.minY
+            : engine.containerOrigin(height: newWindow.height, top: newWindow.range.lowerBound == 0, bottom: newWindow.range.upperBound == items.count)
         let newBase = newOrigin - newWindow.minY
         let newEdges = newWindow.edges(origin: newOrigin, count: items.count, viewport: viewport, pinnedIndex: pinnedIndex)
         var destination = newBase
@@ -294,7 +341,7 @@ public final class UltraListView: UltraScrollView {
             for row in outgoing where newLookup[oldItems[row.index].identity] != nil {
                 let id = oldItems[row.index].identity
                 guard let view = oldViews[id] else { continue }
-                if !transition.isImmediate {
+                if !transition.isImmediate && (target != nil || mutatesRows) {
                     view.onContentDidChange = nil; crossings.addSubview(view)
                     view.place(in: .init(x: oldViewport.insets.left, y: oldBase + row.y + shift, width: oldViewport.contentWidth, height: row.height))
                     carried[id] = (view, newLookup[id]!)
@@ -365,7 +412,7 @@ public final class UltraListView: UltraScrollView {
                 animations.transition(owner, .height, old: old.height, new: row.height, at: time, transition: transition)
             } else if !oldIDs.contains(id), animatesInsertions, !(isCarousel && destinationNew) {
                 animations.replace(owner, .opacity, from: 0, to: 1, at: time, transition: transition)
-            } else if !isCarousel, oldIDs.contains(id), !transition.isImmediate {
+            } else if !isCarousel, oldIDs.contains(id), !transition.isImmediate, mutatesRows {
                 let newY = newBase + row.y
                 let inferred = incomingPlans[id] ?? (row.index < anchor ? engine.offset - preloadMargin - row.height : engine.offset + viewport.height + preloadMargin)
                 animations.replace(owner, .positionY, from: inferred - newY, to: 0, at: time, transition: transition)
@@ -377,8 +424,15 @@ public final class UltraListView: UltraScrollView {
 
     public override func handleScroll(_ offset: Double) {
         guard !passing, !settledWindow.rows.isEmpty else { return }
-        var delta = offset - previousOffset
-        if abs(delta) > viewport.height { delta = min(viewport.height, max(-viewport.height, delta)); engine.setOffset(previousOffset + delta) }
+        passing = true
+        defer {
+            passing = false
+            if !deferred.isEmpty {
+                let queued = deferred; deferred.removeAll()
+                DispatchQueue.main.async { for operation in queued { operation() } }
+            }
+        }
+        let delta = offset - previousOffset
         previousOffset = engine.offset; onUserScrollDelta?(delta, animations.now)
         let base = origin - settledWindow.minY, previous = settledWindow
         settledWindow.rebalance(count: items.count, offsetInFrameSpace: engine.offset - base, viewportHeight: viewport.height, margin: preloadMargin) { [self] index in
@@ -400,7 +454,9 @@ public final class UltraListView: UltraScrollView {
             for (id, view) in views where !current.contains(id) {
                 view.visibleRectUpdated(nil); view.removeFromSuperview(); animations.unbind(.row(id)); views.removeValue(forKey: id)
             }
-            let nextOrigin = engine.containerOrigin(height: settledWindow.height, top: settledWindow.range.lowerBound == 0, bottom: settledWindow.range.upperBound == items.count)
+            let nextOrigin = engineMode == .uiKit
+                ? base + settledWindow.minY
+                : engine.containerOrigin(height: settledWindow.height, top: settledWindow.range.lowerBound == 0, bottom: settledWindow.range.upperBound == items.count)
             let shift = nextOrigin - settledWindow.minY - base
             origin = nextOrigin; shiftDetached(by: shift)
             engine.shift(by: shift); previousOffset = engine.offset
@@ -429,7 +485,7 @@ public final class UltraListView: UltraScrollView {
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 scheduler.beginFlush()
-                if !scheduler.dirty.isEmpty { applyChanges(transition: scheduler.animated ? .easeInOut(0.3) : .immediate) }
+                if !scheduler.dirty.isEmpty { applyChanges(transition: scheduler.animated ? defaultTransition : .immediate) }
             }
         }
     }
@@ -437,14 +493,29 @@ public final class UltraListView: UltraScrollView {
         guard items.indices.contains(index) else { return }
         let item = items[index]
         guard item.measuresAsynchronously else { return }
-        let width = viewport.contentWidth, environment = measurementEnvironment
-        let key = MeasurementKey(identity: item.identity, revision: item.revision, width: width, environment: measurementEnvironmentKey &+ item.measurementEnvironment &* 0x9e3779b97f4a7c15)
+        let width = viewport.contentWidth
+        requestMeasurement(item, key: measurementKey(item, width: width), width: width)
+    }
+    private func measurementKey(_ item: any ListRow, width: Double) -> MeasurementKey {
+        .init(identity: item.identity, revision: item.revision, width: width, environment: measurementEnvironmentKey &+ item.measurementEnvironment &* 0x9e3779b97f4a7c15)
+    }
+    private func requestMeasurement(_ item: any ListRow, key: MeasurementKey, width: Double) {
+        let environment = measurementEnvironment
         guard width > 0, let ticket = measurements.request(key) else { return }
         measurementTasks[key] = Task { [weak self] in
             let height = await item.measure(width: width, environment: environment)
             guard let self else { return }
             measurementTasks.removeValue(forKey: key)
-            if let height, measurements.complete(key, height: height, ticket: ticket) { markDirty(item.identity, animated: false) }
+            if let height, measurements.complete(key, height: height, ticket: ticket) {
+                let awaited = waitingForMeasurements.remove(key) != nil
+                if awaited, waitingForMeasurements.isEmpty, let mutation = pendingMutation {
+                    pendingMutation = nil
+                    measurementPassScheduled = true
+                    DispatchQueue.main.async { mutation() }
+                } else if !awaited, identityIndices[item.identity].map({ items[$0].revision == item.revision }) == true {
+                    markDirty(item.identity, animated: false)
+                }
+            }
             else { measurements.cancelRequest(key, ticket: ticket) }
         }
     }
@@ -470,6 +541,10 @@ public final class UltraListView: UltraScrollView {
     }
 
     public func animateInsertedBlock(identities: Set<String>, from edge: BoundaryEdge, transition: ListTransition = .easeInOut(0.3)) {
+        if pendingMutation != nil || measurementPassScheduled {
+            pendingBlockAnimations.append { [weak self] in self?.animateInsertedBlock(identities: identities, from: edge, transition: transition) }
+            return
+        }
         if passing { deferred.append { [weak self] in self?.animateInsertedBlock(identities: identities, from: edge, transition: transition) }; return }
         let rows = settledWindow.rows.filter { identities.contains(items[$0.index].identity) }
         guard let first = rows.first, let last = rows.last else { return }

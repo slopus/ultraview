@@ -2,6 +2,54 @@
 import XCTest
 
 final class ListInteractionTests: XCTestCase {
+    @MainActor func testMultilineComposerKeepsTrailingButtonsInside() {
+        let app = XCUIApplication(); app.launchArguments = ["-screen", "lists", "-listScreen", "chat"]
+        app.launch()
+        let composer = app.textViews["composer"], send = app.buttons["Send"], stream = app.buttons["Stream"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 10))
+        let initial = composer.frame.height
+        composer.tap()
+        composer.typeText("First line\nSecond line\nThird line\nFourth line\nFifth line\nSixth line with a long continuation that wraps inside the composer.")
+        XCTAssertGreaterThan(composer.frame.height, initial + 20)
+        XCTAssertLessThan(composer.frame.height, initial + 120)
+        let bar = app.otherElements["composerBar"]
+        XCTAssertTrue(bar.frame.contains(send.frame))
+        XCTAssertEqual(send.frame.maxX, bar.frame.maxX, accuracy: 2)
+        XCTAssertLessThanOrEqual(send.frame.maxX, app.frame.maxX - 8)
+        XCTAssertGreaterThanOrEqual(send.frame.minX, stream.frame.maxX)
+        XCTAssertGreaterThanOrEqual(stream.frame.minX, composer.frame.maxX)
+        XCTAssertEqual(send.frame.maxY, composer.frame.maxY, accuracy: 2)
+        app.buttons["Send"].tap()
+        XCTAssertLessThanOrEqual(composer.frame.height, initial + 2)
+    }
+    @MainActor func testSharedCompareTouchAndBlocker() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-screen", "lists", "-listScreen", "compare"]
+        app.launch()
+        XCTAssertTrue(app.staticTexts["compare-uiKit"].waitForExistence(timeout: 10))
+        // Start inside the keyframe pane: the common recognizer must also drive UIKit.
+        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.84, dy: 0.75))
+        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.84, dy: 0.35))
+        start.press(forDuration: 0.03, thenDragTo: end, withVelocity: .fast, thenHoldForDuration: 0)
+        for mode in ["uiKit", "stepped", "keyframe"] {
+            let value = Double(app.staticTexts["compare-\(mode)"].value as? String ?? "") ?? 0
+            XCTAssertGreaterThan(value, 100, "\(mode) did not receive the shared touch")
+        }
+        XCTAssertGreaterThan(Double(app.staticTexts["nativeCoast"].value as? String ?? "") ?? 0, 10, "UIKit stopped at release")
+        let blocker = app.segmentedControls["listMainBlocker"]
+        blocker.buttons["100 ms"].tap()
+        XCTAssertTrue(blocker.buttons["100 ms"].isSelected)
+        start.press(forDuration: 0.03, thenDragTo: end, withVelocity: .fast, thenHoldForDuration: 0)
+        blocker.buttons["Main off"].tap()
+        XCTAssertEqual(app.state, .runningForeground)
+    }
+    @MainActor func testBackgroundStressTimersKeepTheirQueueIsolation() {
+        let app = XCUIApplication(); app.launchArguments = ["-screen", "stress"]
+        app.launch()
+        let deadline = Date().addingTimeInterval(4)
+        while Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.05)) }
+        XCTAssertEqual(app.state, .runningForeground)
+    }
     @MainActor func testDeviceProbes() {
         let app = XCUIApplication()
         for screen in ["feed", "chat"] {
@@ -51,10 +99,10 @@ final class ListInteractionTests: XCTestCase {
         app.launchArguments = ["-screen", "lists", "-listScreen", "feed", "-listHostProbe", "YES"]
         app.launch()
         XCTAssertTrue(app.buttons["Insert"].waitForExistence(timeout: 10))
-        for title in ["Insert", "Move", "Delete", "5,000", "Top"] { app.buttons[title].tap() }
+        for title in ["Insert", "Resize", "Move", "Delete", "5,000", "Top"] { app.buttons[title].tap() }
         app.segmentedControls["listScreens"].buttons["Chat"].tap()
         app.buttons["Stream"].tap()
-        let composer = app.textFields["composer"]
+        let composer = app.textViews["composer"]
         composer.tap(); composer.typeText("A message during streaming")
         app.buttons["Send"].tap()
         XCTAssertTrue(app.buttons["Stream"].exists)

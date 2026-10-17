@@ -4,10 +4,12 @@ import UltraView
 import os
 
 @MainActor
-final class ListChatController: UIViewController {
+final class ListChatController: UIViewController, UITextViewDelegate {
     let list: UltraListView
-    private let composer = UITextField(), send = UIButton(type: .system), stream = UIButton(type: .system)
+    private let composer = UITextView(), send = UIButton(type: .system), stream = UIButton(type: .system)
     private let composerBar = UIStackView()
+    private let placeholder = UILabel()
+    private var composerHeight: NSLayoutConstraint?
     private var rows: [DemoListRow] = []
     private var nextID = 100
     private var streaming: Task<Void, Never>?
@@ -32,14 +34,32 @@ final class ListChatController: UIViewController {
             if hostProbe { row.extraAttachments = headers(group: index / 5, sender: title) }
             return row
         }
-        composer.placeholder = "Message"; composer.borderStyle = .roundedRect; composer.accessibilityIdentifier = "composer"
+        composer.accessibilityIdentifier = "composer"; composer.accessibilityLabel = "Message"
+        composer.delegate = self; composer.font = .preferredFont(forTextStyle: .body)
+        composer.adjustsFontForContentSizeCategory = true
+        composer.textContainerInset = .init(top: 8, left: 4, bottom: 8, right: 4)
+        composer.isScrollEnabled = false; composer.backgroundColor = .secondarySystemGroupedBackground
+        composer.layer.cornerRadius = 8; composer.layer.borderWidth = 1; composer.layer.borderColor = UIColor.separator.cgColor
+        composer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        composer.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        placeholder.text = "Message"; placeholder.textColor = .placeholderText; placeholder.font = composer.font
+        placeholder.isAccessibilityElement = false; placeholder.translatesAutoresizingMaskIntoConstraints = false; composer.addSubview(placeholder)
+        NSLayoutConstraint.activate([placeholder.topAnchor.constraint(equalTo: composer.topAnchor, constant: 8), placeholder.leadingAnchor.constraint(equalTo: composer.leadingAnchor, constant: 9)])
         send.setTitle("Send", for: .normal); send.addTarget(self, action: #selector(sendMessage), for: .touchUpInside)
         stream.setTitle("Stream", for: .normal); stream.addTarget(self, action: #selector(beginStreaming), for: .touchUpInside)
-        for control in [composer, stream, send] { composerBar.addArrangedSubview(control) }; composerBar.spacing = 8
+        for button in [stream, send] {
+            button.setContentHuggingPriority(.required, for: .horizontal)
+            button.setContentCompressionResistancePriority(.required, for: .horizontal)
+            button.heightAnchor.constraint(equalToConstant: 44).isActive = true
+        }
+        for control in [composer, stream, send] { composerBar.addArrangedSubview(control) }
+        composerBar.spacing = 8; composerBar.alignment = .bottom; composerBar.accessibilityIdentifier = "composerBar"
         for v in [list, composerBar] { v.translatesAutoresizingMaskIntoConstraints = false; view.addSubview(v) }
+        let height = composerBar.heightAnchor.constraint(equalToConstant: 44); composerHeight = height
         NSLayoutConstraint.activate([
             list.topAnchor.constraint(equalTo: view.topAnchor), list.leadingAnchor.constraint(equalTo: view.leadingAnchor), list.trailingAnchor.constraint(equalTo: view.trailingAnchor), list.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            composerBar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12), composerBar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12), composerBar.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor, constant: -8), composerBar.heightAnchor.constraint(equalToConstant: 44),
+            composerBar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12), composerBar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12), composerBar.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor, constant: -8), height,
+            composer.heightAnchor.constraint(equalTo: composerBar.heightAnchor), composer.widthAnchor.constraint(greaterThanOrEqualToConstant: 60),
         ])
         list.applyChanges(items: rows)
         list.willBeginDragging = { [weak self] in
@@ -54,7 +74,12 @@ final class ListChatController: UIViewController {
         if UserDefaults.standard.bool(forKey: "listProbe") {
             Task { [weak self] in
                 let delay = UserDefaults.standard.double(forKey: "listProbeDelay")
-                try? await Task.sleep(for: .seconds(delay > 0 ? delay : 2)); self?.beginStreaming()
+                try? await Task.sleep(for: .seconds(delay > 0 ? delay : 2))
+                if UserDefaults.standard.bool(forKey: "listFlingProbe") {
+                    await self?.probeFlingTowardNewest()
+                    return
+                }
+                self?.beginStreaming()
                 try? await Task.sleep(for: .seconds(1))
                 if self?.hostProbe == true { self?.recordHostState("stream-pin") }
                 else { self?.list.beginMomentum(velocity: 3500) }
@@ -63,7 +88,7 @@ final class ListChatController: UIViewController {
                     self?.monitor.measureAction("keyboard-show") { self?.composer.becomeFirstResponder() }
                     try? await Task.sleep(for: .seconds(1))
                     self?.recordHostState("after-keyboard-show")
-                    self?.monitor.measureAction("keyboard-fill-composer") { self?.composer.text = "A reply during streaming" }
+                    self?.monitor.measureAction("keyboard-fill-composer") { self?.composer.text = "A reply during streaming"; self?.updateComposerHeight() }
                     self?.sendMessage()
                     try? await Task.sleep(for: .seconds(1))
                     self?.recordHostState("after-send")
@@ -77,12 +102,30 @@ final class ListChatController: UIViewController {
     }
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        updateComposerHeight()
         let inset = max(0, view.bounds.maxY - composerBar.frame.minY + 8)
         guard abs(inset - composerInset) > 0.5 else { return }
         composerInset = inset
         let transition = dragging ? ListTransition.immediate : keyboardTransition ?? .immediate
         keyboardTransition = nil
         list.applyChanges(newInsets: .init(top: inset), compensatesInsetChange: !dragging, transition: transition)
+    }
+    func textViewDidChange(_ textView: UITextView) { updateComposerHeight(animated: true) }
+    private func updateComposerHeight(animated: Bool = false) {
+        placeholder.isHidden = !(composer.text ?? "").isEmpty
+        guard composer.bounds.width > 0, let composerHeight else { return }
+        let line = composer.font?.lineHeight ?? 21
+        let maximum = ceil(line * 5 + composer.textContainerInset.top + composer.textContainerInset.bottom)
+        let measured = ceil(composer.sizeThatFits(.init(width: composer.bounds.width, height: .greatestFiniteMagnitude)).height)
+        let desired = max(44, min(maximum, measured))
+        let scrolls = measured > maximum + 0.5
+        if composer.isScrollEnabled != scrolls { composer.isScrollEnabled = scrolls }
+        guard abs(composerHeight.constant - desired) > 0.5 else { return }
+        composerHeight.constant = desired
+        if animated {
+            keyboardTransition = .easeInOut(0.18)
+            UIView.animate(withDuration: 0.18, delay: 0, options: [.beginFromCurrentState, .allowUserInteraction]) { self.view.layoutIfNeeded() }
+        } else { view.setNeedsLayout() }
     }
     @objc private func keyboardWillChange(_ notification: Notification) {
         guard view.window != nil, let duration = notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double else { return }
@@ -99,6 +142,26 @@ final class ListChatController: UIViewController {
     private func headers(group: Int, sender: String) -> [String: any ListAttachment] {
         ["date": ChatHeader(group: group, title: group < 0 ? "Now" : "Today", isSender: false), "sender": ChatHeader(group: group, title: sender, isSender: true)]
     }
+    private func probeFlingTowardNewest() async {
+        list.scrollTo(.init(index: 40), transition: .none)
+        try? await Task.sleep(for: .seconds(1))
+        monitor.recordState("fling-start", values: ["index": list.loadedIndexRange.lowerBound])
+        list.beginMomentum(velocity: -9000)
+        try? await Task.sleep(for: .milliseconds(150))
+        if UserDefaults.standard.bool(forKey: "listStall") {
+            monitor.measureAction("fling-main-stall") { ListFrameMonitor.stallForProbe(milliseconds: 250) }
+        }
+        for index in 0..<60 {
+            try? await Task.sleep(for: .milliseconds(50))
+            let first = list.loadedIndexRange.lowerBound
+            let finite = list.loadedIndexRange.allSatisfy { row in
+                guard let frame = list.settledFrame(at: row) else { return false }
+                return frame.minY.isFinite && frame.maxY.isFinite
+            }
+            monitor.recordState("fling-sample", values: ["sample": index, "flightActive": list.isScrollFlightActive, "index": first, "framesFinite": finite])
+        }
+        monitor.finish()
+    }
     private func recordHostState(_ name: String) {
         guard hostProbe else { return }
         let rects = list.loadedAttachmentViews.map { $0.convert($0.bounds, to: list) }
@@ -107,12 +170,12 @@ final class ListChatController: UIViewController {
     override func viewDidDisappear(_ animated: Bool) { super.viewDidDisappear(animated); streaming?.cancel(); monitor.finish() }
     @objc private func sendMessage() {
         nextID += 1
-        let body = monitor.measureAction("send-read-composer") { composer.text?.isEmpty == false ? composer.text! : "A new message" }
+        let body = monitor.measureAction("send-read-composer") { let text = composer.text ?? ""; return text.isEmpty ? "A new message" : text }
         if let pinned = rows.firstIndex(where: \.pinsToBottomEdge) { rows[pinned].pinsToBottomEdge = false }
         var row = DemoListRow(identity: "sent-\(nextID)", title: "You", body: body, height: 100, tint: .systemIndigo, inverted: true)
         if hostProbe { row.extraAttachments = headers(group: -1, sender: "You") }
         rows.insert(row, at: 0)
-        monitor.measureAction("send-clear-composer") { composer.text = "" }
+        monitor.measureAction("send-clear-composer") { composer.text = ""; updateComposerHeight(animated: true) }
         monitor.measureAction("send-apply-list") { list.applyChanges(items: rows, scrollTo: .init(index: 0), animatesInsertions: false, transition: .easeInOut(0.3)) }
         monitor.measureAction("send-insert-animation") { list.animateInsertedBlock(identities: [rows[0].identity], from: .top) }
     }
@@ -173,7 +236,7 @@ final class ListFrameMonitor: NSObject {
     private let signposter = OSSignposter(subsystem: "dev.ultraview.listdemo", category: "PointsOfInterest")
     private let name: String
     init(name: String) { self.name = name }
-    static func stallForProbe() { Thread.sleep(forTimeInterval: 0.12) }
+    static func stallForProbe(milliseconds: Int = 120) { Thread.sleep(forTimeInterval: Double(milliseconds) / 1000) }
     @discardableResult
     func measureAction<Result>(_ name: StaticString, _ action: () -> Result) -> Result {
         guard UserDefaults.standard.bool(forKey: "listProbe") else { return action() }
@@ -215,6 +278,7 @@ final class ListFrameMonitor: NSObject {
         link?.invalidate(); link = nil
         if ownsMainMonitor { MainThreadMonitor.shared.stop(); ownsMainMonitor = false }
         var document: [String: Any] = ["screen": name, "samples": gaps.count, "maximumMainGapMilliseconds": gaps.max() ?? 0, "gapsAbove16_7": gaps.filter { $0 > 16.7 }.count, "missedFramesAbove25": gaps.filter { $0 > 25 }.count, "injectedStall": UserDefaults.standard.bool(forKey: "listStall"), "mainThreadLayoutTextDrawOperations": Diagnostics.shared.counts.mainThreadWork - initialMainWork]
+        document["runID"] = UserDefaults.standard.string(forKey: "listProbeRunID") ?? ""
         document["callbackHitches"] = hitches; document["targetFrameMilliseconds"] = framePeriod
         document["keyboardProbe"] = UserDefaults.standard.bool(forKey: "listKeyboardProbe")
         document["actions"] = actions

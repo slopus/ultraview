@@ -143,7 +143,13 @@ final class AnimationController {
         let logical = track.transition.duration / track.transition.durationFactor
         let curve = track.transition.curve
         let animation: CABasicAnimation
-        if curve == .smoothDeceleration || (curve == .spring && (logical == 0.5 || abs(logical - 0.3832) <= 1e-4)) {
+        if case .dampedSpring(let damping) = curve {
+            let spring = CASpringAnimation(keyPath: property.keyPath)
+            spring.mass = 1; spring.stiffness = 180; spring.damping = max(0.1, damping)
+            spring.initialVelocity = 0; spring.duration = logical
+            spring.speed = Float(1 / track.transition.durationFactor)
+            animation = spring
+        } else if curve == .smoothDeceleration || (curve == .spring && (logical == 0.5 || abs(logical - 0.3832) <= 1e-4)) {
             let spring = CASpringAnimation(keyPath: property.keyPath)
             spring.mass = 1
             if curve == .smoothDeceleration {
@@ -162,7 +168,7 @@ final class AnimationController {
             case .uiKitScroll: animation.timingFunction = CAMediaTimingFunction(controlPoints: 0.3643, 0, 0.6357, 1)
             case .spring: animation.timingFunction = CAMediaTimingFunction(controlPoints: 0.380, 0.700, 0.125, 1)
             case .bezier(let a, let b, let c, let d): animation.timingFunction = CAMediaTimingFunction(controlPoints: Float(a), Float(b), Float(c), Float(d))
-            case .smoothDeceleration: break
+            case .smoothDeceleration, .dampedSpring: break
             }
         }
         animation.fromValue = track.from; animation.toValue = track.to

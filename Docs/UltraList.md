@@ -31,7 +31,9 @@ host at a time.
 The host prepares its measured size before display and never waits for drawing.
 `ListRowView.isDisplayReady` and `onDisplayReady` report the first ready commit.
 During a revision, the ready host remains visible until its replacement applies
-the current-size visible commit. A newer revision discards a pending replacement.
+the current-size visible commit. A shrinking row keeps its tall ready host until
+the animated outer clip reaches the new height, then reveals the shorter host.
+A newer revision discards a pending replacement.
 Outer row geometry animates with the pass; `NodeRow` does not animate node-internal
 property or text changes. Custom row hosts receive the transition through `apply`.
 
@@ -45,6 +47,15 @@ heights can outlive those views.
 `applyChanges` accepts the next collection, size, insets, scroll target and
 transition in one transaction. Reentrant calls retain all their arguments and
 run later in FIFO order. Dirty callbacks coalesce independently.
+
+A collection update first prepares nearby asynchronous rows while retaining its
+transition and anchor. The displayed collection stays coherent until that pass
+can apply; a newer complete collection supersedes a pending one. The list-level
+`defaultTransition` starts at `.easeInOut(0.3)`. Per-update transitions override
+it, including `.none`, `.init(duration:curve:)` and `.spring(_:damping:)`.
+Position, size and opacity compile to `CABasicAnimation` or `CASpringAnimation`.
+Display callbacks do not step row mutation geometry. Rows exposed by an inset
+change enter at their final frames and share the viewport's keyboard transition.
 
 Explicit targets take priority over the pin latch, followed by preservation of
 visible content and normal anchoring. A target resolver runs once with its
@@ -101,6 +112,22 @@ content base and trajectory together without rebaking. Reachable edge changes
 schedule one durable rebake; the replacement retains recent trajectory history.
 A stopping touch truncates the same animation with two frames of headroom.
 Leaving the window tears down motion and the sampling link.
+
+The native engine keeps its content coordinate base stable as the window moves,
+so virtualization does not repeatedly reset the platform offset or its momentum.
+A delayed custom-engine sample catches up to the analytic flight without
+clamping the travelled distance or stopping that flight.
+
+The Compare demo attaches the native pane's pan recognizer to the shared
+container and sends the observed input stream to both custom engines. A drag
+in any pane drives all three; UIKit retains its native deceleration. The shared
+Main off / 50 / 100 / 250 ms control deliberately blocks main every half second
+to expose differences between platform, stepped and render-server motion.
+
+The chat composer uses a text view that grows to five lines and then scrolls
+inside its fixed width. Send and Stream retain their trailing positions; composer
+height changes use the same inset path as keyboard changes. A queued inserted
+block animation waits for its asynchronous mutation pass before starting.
 
 Animation owners keep independent generations per property. Retargeting resumes
 from the analytic value, with presentation samples for row y and absolute size
@@ -189,6 +216,25 @@ keyboard show, send and dismissal to the chat script. `-listStall YES` injects a
 render-server playback with a delayed sampler. These probes use only their own
 application and require no UI automation settings.
 
+In Chat, `-listFlingProbe YES` starts a fling toward the newest messages and
+records 60 samples of flight state, loaded indices and finite row geometry.
+Adding `-listStall YES` blocks main for 250 ms during that flight. Supply a unique
+`-listProbeRunID` and check the exported value to reject a previous launch's data.
+
+The mutation, resize and multiline composer changes passed 205 Linux tests and
+285 simulator tests, plus seven interaction tests using actual input gestures.
+The 34 list integration tests passed separately with Address Sanitizer and
+Thread Sanitizer. The interaction checks include native coast after release,
+one drag across all Compare panes, the main blocker, keyboard actions and the
+composer's growth, height cap, button positions and shrink after Send.
+
+A focused simulator fling started with loaded index 38 and injected a 252.1 ms
+main-thread block. The flight remained active at the next sample, continued from
+loaded index 14 to 0, and finished with all 60 geometry samples finite. Node
+layout, text measurement and drawing on main stayed at zero. The maximum busy
+turn was 252.2 ms, including the deliberate block; p99 was 1.45 ms. This checks
+motion state after a delayed sample, rather than every rendered frame.
+
 The Xcode app target is `UltraViewDemoApp`, distinct from the SwiftPM demo library.
 The shared scheme is `UltraViewDemo`. `DEMO_BUNDLE_ID` overrides only the app's
 bundle identifier so independent test runners retain their own identities.
@@ -214,7 +260,10 @@ reserving date headers and partner-yielding sender headers. Its exported states
 record pin placement, inset changes and attachment geometry before and after
 keyboard/send/dismissal. Sending releases the streaming pin deliberately.
 
-The final iPhone 12 Release probe held the strict streaming pin as keyboard
+The device measurements below predate the multiline composer and the latest
+scroll and resize fixes; they describe the earlier implementation.
+
+That iPhone 12 Release probe held the strict streaming pin as keyboard
 occlusion changed from 60 to 312 points, released it on Send, and returned to
 60 points after dismissal. Two headers remained finite before Send and three
 afterward. Feed busy turns measured 38.37 ms maximum and 5.25 ms p99; ordinary

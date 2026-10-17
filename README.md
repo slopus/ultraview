@@ -83,11 +83,13 @@ row leaves the loaded edge open until its measurement is ready.
 let list = UltraListView() // .keyframe momentum; .stepped and .uiKit also available
 list.frame = view.bounds
 view.addSubview(list)
+list.defaultTransition = .spring(0.4, damping: 24)
 list.applyChanges(items: rows)
 list.applyChanges(items: updatedRows,
                   anchorMode: .preserveVisibleContent,
                   transition: .easeInOut(0.3))
 list.scrollTo(.init(index: 500), transition: .smoothDeceleration())
+list.applyChanges(items: rows, transition: .none) // explicit immediate update
 ```
 
 Node rows create their trees off main and use the list's display and text environment:
@@ -101,7 +103,11 @@ let rows = (0..<10_000).map { index in
 list.applyChanges(items: rows)
 ```
 
-The list publishes settled geometry immediately. Use `settledFrame(at:)` for
+Once nearby asynchronous measurements are ready, the list publishes settled geometry.
+Insertions, deletions, moves and height changes use `defaultTransition` unless
+the update supplies its own transition. Linear, easing, custom Bézier and
+damped spring curves compile to Core Animation layer animations.
+Use `settledFrame(at:)` for
 destinations and `presentedFrame(at:)` for animated positions. Floating or
 reserving headers implement `ListAttachment`. See [the list design](Docs/UltraList.md)
 for threading, measurement, animation and host behavior.

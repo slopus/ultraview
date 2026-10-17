@@ -1,5 +1,6 @@
 #if canImport(UIKit)
 import UIKit
+import QuartzCore
 import UltraCore
 import UltraLayout
 
@@ -60,18 +61,35 @@ private final class NodeRowView: ListRowView {
     private var displayedHost: NodeHostView?
     private var pendingHost: NodeHostView?
     override var isDisplayReady: Bool { displayedHost != nil }
-    init(row: NodeRow) { self.row = row; super.init(frame: .zero) }
+    init(row: NodeRow) { self.row = row; super.init(frame: .zero); clipsToBounds = true }
+    private func showPreparedHost(_ host: NodeHostView) {
+        guard pendingHost === host, host.hasContent else { return }
+        // Keep the old tall content while the render server clips it down.
+        // A short replacement would otherwise make the visible card jump.
+        if let animation = layer.animation(forKey: "ultraview.list.height") as? CABasicAnimation,
+           let from = animation.fromValue as? Double, let to = animation.toValue as? Double,
+           from > to, let start = animation.value(forKey: "ultraviewStartTime") as? Double {
+            let remaining = start + animation.duration / Double(animation.speed) - layer.convertTime(CACurrentMediaTime(), from: nil)
+            if remaining > 0.001 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + remaining) { [weak self, weak host] in
+                    guard let self, let host else { return }; showPreparedHost(host)
+                }
+                return
+            }
+        }
+        displayedHost?.removeFromSuperview()
+        displayedHost = host; pendingHost = nil
+        host.frame = bounds; host.isHidden = false
+        reportDisplayReady()
+    }
     override func applyMeasurement(width: Double, height: Double, environment: RenderEnvironment) {
         guard let root = row.preparedNode(width: width, environment: environment) else { return }
         if pendingHost?.rootNode !== root && displayedHost?.rootNode !== root {
             pendingHost?.removeFromSuperview()
             let host = NodeHostView(rootNode: root)
             host.onCommit = { [weak self, weak host] in
-                guard let self, let host, pendingHost === host, host.hasContent else { return }
-                displayedHost?.removeFromSuperview()
-                displayedHost = host; pendingHost = nil
-                host.isHidden = false
-                reportDisplayReady()
+                guard let self, let host else { return }
+                showPreparedHost(host)
             }
             host.isHidden = true
             addSubview(host); pendingHost = host
@@ -79,13 +97,17 @@ private final class NodeRowView: ListRowView {
         } else if displayedHost?.rootNode === root {
             pendingHost?.removeFromSuperview(); pendingHost = nil
         }
-        for host in [displayedHost, pendingHost].compactMap({ $0 }) {
-            host.frame = .init(x: 0, y: 0, width: width, height: height)
-        }
+        if let displayedHost { displayedHost.frame = .init(x: 0, y: 0, width: width, height: pendingHost == nil ? height : max(height, displayedHost.bounds.height)) }
+        pendingHost?.frame = .init(x: 0, y: 0, width: width, height: height)
     }
     override func layoutSubviews() {
         super.layoutSubviews()
-        displayedHost?.frame = bounds; pendingHost?.frame = bounds
+        if let displayedHost {
+            var frame = bounds
+            if pendingHost != nil { frame.size.height = max(frame.height, displayedHost.bounds.height) }
+            displayedHost.frame = frame
+        }
+        pendingHost?.frame = bounds
     }
 }
 #endif
