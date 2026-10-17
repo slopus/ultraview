@@ -177,8 +177,9 @@ import UltraLayout
 @Suite struct TextTransitionPlanTests {
     private let far = TextTransitionPlan.outset
 
-    /// Lines of `strings`, 24 high and 10 per character, left-aligned.
-    private func lines(_ strings: [String], fingerprinted string: String? = nil) -> TextTransitionLines {
+    /// Lines of `strings`, 24 high and 10 per character unless given,
+    /// left-aligned.
+    private func lines(_ strings: [String], fingerprinted string: String? = nil, height: CGFloat = 24, advance: CGFloat = 10) -> TextTransitionLines {
         var start = 0
         var boxes: [TextLineBox] = []
         let joined = string ?? strings.joined()
@@ -189,7 +190,7 @@ import UltraLayout
             let trimmed = line.hasSuffix(" ") ? count - 1 : count
             let range = start..<(start + count)
             boxes.append(TextLineBox(
-                rect: CGRect(x: 4, y: 2 + CGFloat(index) * 24, width: CGFloat(trimmed) * 10, height: 24),
+                rect: CGRect(x: 4, y: 2 + CGFloat(index) * height, width: CGFloat(trimmed) * advance, height: height),
                 range: range,
                 fingerprint: TextTransitionLines.fingerprint(of: range, units: units, text: attributed, truncated: false)
             ))
@@ -260,6 +261,52 @@ import UltraLayout
         #expect(plan.reveals.contains(.init(rect: CGRect(x: 114, y: -far, width: far - 114, height: 2 * far), fromOpacity: 0)))
         #expect(plan.reveals.contains(.init(rect: CGRect(x: 54, y: -far, width: 60, height: 2 * far), fromOpacity: 0.4)))
         #expect(plan.stable == [CGRect(x: -far, y: -far, width: far + 54, height: 2 * far)])
+    }
+
+    @Test func aRegionStillFadingInStaysWholeWhereAnEarlierOneCutTheStableText() {
+        // The first region leaves the stable band cut at y 24; the second
+        // crosses that line and still comes out as one region.
+        let first = TextTransitionPlan.Reveal(rect: CGRect(x: 0, y: 0, width: 50, height: 24), fromOpacity: 0.3)
+        let second = TextTransitionPlan.Reveal(rect: CGRect(x: 60, y: 10, width: 40, height: 30), fromOpacity: 0.6)
+        let text = lines(["Hello ", "world"])
+        let plan = TextTransitionPlan.plan(from: text, to: text, inFlight: [first, second])
+        #expect(plan.reveals == [first, second])
+        for region in plan.stable {
+            #expect(region.intersection(first.rect).width * region.intersection(first.rect).height <= 0)
+            #expect(region.intersection(second.rect).width * region.intersection(second.rect).height <= 0)
+        }
+    }
+
+    /// A reply streamed a word at a time, each change landing halfway
+    /// through the last one's fade.
+    @Test func streamingKeepsTheRegionsStillFadingInFew() {
+        var words = ["A", "reply"]
+        func wrapped() -> TextTransitionLines {
+            var result: [String] = [], line = ""
+            for word in words {
+                if !line.isEmpty, line.count + word.count > 34 { result.append(line); line = "" }
+                line += word + " "
+            }
+            return lines(result + [String(line.dropLast())], height: 20.33, advance: 7.37)
+        }
+        var old = wrapped()
+        var inFlight: [TextTransitionPlan.Reveal] = []
+        var most = 0
+        for token in 1...60 {
+            words += token % 5 == 0 ? ["rendered", "smoothly."] : ["another", "word"]
+            let new = wrapped()
+            let plan = TextTransitionPlan.plan(from: old, to: new, inFlight: inFlight)
+            most = max(most, plan.reveals.count)
+            // The mask clips its regions to the node, 40 points out.
+            let limit = CGRect(x: -40, y: -40, width: 340, height: CGFloat(new.lines.count) * 20.33 + 86)
+            inFlight = plan.reveals.compactMap { reveal in
+                let shown = reveal.rect.intersection(limit)
+                return shown.isNull ? nil : .init(rect: shown, fromOpacity: (1 + reveal.fromOpacity) / 2)
+            }
+            old = new
+            if most > 1_000 { break }
+        }
+        #expect(most <= 64)
     }
 
     @Test func fingerprintsSeeStyleChanges() {

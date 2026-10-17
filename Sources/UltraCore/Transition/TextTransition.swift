@@ -180,17 +180,21 @@ public struct TextTransitionPlan: Sendable, Equatable {
     /// Regions still fading in that land on stable text continue from their
     /// current opacity.
     private static func carry(_ inFlight: [Reveal], stable: [CGRect], reveals: [Reveal], fadeOut: [CGRect]) -> TextTransitionPlan {
-        var stable = stable
+        var remaining = stable
         var reveals = reveals
         for flight in inFlight where flight.fromOpacity < 0.999 {
+            // In-flight regions don't overlap, so each one's share of the
+            // stable text is its overlap with the planned regions. Cutting it
+            // by what earlier ones left would split it into more pieces on
+            // every change, and those pieces are the next change's regions.
             for region in stable {
                 let overlap = region.intersection(flight.rect)
                 guard !overlap.isNull, overlap.width > 0, overlap.height > 0 else { continue }
                 reveals.append(Reveal(rect: overlap, fromOpacity: max(0, flight.fromOpacity)))
             }
-            stable = stable.flatMap { $0.subtracting(flight.rect) }
+            remaining = remaining.flatMap { $0.subtracting(flight.rect) }
         }
-        return TextTransitionPlan(stable: stable, reveals: reveals, fadeOut: fadeOut)
+        return TextTransitionPlan(stable: remaining, reveals: reveals, fadeOut: fadeOut)
     }
 
     static func identical(_ old: TextLineBox, _ new: TextLineBox) -> Bool {
