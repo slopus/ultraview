@@ -17,6 +17,28 @@ private enum KeyboardHideCompletion: CaseIterable {
 
 @MainActor
 @Suite(.serialized) struct KeyboardReturnControllerTests {
+    @Test(arguments: ScrollEngineMode.allCases)
+    func theKeyboardGuideHasAProductionLayoutConsumerWithoutProbes(mode: ScrollEngineMode) throws {
+        let controller = ListChatController(mode: mode)
+        controller.loadViewIfNeeded()
+        let view = try #require(controller.view), guide = view.keyboardLayoutGuide
+        #expect(!view.subviews.contains { $0.accessibilityIdentifier == "keyboardGeometry" })
+        let bar = try #require(view.subviews.first { $0.accessibilityIdentifier == "composerBar" })
+        let consumers = view.constraints.compactMap { constraint -> UIView? in
+            guard constraint.isActive else { return nil }
+            let consumer: UIView?
+            if constraint.firstItem === guide, constraint.firstAttribute == .top {
+                consumer = constraint.secondItem as? UIView
+            } else if constraint.secondItem === guide, constraint.secondAttribute == .top {
+                consumer = constraint.firstItem as? UIView
+            } else { return nil }
+            guard let consumer, consumer !== view, consumer.isDescendant(of: view) else { return nil }
+            return consumer
+        }
+        #expect(!consumers.isEmpty, "Interactive guide movement must lay out the production chat")
+        #expect(consumers.allSatisfy { $0 !== bar }, "The owned inset positions the composer")
+    }
+
     @Test(arguments: ScrollEngineMode.allCases, KeyboardMotion.allCases)
     private func composerAndRowsShareEveryRenderedReturnFrame(mode: ScrollEngineMode, motion: KeyboardMotion) async throws {
         let controller = ListChatController(mode: mode), window = makeWindow()

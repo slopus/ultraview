@@ -9,7 +9,8 @@ final class ListKeyboardGeometryProbe: NSObject {
     private weak var owner: UIView?
     private weak var composer: UIView?
     private weak var list: UltraListView?
-    private let marker = UIView(), report = UILabel()
+    private let marker: UIView
+    private let report = UILabel()
     private var link: CADisplayLink?
     private var maximumComposerGap = 0.0, maximumRestingRowGap = 0.0
     private var samples = 0, movingSamples = 0, dragSamples = 0, rowAnimationSamples = 0
@@ -40,16 +41,11 @@ final class ListKeyboardGeometryProbe: NSObject {
     private var keyboardSpringCorrect = true
     private var worstRowState: [String: Double] = [:]
 
-    init(owner: UIView, composer: UIView, list: UltraListView, followsComposer: @escaping () -> Bool = { true }) {
+    init(owner: UIView, composer: UIView, list: UltraListView, keyboardEdge: UIView, followsComposer: @escaping () -> Bool = { true }) {
         self.owner = owner; self.composer = composer; self.list = list
+        marker = keyboardEdge
         followsComposerMotion = followsComposer
         super.init()
-        marker.translatesAutoresizingMaskIntoConstraints = false; owner.addSubview(marker)
-        NSLayoutConstraint.activate([
-            marker.topAnchor.constraint(equalTo: owner.keyboardLayoutGuide.topAnchor),
-            marker.leadingAnchor.constraint(equalTo: owner.leadingAnchor),
-            marker.widthAnchor.constraint(equalToConstant: 1), marker.heightAnchor.constraint(equalToConstant: 1),
-        ])
         report.frame = .init(x: 0, y: 0, width: 1, height: 1)
         report.text = " "; report.accessibilityLabel = "Keyboard geometry probe"
         report.accessibilityIdentifier = "keyboardGeometry"; report.isAccessibilityElement = true

@@ -8,6 +8,7 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
     let list: UltraListView
     private let composer = UITextView(), send = UIButton(type: .system), stream = UIButton(type: .system)
     private let composerBar = UIStackView()
+    private let keyboardLayoutInput = UIView()
     private let placeholder = UILabel()
     private var composerHeight: NSLayoutConstraint?
     private var composerBottom: NSLayoutConstraint?
@@ -81,6 +82,19 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
             composerBar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12), composerBar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12), bottom, height,
             composer.heightAnchor.constraint(equalTo: composerBar.heightAnchor), composer.widthAnchor.constraint(greaterThanOrEqualToConstant: 60),
         ])
+        // A dependent view makes interactive guide movement lay out the chat.
+        // It supplies finger samples; the owned inset still positions the bar.
+        keyboardLayoutInput.translatesAutoresizingMaskIntoConstraints = false
+        keyboardLayoutInput.backgroundColor = .clear; keyboardLayoutInput.isOpaque = false
+        keyboardLayoutInput.isUserInteractionEnabled = false; keyboardLayoutInput.accessibilityElementsHidden = true
+        keyboardLayoutInput.accessibilityIdentifier = "keyboardLayoutInput"
+        view.addSubview(keyboardLayoutInput)
+        NSLayoutConstraint.activate([
+            keyboardLayoutInput.topAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor),
+            keyboardLayoutInput.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            keyboardLayoutInput.widthAnchor.constraint(equalToConstant: 1),
+            keyboardLayoutInput.heightAnchor.constraint(equalToConstant: 1),
+        ])
         list.onVisibleWindowChanged = { [weak self] in
             guard let self, waitsForSentCollection, let height = pendingComposerHeight,
                   list.items.first?.identity == rows.first?.identity,
@@ -112,7 +126,8 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardWillChange(_:)), name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardDidHide), name: UIResponder.keyboardDidHideNotification, object: nil)
         if UserDefaults.standard.bool(forKey: "listKeyboardGeometryProbe") || UserDefaults.standard.bool(forKey: "listComposerMetrics") {
-            keyboardProbe = ListKeyboardGeometryProbe(owner: view, composer: composerBar, list: list, followsComposer: { [weak self] in self?.followsComposer ?? false })
+            keyboardProbe = ListKeyboardGeometryProbe(owner: view, composer: composerBar, list: list,
+                                                     keyboardEdge: keyboardLayoutInput, followsComposer: { [weak self] in self?.followsComposer ?? false })
             keyboardProbe?.start()
         }
         if UserDefaults.standard.bool(forKey: "listKeyboardGeometryProbe") {

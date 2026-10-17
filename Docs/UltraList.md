@@ -316,6 +316,9 @@ viewport offset. One owned composer inset positions the bar and the list in
 the same transaction. The guide supplies finger samples during a drag;
 noninteractive layout uses notification targets. The bar copies the viewport
 animation's timing, including its absolute start time.
+A transparent, noninteractive production view depends on the guide so its
+movement schedules the chat's layout even with diagnostics disabled. The
+keyboard geometry probe reads that view and adds no guide constraints.
 An undismissed interactive drag returns with an ease-in-out transition over the
 remaining fraction of the keyboard's full height, taken from its notification
 frame. That full height can exceed the overlap with the chat view. A notification
