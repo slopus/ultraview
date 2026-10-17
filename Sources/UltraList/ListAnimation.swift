@@ -6,6 +6,15 @@ public enum ListCurve: Sendable, Equatable {
     case dampedSpring(damping: Double)
     case keyboardSpring
 
+    /// Bounds for the whole curve, including a spring's possible overshoot.
+    public var progressBounds: ClosedRange<Double> {
+        switch self {
+        case .bezier(_, let first, _, let second): min(0, first, second)...max(1, first, second)
+        case .spring, .dampedSpring, .keyboardSpring: 0...2
+        default: 0...1
+        }
+    }
+
     public func value(at phase: Double, duration: Double = 0.3) -> Double {
         let x = min(1, max(0, phase))
         switch self {
@@ -112,6 +121,15 @@ public struct AnimationTrack: Sendable, Equatable {
     public var startTime: Double
     public var transition: ListTransition
     public var deadline: Double { startTime + max(0, transition.duration) }
+    public var valueBounds: ClosedRange<Double> {
+        let bounds = transition.curve.progressBounds
+        let first = from + (to - from) * bounds.lowerBound
+        let last = from + (to - from) * bounds.upperBound
+        return min(first, last)...max(first, last)
+    }
+    public func adding(to bounds: ClosedRange<Double>) -> ClosedRange<Double> {
+        (bounds.lowerBound + valueBounds.lowerBound)...(bounds.upperBound + valueBounds.upperBound)
+    }
     public func value(at time: Double) -> Double {
         if transition.isImmediate || time >= deadline { return to }
         let progress = transition.curve.value(at: (time - startTime) / transition.duration, duration: transition.duration / transition.durationFactor)

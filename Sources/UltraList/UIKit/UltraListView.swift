@@ -410,7 +410,7 @@ public final class UltraListView: UltraScrollView {
             for row in outgoing where newLookup[oldItems[row.index].identity] != nil {
                 let id = oldItems[row.index].identity
                 guard let view = oldViews[id] else { continue }
-                if !transition.isImmediate && (target != nil || mutatesRows) {
+                if !transition.isImmediate && (target != nil || mutatesRows || displacing) {
                     view.onContentDidChange = nil; crossings.addSubview(view)
                     view.place(in: .init(x: oldViewport.insets.left, y: oldBase + row.y + detachedShift, width: oldViewport.contentWidth, height: row.height))
                     carried[id] = (view, newLookup[id]!)
@@ -510,16 +510,22 @@ public final class UltraListView: UltraScrollView {
         CATransaction.begin(); CATransaction.setDisableActions(true)
         engine.sync()
         let time = animations.now, oldOffset = engine.offset, oldViewport = viewport
+        let oldSettled = declaredEdges.clamped(oldOffset), oldOverscroll = oldOffset - oldSettled
+        let oldSlack = settledWindow.pinSlack(index: pinnedIndex, viewport: oldViewport)
         let correction = animations.value(.viewport, .viewportOffset, at: time)
         viewport.insets = insets
-        var shift = compensates ? oldViewport.insets.top - insets.top : 0
+        let newSlack = settledWindow.pinSlack(index: pinnedIndex, viewport: viewport)
+        declaredEdges = settledWindow.edges(origin: origin, count: items.count, viewport: viewport, pinnedIndex: pinnedIndex)
+        var shift = 0.0
         if holdsPinnedRow, let pinnedIndex, let row = settledWindow.rows.first(where: { $0.index == pinnedIndex }) {
             let oldBoundary = oldViewport.height - oldViewport.insets.bottom + max(0, row.height - oldViewport.visibleHeight / 2)
             let newBoundary = viewport.height - insets.bottom + max(0, row.height - viewport.visibleHeight / 2)
             shift = oldBoundary - newBoundary
+        } else if compensates {
+            let screenMove = insets.top - oldViewport.insets.top + newSlack - oldSlack
+            shift = declaredEdges.clamped(oldSettled - screenMove) + oldOverscroll - oldOffset
         }
         engine.shift(by: shift); previousOffset = engine.offset
-        declaredEdges = settledWindow.edges(origin: origin, count: items.count, viewport: viewport, pinnedIndex: pinnedIndex)
         engine.setEdges(declaredEdges)
         animations.replace(.viewport, .viewportOffset, from: transition.isImmediate ? 0 : oldOffset + correction - engine.offset, to: 0, at: time, transition: transition)
         CATransaction.commit()
@@ -542,8 +548,13 @@ public final class UltraListView: UltraScrollView {
         let delta = offset - previousOffset
         previousOffset = engine.offset; onUserScrollDelta?(delta, animations.now)
         let base = origin - settledWindow.minY, previous = settledWindow
-        let coverage = engine.coveredOffsets(horizon: 0.3).map { ($0.lowerBound - base)...($0.upperBound - base) }
-        settledWindow.rebalance(count: items.count, offsetInFrameSpace: engine.offset - base, viewportHeight: viewport.height, margin: preloadMargin, coveredOffsets: coverage, maximumAdditionalRows: coverage == nil ? nil : 64) { [self] index in
+        let flightOffsets = engine.coveredOffsets(horizon: 0.3)
+        var offsets = flightOffsets
+        if let track = animations.model.tracks[.init(.viewport, .viewportOffset)] {
+            offsets = track.adding(to: flightOffsets ?? offset...offset)
+        }
+        let coverage = offsets.map { ($0.lowerBound - base)...($0.upperBound - base) }
+        settledWindow.rebalance(count: items.count, offsetInFrameSpace: engine.offset - base, viewportHeight: viewport.height, margin: preloadMargin, coveredOffsets: coverage, maximumAdditionalRows: flightOffsets == nil ? nil : 64) { [self] index in
             let item = items[index], key = MeasurementKey(identity: item.identity, revision: item.revision, width: viewport.contentWidth, environment: measurementEnvironmentKey &+ item.measurementEnvironment &* 0x9e3779b97f4a7c15)
             if item.measuresAsynchronously, measurements.height(for: key) == nil { requestMeasurement(index); return nil }
             let view = views[item.identity] ?? carried[item.identity]?.view ?? item.makeView()

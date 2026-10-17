@@ -8,6 +8,7 @@ private struct SyncRow: ListRow {
     var identity: String
     var revision: UInt64 = 0
     var height: Double = 100
+    var pinsToBottomEdge = false
     func makeView() -> ListRowView { SyncRowView() }
     func apply(to view: ListRowView, transition: ListTransition) { (view as? SyncRowView)?.height = height }
 }
@@ -26,12 +27,16 @@ private final class SyncRowView: ListRowView {
     let window = makeWindow()
 
     func list(count: Int = 20) -> UltraListView {
+        list((0..<count).map { SyncRow(identity: String($0)) })
+    }
+
+    fileprivate func list(_ rows: [SyncRow]) -> UltraListView {
         window.frame = .init(x: 0, y: 0, width: 320, height: 400)
         let list = UltraListView()
         list.frame = window.bounds
         window.addSubview(list); window.isHidden = false
         list.layoutIfNeeded()
-        list.applyChanges(items: (0..<count).map { SyncRow(identity: String($0)) })
+        list.applyChanges(items: rows)
         list.layer.speed = 0; list.layer.timeOffset = 100
         return list
     }
@@ -50,6 +55,60 @@ private final class SyncRowView: ListRowView {
         CATransaction.begin(); CATransaction.setDisableActions(true)
         list.layer.timeOffset = time
         CATransaction.commit()
+    }
+
+    @Test(arguments: [false, true]) func rowsOnScreenStayLoadedThroughAnAnimatedInsetChange(relayout: Bool) async throws {
+        let list = list((0..<40).map { SyncRow(identity: String($0), height: 50) })
+        var before: [(Int, ListRowView, CGRect)] = []
+        for index in 0..<8 {
+            let view = try #require(list.loadedItemView(at: index))
+            before.append((index, view, try await shown(view, in: list)))
+        }
+        list.applyChanges(newSize: relayout ? list.bounds.size : nil, newInsets: .init(top: 252), transition: .init(duration: 1, curve: .linear))
+        for (index, view, frame) in before {
+            let start = try await shown(view, in: list)
+            #expect(view.superview != nil && abs(start.minY - frame.minY) < 0.5, "row \(index) was at \(frame.minY); loaded \(list.loadedIndexRange), starts at \(start.minY)")
+        }
+    }
+
+    @Test func aShortPinnedListKeepsItsPinnedRowOnTheEdgeThroughAnInsetChange() throws {
+        var rows = (0..<3).map { SyncRow(identity: String($0)) }
+        rows[2].pinsToBottomEdge = true
+        let list = list(rows)
+        let before = try #require(list.settledFrame(at: 2))
+        list.applyChanges(newInsets: .init(top: 100), transition: .immediate)
+        let after = try #require(list.settledFrame(at: 2))
+        #expect(abs(list.overscrollDistance) < 0.5 && abs(after.maxY - before.maxY) < 0.5)
+    }
+
+    @Test func anInsetAnimationFillsTheExposedViewportWithThinRows() throws {
+        let list = list((0..<1000).map { SyncRow(identity: String($0), height: 1) })
+        list.applyChanges(newInsets: .init(top: 252), transition: .immediate)
+        list.handleScroll(list.currentScrollOffset)
+        #expect(!list.loadedIndexRange.contains(399))
+        list.applyChanges(newInsets: .init(top: 0), transition: .init(duration: 1, curve: .linear))
+        let row = try #require(list.loadedItemView(at: 399))
+        #expect(row.superview != nil)
+    }
+
+    @Test func contentAtItsEndStaysThereWhenTheTopInsetShrinks() throws {
+        let list = list(count: 20)
+        list.applyChanges(newInsets: .init(top: 252), transition: .immediate)
+        list.scrollTo(.init(index: 19, pointOffset: 48), transition: .immediate)
+        let before = try #require(list.settledFrame(at: 19))
+        list.applyChanges(newInsets: .init(top: 0), transition: .immediate)
+        let after = try #require(list.settledFrame(at: 19))
+        #expect(abs(list.overscrollDistance) < 0.5 && abs(after.maxY - before.maxY) < 0.5)
+    }
+
+    @Test(arguments: [false, true]) func anUncompensatedInsetChangeKeepsTheOffsetAndLeavesEdgeCorrectionToTheEngine(atEnd: Bool) throws {
+        let list = list(count: 20)
+        list.applyChanges(newInsets: .init(top: 252), transition: .immediate)
+        if atEnd { list.scrollTo(.init(index: 19, pointOffset: 48), transition: .immediate) }
+        let offset = list.currentScrollOffset
+        list.applyChanges(newInsets: .init(top: 0), compensatesInsetChange: false, transition: .immediate)
+        #expect(list.currentScrollOffset == offset)
+        #expect(abs(list.overscrollDistance - (atEnd ? 0 : -252)) < 0.5)
     }
 
     @Test func loadedRowsStartWhereTheyWereOnAScroll() async throws {

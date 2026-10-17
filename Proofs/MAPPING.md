@@ -294,6 +294,23 @@ instrumentation; repros and fixes are with the list implementation):
 formula) is outside `cheap_eq_full`. The momentum flight, the engine bounce
 and the render server's timing are outside the model.
 
+Integration review at `d672151`: with compensation enabled and no held pin,
+`updateViewportInsets` now uses the `cheapFixed` destination, including both
+the inset and pin-slack changes, the new-edge clamp, and the old overscroll.
+Without compensation it leaves the offset unchanged. The held-pin boundary
+branch remains unchanged and outside `cheap_eq_full`.
+
+`handleScroll` adds the flight coverage to the whole viewport track's
+`valueBounds`, as modeled by `track_in_hull` and
+`rebalanceIn_keeps_covered`. `ListCurve.progressBounds` supplies `[0, 1]` for
+standard curves, `[0, 2]` for springs starting at rest, and the cubic hull of
+the endpoints and vertical control points for a custom Bézier curve. The
+curve bounds are still hypotheses of the Lean theorem; Linux tests check
+sampled curves and exact bounds, including simultaneous scroll and viewport
+motion. Full passes also retain outgoing shared rows
+during viewport displacement. Simulator regressions check both paths, pin
+slack, compensated edge clamping and uncompensated offset preservation.
+
 ## Theorems
 
 **Correctness**

@@ -241,7 +241,6 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
         rows.insert(row, at: 0)
         monitor.measureAction("send-clear-composer") { composer.text = ""; updateComposerHeight(animated: true) }
         monitor.measureAction("send-apply-list") { list.applyChanges(items: rows, scrollTo: .init(index: 0), animatesInsertions: false, transition: .easeInOut(0.3)) }
-        monitor.measureAction("send-insert-animation") { list.animateInsertedBlock(identities: [rows[0].identity], from: .top) }
     }
     @objc private func beginStreaming() {
         followsComposer = true

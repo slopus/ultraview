@@ -370,6 +370,40 @@ from busy turns. Zero such operations does not imply that all UIKit input or
 view-application work meets a frame budget. Report the measured maximum and p99
 turns alongside the action timings when evaluating the keyboard scenario.
 
+The per-frame target is p99 below 2 ms for the library's main-thread work.
+Keyboard and text-input actions have separate costs. A Debug iPhone 17 Pro
+simulator run at `76bac32`, using the keyframe engine and three repetitions of
+`-listComposerTiming YES`, measured a cold keyboard show at 137 ms and repeat
+shows at 15–22 ms. The controller's keyboard handler measured 0.43 ms median
+for an unchanged frame and 1.84 ms for a changed frame, with a 2.07 ms maximum.
+The isolated list inset pass measured 1.97 ms median and 2.41 ms maximum; these
+action measurements are not a per-frame p99 result.
+
+Clearing the first-responder text view took 9.5 ms median, compared with 1.4 ms
+with the keyboard down. The subsequent composer height and layout update took
+1.6 ms median. A complete Send with a six-line draft took 12.1 ms median and
+14.8 ms maximum. The text setter's keyboard-dependent cost dominates the
+remaining Send work; moving row layout off main does not remove that input
+system cost. The same run measured an unchanged controller layout at 0.31 ms.
+These simulator action timings describe the measured system limits alongside
+the library budget. Device input costs require their own measurements.
+
+The Stream/Send probe reproduced a 41–51 point gap between a sent message and
+the streaming row beside it in all twelve scenarios across the three engines.
+The target pass already moved the new row with its neighbours; a second
+inserted-block slide moved the sent row again. Removing that duplicate motion
+left no violations across 12,606 strict visible-pair samples, with maximum gap
+error below 0.001 point. The scenarios cover Send during growth, keyboard-up
+Send during growth, two Sends, and Stream → Send → Stream. At rest, model and
+presentation geometry matched and the newest row met the composer in every
+scenario.
+
+The inset and Send fixes passed 221 Linux tests, 336 simulator unit tests,
+69 focused tests under each of Address Sanitizer and Thread Sanitizer, and
+113 checked proofs. Inset regressions cover animated row retention, a viewport
+filled with one-point rows, pin slack, clamping at the content end, and
+preserving the offset when compensation is disabled.
+
 Add `-listHostProbe YES` to the keyboard probe to combine a streaming pin with
 reserving date headers and partner-yielding sender headers. Its exported states
 record pin placement, inset changes and attachment geometry before and after
