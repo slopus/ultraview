@@ -38,6 +38,7 @@ enum Yoga {
 
     static let errataNone: YGErrata = yogaEnum(0)
     static let errataAll: YGErrata = yogaEnum(2_147_483_647)
+    static let webFlexBasis: YGExperimentalFeature = yogaEnum(0)
 
     /// `nil` and NaN both mean "undefined" to Yoga.
     static func float(_ value: CGFloat?) -> Float {

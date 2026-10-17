@@ -31,6 +31,11 @@ public final class LayoutConfig: @unchecked Sendable {
         yogaConfig = YGConfigNew()
         YGConfigSetPointScaleFactor(yogaConfig, Float(pointScaleFactor))
         YGConfigSetErrata(yogaConfig, errata == .all ? Yoga.errataAll : Yoga.errataNone)
+        // Recompute each child's flex basis on every layout. Otherwise a
+        // basis measured once (say, with no height available) sticks to a
+        // child whose own style didn't change, and a later layout at a real
+        // size stretches it to its old content height.
+        YGConfigSetExperimentalFeatureEnabled(yogaConfig, Yoga.webFlexBasis, true)
     }
 
     private struct Key: Hashable {

@@ -304,6 +304,21 @@ private func box(_ width: CGFloat, _ height: CGFloat, _ configure: (inout Layout
         root.calculateLayout(width: 100, height: 100)
         #expect(child.frame.minX == 0)
     }
+
+    /// A child whose flex basis was measured from its content, with no
+    /// height available, gets a new basis when a size arrives, though its
+    /// own style didn't change.
+    @Test func aRelayoutAtARealSizeRecomputesFlexBases() {
+        let content = node(children: (0..<10).map { _ in box(10, 50) })
+        let child = node({ $0.flex = 1 }, children: [content])
+        let root = node(children: [child])
+
+        root.calculateLayout(width: 100, height: nil)
+        #expect(child.frame.height == 500)
+
+        root.calculateLayout(width: 100, height: 80)
+        #expect(child.frame == CGRect(x: 0, y: 0, width: 100, height: 80))
+    }
 }
 
 @Suite struct MeasureFunctionTests {
