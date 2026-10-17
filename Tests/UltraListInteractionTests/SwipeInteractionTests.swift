@@ -129,11 +129,6 @@ final class SwipeInteractionTests: XCTestCase {
             // The second touch on the carousel is the tap; it must have landed mid-flight.
             XCTAssertEqual((state["carouselTouches"] as? [Bool])?.dropFirst().first, true, "\(engine): the tap came after the fling ended: \(state["carouselTouches"] ?? "")")
             XCTAssertEqual(after.position, caught, accuracy: 2, "\(engine): the tap didn't stop the carousel")
-            // Known gap in the list core, nested or not: the stepped engine's
-            // catching pan begins inside touchesBegan, after which the content
-            // still receives the touch and presses.
-            let options = XCTExpectedFailure.Options(); options.isStrict = false
-            if engine == "stepped" { XCTExpectFailure("stepped: a tap that stops a fling still presses the content", options: options) }
             XCTAssertEqual((state["selections"] as? [String])?.count, 0, "\(engine): the stopping tap selected a card")
             // A tap at rest does select, so the check above is meaningful.
             let selected = (state["selections"] as? [String])?.count ?? 0

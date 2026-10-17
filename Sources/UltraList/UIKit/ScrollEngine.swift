@@ -355,8 +355,16 @@ final class PhysicsEngine: NSObject, ScrollEngine, UIGestureRecognizerDelegate {
         return true
     }
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { other === keyboardPanRecognizer }
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        // A catching pan can begin before UIKit delivers touchesBegan to the
+        // row. Hold that touch until the recognizer consumes it. Resting rows
+        // keep immediate touch delivery for highlights and long presses.
+        pan.delaysTouchesBegan = pan.forced || flightState != nil || core.isDecelerating
+        return true
+    }
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive event: UIEvent) -> Bool {
         if pan.indirect, pan.state == .possible, flightState != nil || core.isDecelerating {
+            pan.delaysTouchesBegan = true
             core.touchDown(at: event.timestamp); didTouchDown?(); catchMotion(braking: true)
             if gestureRecognizerShouldBegin(pan) { pan.forceBegin() }
         }
