@@ -63,6 +63,10 @@ public struct ScrollFlight: Sendable, Equatable {
     public var coordinateShift: Double
     public var settledOffset: Double { trajectory.finalOffset + coordinateShift }
     public func offset(at time: Double) -> Double { trajectory.sample(at: time - beginTime).offset + coordinateShift }
+    public func coveredOffsets(at time: Double, horizon: Double = 0.3) -> ClosedRange<Double> {
+        let extent = trajectory.extent(from: time - beginTime, through: time - beginTime + max(0, horizon))
+        return (extent.lowerBound + coordinateShift)...(extent.upperBound + coordinateShift)
+    }
 }
 
 /// Time is supplied at each operation; offset reads never advance the motion.

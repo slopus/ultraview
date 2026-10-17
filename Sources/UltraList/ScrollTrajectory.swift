@@ -43,9 +43,23 @@ public struct ScrollTrajectory: Sendable, Equatable, Codable {
         return .init(time: time, offset: a.offset + (b.offset - a.offset) * phase, velocity: a.velocity + (b.velocity - a.velocity) * phase)
     }
     public func extent(after time: Double) -> ClosedRange<Double> {
-        let current = sample(at: time).offset
-        var low = current, high = current
-        for vertex in samples where vertex.time > time { low = min(low, vertex.offset); high = max(high, vertex.offset) }
+        extent(from: time, through: max(time, duration))
+    }
+    /// The exact envelope of the piecewise-linear trajectory over an interval.
+    public func extent(from start: Double, through end: Double) -> ClosedRange<Double> {
+        precondition(end >= start)
+        let first = sample(at: start).offset, last = sample(at: end).offset
+        var low = min(first, last), high = max(first, last)
+        var lower = 0, upper = samples.count
+        while lower < upper {
+            let middle = (lower + upper) / 2
+            if samples[middle].time <= start { lower = middle + 1 } else { upper = middle }
+        }
+        var index = lower
+        while index < samples.count, samples[index].time < end {
+            low = min(low, samples[index].offset); high = max(high, samples[index].offset)
+            index += 1
+        }
         return low...high
     }
     public func truncated(at time: Double) -> ScrollTrajectory {

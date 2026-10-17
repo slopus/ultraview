@@ -348,6 +348,51 @@ private actor MeasurementGate: NodeRowMeasuring {
         #expect(list.isScrollFlightActive)
         list.haltScrolling()
     }
+    @Test(arguments: [-9_000.0, 9_000.0]) func releaseMountsTheStallIntervalBeforeAnyDisplayTick(velocity: Double) throws {
+        let list = list(count: 2_000)
+        list.scrollTo(.init(index: 500), transition: .none)
+        list.beginMomentum(velocity: velocity)
+        defer { list.haltScrolling() }
+        let flight = try #require(list.engine.activeFlight)
+        let initialOffset = list.currentScrollOffset
+        let frames = list.loadedIndexRange.compactMap { list.settledFrame(at: $0) }
+        let top = try #require(frames.map(\.minY).min()), bottom = try #require(frames.map(\.maxY).max())
+        let allReady = list.loadedItemViews.allSatisfy { $0.isDisplayReady }
+        #expect(allReady)
+        #expect(list.loadedItemViews.count <= 84)
+        for step in 0...36 {
+            let displacement = flight.offset(at: flight.beginTime + Double(step) / 120) - initialOffset
+            #expect(top - displacement <= 0)
+            #expect(bottom - displacement >= list.bounds.height)
+        }
+        let deadline = CACurrentMediaTime() + 0.252
+        while CACurrentMediaTime() < deadline {}
+        #expect(list.isScrollFlightActive)
+        #expect(list.loadedIndexRange.count == frames.count)
+    }
+    @Test func nativeReleaseReparkingMovesItsDestinationByTheSameAmount() throws {
+        let engine = PlatformEngine(scroll: UIScrollView(frame: .init(x: 0, y: 0, width: 320, height: 400)))
+        engine.setEdges(.init(minimum: 0, maximum: 10_000)); engine.setOffset(1_000)
+        engine.onFlightChanged = { [weak engine] _ in engine?.shift(by: 300) }
+        var destination = CGPoint(x: 0, y: 3_000)
+        engine.scrollViewWillEndDragging(engine.scroll, withVelocity: .init(x: 0, y: 2), targetContentOffset: &destination)
+        #expect(destination.y == 3_300)
+        let coverage = try #require(engine.coveredOffsets(horizon: 0.3))
+        #expect(coverage.lowerBound >= 1_300)
+        engine.halt()
+    }
+    @Test func mountingTheFiniteEndUpdatesTheFlightBeforeItsFirstTick() throws {
+        let list = list(count: 50)
+        list.scrollTo(.init(index: 30), transition: .none)
+        #expect(list.loadedIndexRange.upperBound < 50)
+        list.beginMomentum(velocity: 12_000)
+        defer { list.haltScrolling() }
+        #expect(list.loadedIndexRange.upperBound == 50)
+        let frame = try #require(list.settledFrame(at: 49))
+        let maximum = list.currentScrollOffset + frame.maxY - list.bounds.height
+        let flight = try #require(list.engine.activeFlight)
+        #expect(abs(flight.settledOffset - maximum) <= 0.5)
+    }
     func list(_ mode: ScrollEngineMode = .keyframe, count: Int = 1000) -> UltraListView {
         let list = UltraListView(engineMode: mode)
         list.frame = .init(x: 0, y: 0, width: 320, height: 400)

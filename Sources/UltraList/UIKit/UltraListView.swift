@@ -126,7 +126,11 @@ public final class UltraListView: UltraScrollView {
         animations.referenceLayer = container.layer
         animations.bind(.viewport, layer: contentView.layer)
         animations.mirrorViewport(on: carousel.layer)
-        engine.onFlightChanged = { [weak self] _ in self?.renderAttachments() }
+        engine.onFlightChanged = { [weak self] flight in
+            guard let self else { return }
+            renderAttachments()
+            if flight != nil { handleScroll(engine.offset) }
+        }
         engine.didTouchDown = { [weak self] in self?.holdsPinnedRow = false }
         registerForTraitChanges([UITraitPreferredContentSizeCategory.self, UITraitUserInterfaceStyle.self, UITraitDisplayScale.self, UITraitLayoutDirection.self]) { (view: UltraListView, _: UITraitCollection) in view.setNeedsLayout() }
     }
@@ -237,7 +241,9 @@ public final class UltraListView: UltraScrollView {
         animations.capturePositions()
         defer {
             CATransaction.commit()
-            animations.clearPositions(); passing = false; reportVisibility()
+            animations.clearPositions(); passing = false
+            if engine.coveredOffsets(horizon: 0.3) != nil { handleScroll(engine.offset) }
+            reportVisibility()
             if pendingItems == nil, !pendingBlockAnimations.isEmpty {
                 let blocks = pendingBlockAnimations; pendingBlockAnimations.removeAll()
                 for block in blocks { animateInsertedBlockNow(block) }
@@ -528,7 +534,8 @@ public final class UltraListView: UltraScrollView {
         let delta = offset - previousOffset
         previousOffset = engine.offset; onUserScrollDelta?(delta, animations.now)
         let base = origin - settledWindow.minY, previous = settledWindow
-        settledWindow.rebalance(count: items.count, offsetInFrameSpace: engine.offset - base, viewportHeight: viewport.height, margin: preloadMargin) { [self] index in
+        let coverage = engine.coveredOffsets(horizon: 0.3).map { ($0.lowerBound - base)...($0.upperBound - base) }
+        settledWindow.rebalance(count: items.count, offsetInFrameSpace: engine.offset - base, viewportHeight: viewport.height, margin: preloadMargin, coveredOffsets: coverage, maximumAdditionalRows: coverage == nil ? nil : 64) { [self] index in
             let item = items[index], key = MeasurementKey(identity: item.identity, revision: item.revision, width: viewport.contentWidth, environment: measurementEnvironmentKey &+ item.measurementEnvironment &* 0x9e3779b97f4a7c15)
             if item.measuresAsynchronously, measurements.height(for: key) == nil { requestMeasurement(index); return nil }
             let view = views[item.identity] ?? carried[item.identity]?.view ?? item.makeView()
@@ -570,7 +577,10 @@ public final class UltraListView: UltraScrollView {
             engine.setEdges(declaredEdges); resolveAttachments(transition: .immediate)
             CATransaction.commit()
         }
-        if let index = settledWindow.rows.first(where: { base + $0.maxY > offset })?.index { requestAhead(anchor: index, direction: delta < 0 ? -1 : 1) }
+        if let index = settledWindow.rows.first(where: { base + $0.maxY > offset })?.index {
+            let direction = engine.coveredOffsets(horizon: 0.3).map { $0.lowerBound + $0.upperBound < 2 * engine.offset ? -1 : 1 } ?? (delta < 0 ? -1 : 1)
+            requestAhead(anchor: index, direction: direction)
+        }
         sweepPreparations()
         renderAttachments(); reportVisibility(); super.handleScroll(engine.offset)
     }
@@ -713,7 +723,11 @@ public final class UltraListView: UltraScrollView {
         return awaited
     }
     private func requestAhead(anchor: Int, direction: Int) {
-        speculativeRequests = MeasurementCache.priority(count: items.count, anchor: anchor, direction: direction, limit: 64).compactMap { index in
+        let indices: [Int]
+        if engine.coveredOffsets(horizon: 0.3) != nil {
+            indices = (0..<64).map { anchor + $0 * (direction < 0 ? -1 : 1) }.filter { items.indices.contains($0) }
+        } else { indices = MeasurementCache.priority(count: items.count, anchor: anchor, direction: direction, limit: 64) }
+        speculativeRequests = indices.compactMap { index in
             let item = items[index], key = measurementKey(item, width: viewport.contentWidth)
             guard item.measuresAsynchronously, measurements.height(for: key) == nil, measurementTasks[key] == nil else { return nil }
             return (item, key, viewport.contentWidth)

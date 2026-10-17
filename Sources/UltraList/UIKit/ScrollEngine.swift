@@ -7,6 +7,7 @@ protocol ScrollEngine: AnyObject {
     var host: UIView { get }
     var offset: Double { get }
     var activeFlight: ScrollFlight? { get }
+    func coveredOffsets(horizon: Double) -> ClosedRange<Double>?
     var dragging: Bool { get }
     var tracking: Bool { get }
     var onScroll: ((Double) -> Void)? { get set }
@@ -70,6 +71,7 @@ final class PhysicsEngine: NSObject, ScrollEngine, UIGestureRecognizerDelegate {
     let mode: ScrollEngineMode
     var core = ScrollCore()
     var flightState: FlightState?
+    private var coveragePrediction: ScrollFlight?
     var offset: Double { core.offset }
     var activeFlight: ScrollFlight? { flightState?.flight }
     var dragging: Bool { core.isDragging }
@@ -92,6 +94,10 @@ final class PhysicsEngine: NSObject, ScrollEngine, UIGestureRecognizerDelegate {
     private let flightKey = "ultraview.scroll.flight"
     private var now: Double { host.layer.convertTime(CACurrentMediaTime(), from: nil) }
     private var maxFPS: Float { Float(host.window?.windowScene?.screen.maximumFramesPerSecond ?? 60) }
+    func coveredOffsets(horizon: Double) -> ClosedRange<Double>? {
+        let flight = flightState?.flight ?? (core.isDecelerating ? coveragePrediction : nil)
+        return flight?.coveredOffsets(at: now, horizon: horizon)
+    }
 
     init(mode: ScrollEngineMode) {
         self.mode = mode
@@ -136,6 +142,7 @@ final class PhysicsEngine: NSObject, ScrollEngine, UIGestureRecognizerDelegate {
     func sync() { flightState?.beginTick(at: now, core: &core) }
     func shift(by delta: Double) {
         core.shift(by: delta)
+        coveragePrediction?.coordinateShift += delta
         if flightState != nil {
             flightState?.shift(by: delta, edges: edges)
             writeBase(host.bounds.origin.y + delta)
@@ -144,7 +151,19 @@ final class PhysicsEngine: NSObject, ScrollEngine, UIGestureRecognizerDelegate {
     }
     func setEdges(_ edges: ScrollEdges) {
         guard self.edges != edges else { return }
+        let discoversEdge = self.edges.minimum == nil && edges.minimum != nil || self.edges.maximum == nil && edges.maximum != nil
         self.edges = edges; core.setEdges(edges); flightState?.edgesChanged(to: edges)
+        if discoversEdge, var state = flightState, state.rebakePending {
+            let time = now
+            state.beginTick(at: time, core: &core)
+            if state.rebake(at: time, core: core) {
+                flightState = state; writeBase(state.flight.settledOffset)
+                emit(state.flight); onFlightChanged?(state.flight)
+            }
+        }
+        if coveragePrediction != nil {
+            coveragePrediction = .init(trajectory: .init(baking: core.axis), beginTime: now, coordinateShift: 0)
+        }
         // An edge arriving under resting content starts its own return.
         if flightState == nil, !core.isDragging, !core.isDecelerating, !edges.contains(offset), !settleScheduled {
             settleScheduled = true
@@ -162,6 +181,8 @@ final class PhysicsEngine: NSObject, ScrollEngine, UIGestureRecognizerDelegate {
     }
 
     private func catchMotion(braking: Bool) {
+        let predicted = coveragePrediction != nil
+        coveragePrediction = nil
         if let state = flightState {
             let time = now
             let stop = FlightState.brakeStopTime(now: time, lastFrame: link.flatMap { $0.timestamp > 0 ? host.layer.convertTime($0.timestamp, from: nil) : nil }, nextFrame: link.flatMap { $0.timestamp > 0 ? host.layer.convertTime($0.targetTimestamp, from: nil) : nil }, maximumFPS: Double(maxFPS))
@@ -175,6 +196,7 @@ final class PhysicsEngine: NSObject, ScrollEngine, UIGestureRecognizerDelegate {
         } else {
             core.halt()
             host.layer.removeAnimation(forKey: flightKey)
+            if predicted { onFlightChanged?(nil) }
         }
         link?.invalidate(); link = nil
     }
@@ -197,6 +219,9 @@ final class PhysicsEngine: NSObject, ScrollEngine, UIGestureRecognizerDelegate {
             let state = FlightState(core: core, time: now)
             flightState = state; writeBase(state.flight.settledOffset)
             emit(state.flight); onFlightChanged?(state.flight)
+        } else {
+            coveragePrediction = .init(trajectory: .init(baking: core.axis), beginTime: now, coordinateShift: 0)
+            onFlightChanged?(coveragePrediction)
         }
         startLink()
     }
@@ -229,7 +254,7 @@ final class PhysicsEngine: NSObject, ScrollEngine, UIGestureRecognizerDelegate {
         } else if core.isDecelerating {
             let settled = core.step(seconds: max(1 / 120, link.targetTimestamp - link.timestamp))
             writeBase(offset); onScroll?(offset)
-            if settled { core.halt(); self.link?.invalidate(); self.link = nil; didEndScrolling?() }
+            if settled { coveragePrediction = nil; core.halt(); self.link?.invalidate(); self.link = nil; didEndScrolling?() }
         } else { self.link?.invalidate(); self.link = nil }
     }
     @objc private func panned() {
@@ -331,6 +356,11 @@ final class PlatformEngine: NSObject, ScrollEngine, UIScrollViewDelegate {
     private var writing = false
     private var edges: ScrollEdges?
     private var replay: PhysicsEngine?
+    private var coveragePrediction: ScrollFlight?
+    func coveredOffsets(horizon: Double) -> ClosedRange<Double>? {
+        if let coverage = replay?.coveredOffsets(horizon: horizon) { return coverage }
+        return coveragePrediction?.coveredOffsets(at: scroll.layer.convertTime(CACurrentMediaTime(), from: nil), horizon: horizon)
+    }
     private let touchObserver = TouchObserver()
     override convenience init() { self.init(scroll: UIScrollView()) }
     init(scroll: UIScrollView) {
@@ -346,7 +376,7 @@ final class PlatformEngine: NSObject, ScrollEngine, UIScrollViewDelegate {
         scroll.addGestureRecognizer(touchObserver)
         scroll.panGestureRecognizer.addTarget(self, action: #selector(panned))
     }
-    func setOffset(_ value: Double) { writing = true; scroll.setContentOffset(.init(x: 0, y: value), animated: false); writing = false }
+    func setOffset(_ value: Double) { coveragePrediction = nil; writing = true; scroll.setContentOffset(.init(x: 0, y: value), animated: false); writing = false }
     func shift(by delta: Double) {
         guard abs(delta) > 1e-9 else { return }
         // Reparking changes coordinates, not the gesture's velocity. Calling
@@ -354,6 +384,7 @@ final class PlatformEngine: NSObject, ScrollEngine, UIScrollViewDelegate {
         writing = true
         var bounds = scroll.bounds; bounds.origin.y += delta; scroll.bounds = bounds
         writing = false
+        coveragePrediction?.coordinateShift += delta
         replay?.shift(by: delta)
     }
     func setEdges(_ edges: ScrollEdges) {
@@ -374,6 +405,12 @@ final class PlatformEngine: NSObject, ScrollEngine, UIScrollViewDelegate {
     func reanchorDrag() {}
     func teardown() { halt() }
     func beginMomentum(velocity: Double) {
+        let time = scroll.layer.convertTime(CACurrentMediaTime(), from: nil)
+        coveragePrediction = .init(trajectory: .init(samples: [
+            .init(time: 0, offset: offset, velocity: velocity),
+            .init(time: 0.35, offset: offset + velocity * 0.35, velocity: 0),
+        ]), beginTime: time, coordinateShift: 0)
+        onFlightChanged?(coveragePrediction)
         scroll.setContentOffset(.init(x: 0, y: offset + velocity * 0.35), animated: true)
     }
     func attachInput(to view: UIView) {
@@ -409,17 +446,31 @@ final class PlatformEngine: NSObject, ScrollEngine, UIScrollViewDelegate {
             driver.willBeginDragging = { [weak self] in self?.willBeginDragging?() }
             driver.didEndDragging = { [weak self] in self?.didEndDragging?() }
             driver.didEndScrolling = { [weak self] in self?.didEndScrolling?() }
+            driver.onFlightChanged = { [weak self] flight in self?.onFlightChanged?(flight) }
             replay = driver
         }
         replay?.receive(event)
     }
     func containerOrigin(height: Double, top: Bool, bottom: Bool) -> Double { top ? 0 : bottom ? 10_000_000 - height : 5_000_000 - height / 2 }
     func scrollViewDidScroll(_ scrollView: UIScrollView) { if !writing { onScroll?(offset) } }
-    func scrollViewWillBeginDragging(_ scrollView: UIScrollView) { willBeginDragging?() }
-    func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate: Bool) { didEndDragging?(); if !willDecelerate { didEndScrolling?() } }
-    func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) { didEndScrolling?() }
+    func scrollViewWillBeginDragging(_ scrollView: UIScrollView) { coveragePrediction = nil; willBeginDragging?() }
+    func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate: Bool) {
+        didEndDragging?()
+        if !willDecelerate { coveragePrediction = nil; didEndScrolling?() }
+    }
+    func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) { coveragePrediction = nil; didEndScrolling?() }
+    func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) { coveragePrediction = nil; didEndScrolling?() }
     func scrollViewWillEndDragging(_ scrollView: UIScrollView, withVelocity velocity: CGPoint, targetContentOffset: UnsafeMutablePointer<CGPoint>) {
-        if shouldStopOnRelease?(velocity.y * 1000) == true { targetContentOffset.pointee = scrollView.contentOffset }
+        if shouldStopOnRelease?(velocity.y * 1000) == true {
+            coveragePrediction = nil; targetContentOffset.pointee = scrollView.contentOffset
+        } else if abs(velocity.y) > 0.001 {
+            var axis = ScrollAxis(offset: offset, edges: edges ?? .init(), range: scroll.bounds.height)
+            axis.release(velocity: velocity.y)
+            coveragePrediction = .init(trajectory: .init(baking: axis), beginTime: scroll.layer.convertTime(CACurrentMediaTime(), from: nil), coordinateShift: 0)
+            let originalOffset = offset
+            onFlightChanged?(coveragePrediction)
+            targetContentOffset.pointee.y += offset - originalOffset
+        }
     }
 }
 #endif

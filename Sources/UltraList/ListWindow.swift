@@ -104,15 +104,19 @@ public struct ListWindow: Sendable, Equatable {
     }
 
     /// Rebalances in the old frame coordinate; the caller shifts the engine by the change in base.
-    public mutating func rebalance(count: Int, offsetInFrameSpace: Double, viewportHeight: Double, margin: Double = 160, measure: (Int) -> (height: Double, top: Double, bottom: Double)?) {
-        let low = offsetInFrameSpace - margin, high = offsetInFrameSpace + viewportHeight + margin
+    public mutating func rebalance(count: Int, offsetInFrameSpace: Double, viewportHeight: Double, margin: Double = 160, coveredOffsets: ClosedRange<Double>? = nil, maximumAdditionalRows: Int? = nil, measure: (Int) -> (height: Double, top: Double, bottom: Double)?) {
+        let low = min(offsetInFrameSpace, coveredOffsets?.lowerBound ?? offsetInFrameSpace) - margin
+        let high = max(offsetInFrameSpace, coveredOffsets?.upperBound ?? offsetInFrameSpace) + viewportHeight + margin
+        var remaining = max(0, maximumAdditionalRows ?? Int.max)
         while rows.count > 1 && rows[0].bandBottom < low { rows.removeFirst() }
         while rows.count > 1 && rows.last!.bandTop > high { rows.removeLast() }
         while let first = rows.first, first.bandTop > low, first.index > 0 {
+            guard remaining > 0 else { break }; remaining -= 1
             guard let m = measure(first.index - 1) else { break }
             rows.insert(.init(index: first.index - 1, y: first.bandTop - m.bottom - m.height, height: m.height, reservedTop: m.top, reservedBottom: m.bottom), at: 0)
         }
         while let last = rows.last, last.bandBottom < high, last.index + 1 < count {
+            guard remaining > 0 else { break }; remaining -= 1
             guard let m = measure(last.index + 1) else { break }
             rows.append(.init(index: last.index + 1, y: last.bandBottom + m.top, height: m.height, reservedTop: m.top, reservedBottom: m.bottom))
         }
