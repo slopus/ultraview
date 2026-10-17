@@ -1086,27 +1086,35 @@ on the frame lengths; and the settling frame (`|v| < 0.01`, then a snap of
 at most half a point, :121-122) depends on them too. The engine's
 settlement scheduling (`settleIfNeeded`, added in `1768f72`) is not modeled.
 
-## A cancelled keyboard dismissal (for the chat's next change)
+## A cancelled keyboard dismissal at `f683c2f`
 
-`Proofs/UltraProofs/List/Return.lean` models the resolver the chat screen's
-next change adds (`KeyboardInsetGesture`), as its author described it; it is
-not yet mapped to Swift. A drag that begins with the keyboard shown (more
-than half a point above its resting height) snapshots the starting inset and
-keyboard height; one that begins with it closed records nothing and never
-returns (`begin_closed_never`). While the finger is down a tracked sample
-records the inset unless
-its height matches the recorded target within half a point; a keyboard
-animation with a duration records its target height, the last one winning;
-zero-duration notifications record nothing; no notification records an
-inset. An animated layout while the finger is down (a positive inherited
-animation duration) is a target too (`outcome` with the guide's height),
-which covers a will-change notification that never arrives before the
-release; an ordinary layout while down is a tracked sample, and a guide
-change after the release is a `layout`. The release resolves with the recorded target, or the guide's height
-without one. A height within half a point of the starting one returns the
-content by `start - latest`; one at most half a point above the resting
-height is a dismissal; anything else waits for a later notification or
-layout. Resolving clears the gesture, and a new drag replaces it.
+`Proofs/UltraProofs/List/Return.lean` models the chat screen's
+`KeyboardInsetGesture` (Sources/UltraViewDemo/List/KeyboardInsetGesture.swift)
+and the controller calls that feed it (ListChatController.swift). A drag
+that begins with the keyboard shown (more than half a point above its
+resting height) snapshots the starting inset and keyboard height; one that
+begins with it closed records nothing and never returns
+(`begin_closed_never`). While the finger is down a tracked sample records
+the inset unless its height matches the recorded target within half a
+point; a keyboard animation with a duration records its target height, the
+last one winning; zero-duration notifications record nothing. The release
+resolves with the recorded target, or the guide's height without one. A
+height within half a point of the starting one returns the content by
+`start - latest`; one at most half a point above the resting height is a
+dismissal; anything else waits for a later notification or layout.
+Resolving clears the gesture, and a new drag replaces it.
+
+| Model (`Proofs/UltraProofs/List/Return.lean`) | Swift at `f683c2f` |
+| --- | --- |
+| `G` | `KeyboardInsetGesture.Gesture` (KeyboardInsetGesture.swift:8-14): `inset`, `height`, `restingHeight`, `latestInset`, `pendingHeight`; `released` is `!isTracking` while a gesture is held (`awaitsOutcome`, :17) |
+| `near`, `G.isOpen`, `G.isClosed` | `abs(_ - _) <= 0.5` (:28, :45) and `outcome(height:)` (:43-49) |
+| `Ev.begin` and its guard | `begin` (:20-25), `height > restingHeight + 0.5`, from `keyboardDragBegan` (ListChatController.swift:203-207) in `willBeginDragging` (:89-94) with the composer inset, the guide's height and the safe-area bottom |
+| `Ev.track`, `matchesTarget` | `track` (KeyboardInsetGesture.swift:26-31), from `keyboardDragChanged` (ListChatController.swift:208-213) with the applied inset (the new one if it moves by more than half a point, else the current one), which `keyboardTrackingLayout` (:175-185) reaches only while the input tracks (`list.isTracking && list.isDragging`, :167) |
+| `Ev.outcome` | `keyboardOutcome` (KeyboardInsetGesture.swift:37-42) while the finger is down: a will-change notification with a duration (`keyboardFrameChanged`, ListChatController.swift:255-256), or a layout that is animated or comes with the input no longer tracking, whose guide is conclusive (`recognizesOutcome`, :178-181) |
+| `Ev.release` | `end` (KeyboardInsetGesture.swift:32-36) from `keyboardDragEnded` (ListChatController.swift:214-219) in `didEndDragging` (:99-103), with the guide's height |
+| `Ev.layout` | after the release: `viewDidLayoutSubviews`' `awaitsOutcome` branch (:169-170) into `keyboardGuideChanged` (:220-226), and a will-change notification with the finger up (:255-256, applied at :260) |
+| `resolve`'s shift | `resolveKeyboardGesture` (:234-246): `.returned` turns `followsComposer` on and applies the starting inset with compensation (`applyComposerInset`, :187-193), so the content moves by `start - composerInset`, and `composerInset` is `latest` because each tracked sample applies the inset it records |
+| `jump_as_outcome` | `keyboardTrackingLayout`'s first branch (:178): the guide's unanimated jump after the lift, with the input inactive and a conclusive height, is an outcome; a partial one is ignored (:182-183); with the input active it is a tracked sample |
 
 - `resolution`: for every order of tracked samples, notifications and
   layouts around the one release, the returns are `verdict` of the last
@@ -1122,20 +1130,97 @@ layout. Resolving clears the gesture, and a new drag replaces it.
   layouts after the return do nothing. `begin_fresh`: a new drag replaces
   the whole snapshot. `notify_keeps_latest`: only tracked samples change the
   recorded inset, so the return is the inset the finger took away.
-- `jump_as_track`, `jump_as_outcome`: after the finger lifts and before the
-  release is reported, the guide jumps back to the starting height with no
-  animation. Taken as a tracked sample, that sets the recorded inset to the
-  start and the return is 0 (the cause of the unchanged reversal clips);
-  taken as a target, the release returns `start - latest`. The classifier
-  that tells a lifted finger's jump from finger motion is the controller's
-  and is not modeled; the resolver's policy does not change.
+- `jump_as_track`, `jump_as_outcome`: taken as a tracked sample, the jump
+  sets the recorded inset to the start and the return is 0 (the cause of the
+  reversal clips before `f683c2f`); taken as an outcome, as the controller
+  now does, the release returns `start - latest`.
 
-The return itself runs the inset-only path with compensation and a screen
-move of `start - latest`: `ListMomentum.keyboard_keeps_velocity` and
+The Swift calls `end` once per `begin` (`didEndDragging` follows
+`willBeginDragging`); the model ignores a second release. The return runs
+the inset-only path with compensation and a screen move of
+`start - latest`: `ListMomentum.keyboard_keeps_velocity` and
 `run_keeps_velocity` (a flight is translated and keeps its velocity),
 `follows_moves_by_inset` (the offset moves by exactly that much inside the
 edges) and `ListPass.lockstep_iff` (in step with the composer when both use
-the keyboard's timing) cover it.
+one timing) cover it. Its timing (`keyboardReturnTransition`, :227-233) and
+the composer bar's clock against it are not modeled; the commit records that
+the rows lag the bar during the return.
+
+**Gap at `f683c2f`: a touch while the outcome is awaited.** After a release
+at a partial height the gesture waits (`awaitsOutcome`). A touch on the list
+then sets `keyboardDragHasEnded = false` (:86-88), so `isTrackingKeyboard`
+(:23) reads true while `keyboardGesture.isTracking` is false. An outcome in
+that state still resolves the gesture, but `keyboardFrameChanged` returns
+before applying it (`guard !isTrackingKeyboard`, :258) and
+`keyboardTrackingLayout` discards it (`_ = keyboardOutcome`, :181); its
+else branch also applies the bar's inset uncompensated (:184), so a later
+resolution would not move by `start - latest` either. `touch_loses`: the
+return is then lost for good, whatever notifications, layouts and releases
+follow; `touch_drops` is the sample (a return of 100 becomes none). A new
+drag in the waiting state replaces the gesture (`begin_fresh`), which drops
+the waiting return as well; the new snapshot starts from the displaced
+inset.
+
+Momentum rows at `f683c2f` (the section at `b896af1` maps the earlier
+controller): the model's tracking is `isTrackingKeyboard` (:23), which adds
+the gesture's own tracking and excludes the moment after `didEndDragging`
+reports. `Ev.dragBegin` is `willBeginDragging` (:89-94), `Ev.drag` the
+`onUserScrollDelta` guard (:95-98) and the layout check (:160),
+`Ev.release` `didEndDragging` (:99-103), `Ev.keyboard` `keyboardFrameChanged`
+(:247-266) and `applyComposerInset`'s `compensatesInsetChange:
+!isTrackingKeyboard && followsComposer` (:191), and `Ev.explicit` the hide
+button (:113), `textViewDidChange` (:267-269), `sendMessage` (:362-363) and
+a resolved return (:239). A resolved dismissal (:243) turns compensation
+off, as the release does. Resolutions apply only with `isTrackingKeyboard`
+false, and while it is true every inset goes in uncompensated, so
+`tracking_never_writes` holds for the new paths.
+
+## Elastic resize at `44f8a0c`
+
+`Proofs/UltraProofs/List/Elastic.lean` covers a bubble that resizes with its
+row: its background follows the row's width and height with a fixed corner
+radius, and its text keeps its padding and crossfades. The demo opts in
+(`animatesContent`); the core code is the node transitions at `44f8a0c`.
+
+| Model (`Proofs/UltraProofs/List/Elastic.lean`) | Swift at `44f8a0c` |
+| --- | --- |
+| `bg m W H` | the card node's layer: `position.x`, `position.y`, `bounds.size.width`, `bounds.size.height` (NodeTransitionAnimator.swift:243-246) on the row's height timing (`rowDidAnimate`, see "Content inside an animating row"). With the card's edges at fixed margins from the row's at both ends, `ListContent.edge_constant` puts them there at every frame, so the card is `bg` of the row's presented size |
+| `boundsCorners`, `bounds_round`, `bounds_rigid` | a layer-representable box (uniform radius and border): `layer.cornerRadius` is a model value, the same at both ends, and `scalar` adds no animation when it doesn't change (:253, :373-374, :391) |
+| `slice`, `slice_bands`, `slice_seams` | any other box: drawn once at its final size with `ContentsPlacement.stretch` (Drawing.swift:49-66), bands as wide as the widest corner or border, applied as `contentsCenter` (CommitApplier.swift:290-292, :297) |
+| `corners_fit`'s `2 * r` | Core Animation clamps a corner radius above half the shorter side, and shrinks nine-slice bands that don't fit; `stretching` leaves at least one pixel in the middle (Drawing.swift:59-61), so `2 * b < w1` holds at the final size |
+| `textFrame`, `text_inset` | the text node's layer, with the same four animations, and `.top(alignment)` (Drawing.swift:48; CommitApplier.swift:283-289): contents unscaled against the top edge |
+| `layered` | `fadeOut` (NodeTransitionAnimator.swift:436-464): the old bitmap as a ghost at sublayer index 0, over the view's own contents and under its children, `opacity` 1 → 0, at the new view's size; `reveal` (:406-431): the new bitmap through a mask, stable bands at 1 and new regions from `fromOpacity` to 1, all on the row's timing |
+
+- `bounds_round`, `bounds_rigid`: resizing the bounds keeps every corner a
+  quarter circle of radius `r` at any size, each moving as a rigid piece.
+  `scale_distorts`: scaling the final background instead gives its corners
+  `r * sx` by `r * sy`, which are `r` only at the final size.
+  `slice_bands`, `slice_seams`: a nine-sliced box's bands move rigidly with
+  its edges and meet the stretched middle, so its corners are the final
+  bitmap's.
+- `corners_fit`: with each clock a track on a curve that doesn't overshoot,
+  a background at least `2r` wide and tall at both ends is at every frame,
+  on any pair of timings, so the radius is never clamped.
+- `text_inset`: under any clocks the text keeps its padding and its laid-out
+  size. `text_fits`: a text that fits both ends fits at every frame.
+  `overflow_lerp`: one that fits only the end (the new text of a growing
+  bubble) would overflow by `(1 - p)` of the growth at progress `p`; the
+  reveal mask fades new regions in instead.
+- `stable_steady`, `ghost_shared`, `ghost_new`, `ghost_old`: stable lines
+  show the new bitmap throughout, ink both texts share stays full while the
+  old one fades over the new, new-only ink shows at once, old-only ink fades.
+  `both_dip`: fading both would dim shared ink to three quarters at
+  mid-fade.
+
+Assumptions and gaps: `corners_fit` and `text_fits` need curves that don't
+overshoot (`Curves.Bounded`); a `dampedSpring` row with an end exactly `2r`
+tall can dip below it and clamp the radius for those frames. Text placed
+`.top(.center)` or `.top(.right)` sits relative to the layer's animated
+width, so it moves with the width clock; the model's `textFrame` is the
+left-aligned case. A pixel's ink is a coverage in `[0, 1]`; antialiasing,
+subpixel positioning and the reveal mask's band edges are not modeled.
+The simulator test f4yx runs checks the same invariants (card edges, title
+origin, presented radius 16, no bitmap on the card, one host).
 
 ## Theorems
 
@@ -1223,6 +1308,13 @@ the keyboard's timing) cover it.
 - `ListReturn.resolution`, `at_most_once`: a cancelled keyboard dismissal
   returns the content exactly once, by the inset the finger took away, in
   every order of notifications, layouts and the release.
+  `touch_loses`: a touch while the outcome is awaited loses it (gap at
+  `f683c2f`).
+- `ListElastic.bounds_round`, `slice_bands`, `corners_fit`, `text_inset`,
+  `ghost_shared`: a background resized by its bounds or nine-sliced keeps
+  its corners, which always fit, under any width and height clocks; its
+  text keeps its inset and size, and shared ink stays full through the
+  crossfade.
 - `ListDecel.engines_agree`, `springs_agree`: deceleration and bounce do not
   depend on the frame rate between edge crossings.
 - `ListRubber.adapt_no_jump`, `begin_catches`, `reanchor_idle`: an edge

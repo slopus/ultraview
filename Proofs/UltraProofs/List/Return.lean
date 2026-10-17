@@ -36,6 +36,9 @@ notifications and layouts do nothing.
   and never returns.
 * `notify_keeps_latest`: notifications, layouts and the release never change
   the recorded inset, so the shift is the finger's, not the animation's.
+* `touch_loses`, `touch_drops`: an outcome that resolves while a new touch
+  is down after the release, and whose return the controller does not
+  apply, loses the return for good.
 * `jump_as_track`, `jump_as_outcome`: the keyboard jumping back open after
   the finger lifts, if taken as a tracked sample, sets the recorded inset
   to the start and the return is 0 (or none); taken as a target it returns
@@ -436,5 +439,41 @@ theorem jump_as_outcome (c : C) (g : G) (hg : c.gesture = some g) (hr : g.releas
   have hrun : run c [.outcome g.startHeight, .release gd] = step (step c (.outcome g.startHeight)) (.release gd) := rfl
   rw [hrun, ho, hrel]
   simp [resolve, G.isOpen, hopen]
+
+/-! ## A touch while the outcome is awaited
+
+After a release at a partial height the gesture waits for its outcome. If a
+new touch lands on the list then, before it becomes a drag, the chat at
+`f683c2f` still lets the resolver resolve an outcome (a will-change
+notification with a duration, or an animated or input-inactive layout with
+a conclusive guide), which clears the gesture, but returns before applying
+the resolution (`keyboardFrameChanged`'s `guard !isTrackingKeyboard`) or
+discards it (`keyboardTrackingLayout`'s `_ = keyboardOutcome`). -/
+
+/-- An outcome that resolves the gesture but whose return is not applied. -/
+def touchedOutcome (c : C) (h : Rat) : C := ⟨(step c (.outcome h)).gesture, c.shifts⟩
+
+/-- **A touch during the wait loses the return for good**: the outcome that
+would return `start - latest` clears the gesture instead, and no later
+notification, layout or release (anything but a new drag) returns it. -/
+theorem touch_loses {c : C} {g : G} (hg : c.gesture = some g) (hr : g.released = true) {h : Rat}
+    (ho : g.isOpen h = true) (evs : List Ev) (hb : ∀ e ∈ evs, e.isBegin = false) :
+    (step c (.outcome h)).shifts = c.shifts ++ [g.start - g.latest] ∧
+      (run (touchedOutcome c h) evs).shifts = c.shifts := by
+  have hs : step c (.outcome h) = ⟨none, c.shifts ++ [g.start - g.latest]⟩ := by
+    simp [step, hg, hr, resolve, ho]
+  refine ⟨by rw [hs], ?_⟩
+  have ht : touchedOutcome c h = ⟨none, c.shifts⟩ := by simp only [touchedOutcome, hs]
+  rw [ht, cleared_quiet evs _ rfl hb]
+
+/-- The sample: a drag from inset 300 with the keyboard 336 tall (resting
+34) takes the inset to 200 and lifts at 150; the keyboard animates back
+open. Untouched, the content returns 100; touched, it returns nothing, and
+the guide reaching 336 afterwards changes nothing. -/
+theorem touch_drops :
+    (step (run ⟨none, []⟩ [.begin 300 336 34, .track 200 150, .release 150]) (.outcome 336)).shifts = [100] ∧
+      (run (touchedOutcome (run ⟨none, []⟩ [.begin 300 336 34, .track 200 150, .release 150]) 336)
+        [.layout 336, .outcome 336]).shifts = [] := by
+  decide +kernel
 
 end UltraProofs.ListReturn
