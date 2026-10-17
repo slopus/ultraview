@@ -30,6 +30,11 @@ anchor point.
   passes, each writing its planned top through the setter (the passes do not
   shift detached views, `shiftDetached` skips a zero delta), ends 700 points
   from its plan.
+* `replans_follow`: passes that each plan a carried row's next top from its
+  current one and write it through the position leave it on the planner's
+  result, flipped or not, for any planner. `setter_replans`: through the
+  setter a flipped row follows `plan · - h`. `stream_carry_fixed`: the five
+  stream passes again, on plan through the position.
 -/
 
 namespace UltraProofs.ListPlacement
@@ -103,5 +108,53 @@ theorem stream_carry_drifts (U : Setter) (p : Rat) :
     frameTop true 140 (writes U true 140 0 5 p) = frameTop true 140 p - 700 ∧
       frameTop true 140 (moves 0 5 p) = frameTop true 140 p := by
   rw [writes_drift, moves_exact]; constructor <;> grind
+
+/-! ## Passes that replan a carried row -/
+
+/-- `f` applied `n` times, innermost first. -/
+def iter (f : Rat → Rat) : Nat → Rat → Rat
+  | 0, y => y
+  | n + 1, y => iter f n (f y)
+
+/-- `layer.position.y += next - frame.minY`. -/
+def retarget (flip : Bool) (h p next : Rat) : Rat := p + (next - frameTop flip h p)
+
+/-- `n` passes, each planning the carried row's next top from its current
+one (`CrossingPlanner.infer` reads the view's `frame.minY`), writing
+through the position. -/
+def replans (flip : Bool) (h : Rat) (plan : Rat → Rat) : Nat → Rat → Rat
+  | 0, p => p
+  | n + 1, p => replans flip h plan n (retarget flip h p (plan (frameTop flip h p)))
+
+/-- The same passes writing `frame.origin.y = next` through the setter. -/
+def setterReplans (U : Setter) (flip : Bool) (h : Rat) (plan : Rat → Rat) : Nat → Rat → Rat
+  | 0, p => p
+  | n + 1, p => setterReplans U flip h plan n (U.set flip h (plan (frameTop flip h p)))
+
+/-- **Through the position, the row follows its plans exactly**: after `n`
+passes its top is the planner applied `n` times, flipped or not. -/
+theorem replans_follow (flip : Bool) (h : Rat) (plan : Rat → Rat) : ∀ (n : Nat) (p : Rat),
+    frameTop flip h (replans flip h plan n p) = iter plan n (frameTop flip h p)
+  | 0, _ => rfl
+  | n + 1, p => by
+    rw [replans, replans_follow flip h plan n, retarget, retarget_exact, iter]
+
+/-- **Through the setter, a flipped row loses its height every pass**: it
+follows `plan · - h` instead. -/
+theorem setter_replans (U : Setter) (h : Rat) (plan : Rat → Rat) : ∀ (n : Nat) (p : Rat),
+    frameTop true h (setterReplans U true h plan n p) = iter (fun y => plan y - h) n (frameTop true h p)
+  | 0, _ => rfl
+  | n + 1, p => by
+    rw [setterReplans, setter_replans U h plan n, iter]
+    simp only [U.anchored, frameTop, offsetY, ite_true]
+
+/-- Five stream passes replanning a 140-point carried row in place: on its
+plan through the position, 700 points off through the setter. -/
+theorem stream_carry_fixed (U : Setter) (p : Rat) :
+    frameTop true 140 (replans true 140 id 5 p) = frameTop true 140 p ∧
+      frameTop true 140 (setterReplans U true 140 id 5 p) = frameTop true 140 p - 700 := by
+  rw [replans_follow, setter_replans]
+  simp only [iter, id]
+  constructor <;> grind
 
 end UltraProofs.ListPlacement

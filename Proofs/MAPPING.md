@@ -200,7 +200,8 @@ translate layer positions directly; row and attachment size placement uses
 The modeled coordinate shifts are unchanged. UIKit's inference of bounds and
 position when assigning a transformed view's `frame` is outside those equations;
 the simulator carry regression exercises repeated stream revisions during an
-insertion with both normal and inverted rows.
+insertion with both normal and inverted rows. "Placing transformed row views
+at `2b33902`" below maps the new writes (`retarget_exact`, `replans_follow`).
 
 The `Window.dropFront` / `dropBack` / `rebalance` mapping was rechecked.
 `ListWindow.rebalance` now accepts a temporal coverage interval and an optional
@@ -692,41 +693,52 @@ and display readiness themselves), the empty-items case of the zero guard
 (both cleared, nothing can apply), staged view reuse, mutations with new
 items (the preparation queue), and the `passing` deferral.
 
-## Placing transformed row views at `746e713`
+## Placing transformed row views at `2b33902`
 
 `Proofs/UltraProofs/List/Placement.lean` relates the list's content
 coordinates (a row's frame top, which the `Pass`, `Window` and `Insets`
 models compute) to the layer position UIKit draws from, for row views whose
 layer anchor point is the top-left corner and whose transform may flip them
-(an inverted list's rows, `scale(1, -1)`).
+(an inverted list's rows, `scale(1, -1)`). At `746e713` carries and detached
+views were moved through the frame setter; `2b33902` moves them through the
+layer position. UltraListView.swift lines are at `2b33902`.
 
 | Model (`Proofs/UltraProofs/List/Placement.lean`) | Swift |
 | --- | --- |
 | `offsetY`, `frameTop` | `ListRowView.placementOffset(size:)` (ListRow.swift:81-84); the frame getter, the transformed bounds' box |
-| `place` | `ListRowView.place(in:)` (ListRow.swift:76-80) |
-| `Setter` (a structure field: UIKit leaves the setter undefined under a transform) | `UIView.frame`'s setter |
-| `write` | `carry.view.frame.origin.y = next` after reading `frame.minY` (UltraListView.swift:524), and `child.frame.origin.y += delta` in `shiftDetached` (:917) |
+| `place` | `ListRowView.place(in:)` (ListRow.swift:76-80), also for attachment views (UltraListView.swift:1245) |
+| `retarget` | `carry.view.layer.position.y += next - oldY` after reading `frame.minY` (UltraListView.swift:524-526) |
+| `moves` | `child.layer.position.y += delta` in `shiftDetached` (:919); carousel strips (:1061) |
+| `replans` | the carried rows across passes: each pass's endpoint is the view's `frame.minY` (:512), `CrossingPlanner.infer` plans its next top (:515), and `retarget` writes it |
+| `Setter`, `write`, `writes`, `setterReplans` (a structure field: UIKit leaves the setter undefined under a transform) | `UIView.frame`'s setter, as the same sites used it at `746e713` (:524, :917) |
 
 - `place_exact`, `translate_exact`, `retarget_exact`: `place(in:)` and
   moving `layer.position` by `next - frame.minY` land the frame exactly
   where the models put it, flipped or not.
-- `setter_drifts`, `writes_drift`: each frame write through the setter
-  moves a flipped row `h` past the requested top; `setter_exact_iff`: it is
-  exact only for unflipped (or empty) rows. In the inverted list's flipped
-  content view, that is `h` down the screen per write.
-- `stream_carry_drifts`: a 140-point carried row replanned in place by five
-  stream passes ends 700 points off its plan. Stream passes do not shift
-  detached views (`shiftDetached` returns on a zero delta), so each pass
-  writes it once, at :524: about one row height per token, as the Send
-  traces showed (+129.5 and +138.8 for 140-point rows, 90 to 107 for
-  116-point rows, with the plans' own motion on top).
+- `replans_follow`: over any number of passes, whatever the planner, a
+  carried row moved through its position is on the planner's result at
+  every pass, flipped or not. `moves_exact`: `shiftDetached`'s moves add up
+  exactly. `stream_carry_fixed`: five stream passes that replan a 140-point
+  row in place leave it on its plan.
+- The `746e713` baseline: `setter_drifts`, `writes_drift`: each frame write
+  through the setter moves a flipped row `h` past the requested top;
+  `setter_exact_iff`: it is exact only for unflipped (or empty) rows.
+  `setter_replans`: through the setter a flipped carried row follows
+  `plan · - h`. `stream_carry_drifts`: the five stream passes left it 700
+  points off its plan, about one row height per token, as the Send traces
+  showed (+129.5 and +138.8 for 140-point rows, 90 to 107 for 116-point
+  rows, with the plans' own motion on top).
 
+Ghost and carousel wrappers have the anchor at the top-left and no
+transform; their bounds and position are now set separately (:963-964,
+:1041, :1066, :1074-1075), and `place false` is the identity on their top.
 The `Pass` theorems about carries and departures (`detached_fixed`,
-`scroll_carry_fixed`, `inserted_once`) are about frame tops and need no
-change; they hold for the Swift once its writes realize those tops
-(`retarget_exact`), not through the frame setter. Untransformed wrappers
-(carousel strips, departure blocks) are exact either way.
-The setter hypothesis is the observed behavior, not documented API.
+`scroll_carry_fixed`, `inserted_once`) are about frame tops and hold for the
+Swift through `retarget_exact` and `moves_exact`.
+`Tests/UltraViewUIKitTests/CarryContinuityTests.swift` checks an outgoing
+row stays beyond its loaded neighbour through stream revisions during a
+Send, for every engine, normal and inverted rows. The setter hypothesis is
+the observed behavior, not documented API.
 
 ## Swipe actions at `76eab99`
 
@@ -785,23 +797,23 @@ their presented values. It is not yet mapped to Swift.
 - `alone_drifts`: retiming the row alone, with a 10-point inset bubble left
   on its timing, overlaps the row's edge by 2.5 points at 1 s.
 
-## Departure blocks at `b4461c3`
+## Departure blocks at `2b33902`
 
 `Proofs/UltraProofs/List/Departures.lean` models `DepartureLedger`
 (DepartureGeometry.swift, unchanged since `e0a2c2c`). The list's calls pin
-UltraListView.swift at `b4461c3`. Block ids and row identities are numbers,
+UltraListView.swift at `2b33902`. Block ids and row identities are numbers,
 coordinates rationals.
 
 | Model (`Proofs/UltraProofs/List/Departures.lean`) | Swift |
 | --- | --- |
 | `Edge`, `Witness`, `Block` | `BoundaryEdge`, `DepartureLedger.Witness`, `.Block` (DepartureGeometry.swift:3-25) |
-| `insert` | `insert(_:)` (:28); its precondition is the model's guard, and the list's ids come from `serial` (UltraListView.swift:952, 963) |
+| `insert` | `insert(_:)` (:28); its precondition is the model's guard, and the list's ids come from `serial` (UltraListView.swift:954, 966) |
 | `walk`, `link` | `link(_:to:edge:)` and its loop over `seen` (:29-42), with the loop bounded by `fuel` |
 | `bound`, `solve` | `targets(rows:)`'s `solve` (:43-60); `solve 0` is the `visiting` guard's value |
 | `promote` | `promoteToViewport(_:offset:)` (:63-66) |
 | `modify` with `setRoot`, `close`, `shift`, `finish`, `addMember` | `setRoot`, `seal`, `shift(by:)`, `finishMember`, `addMember` (:61-75) |
 | `drop` | one removal of `collect()`'s loop (:76-83) |
-| `Op`, `run` | the calls in UltraListView.swift: `makeDepartures` (:963, :983-984), `updateGhosts` (:1006-1040), `shiftDetached` (:918), `promoteCarousel` (:1061-1063) and `departAttachment` (:1211, :1220-1221) |
+| `Op`, `run` | the calls in UltraListView.swift: `makeDepartures` (:966, :986-987), `updateGhosts` (:1009-1043), `shiftDetached` (:920), `promoteCarousel` (:1064-1066) and `departAttachment` (:1215, :1224-1225) |
 
 - `inv_run`: after any sequence of these operations from an empty ledger,
   every chain of carriers ends (`Inv.acyclic`) and every carrier exists
@@ -818,7 +830,7 @@ coordinates rationals.
   its witness row's edge. `keeps_root`: with no witness, or a witness row
   outside `live`, it stays at its root. The list then animates each block
   from its old root to that target on the pass's timing
-  (UltraListView.swift:1036-1040), and
+  (UltraListView.swift:1039-1043), and
   `ListPass.ghost_follows_witness` gives that the block moves with what it
   rides at every frame when the witness's track shares the timing.
 - `collect_empties`: once every member has finished, a stopped `collect()`

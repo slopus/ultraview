@@ -186,6 +186,9 @@ open UltraProofs
 #print axioms ListPlacement.writes_drift
 #print axioms ListPlacement.moves_exact
 #print axioms ListPlacement.stream_carry_drifts
+#print axioms ListPlacement.replans_follow
+#print axioms ListPlacement.setter_replans
+#print axioms ListPlacement.stream_carry_fixed
 #print axioms ListSwipe.lock_keeps
 #print axioms ListSwipe.lock_run_keeps
 #print axioms ListSwipe.run_none_iff
