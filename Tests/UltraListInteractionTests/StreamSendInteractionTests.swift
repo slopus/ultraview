@@ -28,12 +28,13 @@ final class StreamSendInteractionTests: XCTestCase {
             app.launchArguments = ["-screen", "lists", "-listScreen", "chat", "-listEngine", engine,
                                    "-listStreamSendProbe", "YES", "-listStreamSendEngines", engine]
             app.launch()
-            let document = try report(app, timeout: 150)
+            let document = try report(app, timeout: 200)
             XCTAssertNil(document["failure"], "\(engine): \(document["failure"] ?? "")")
             let scenarios = document["scenarios"] as? [[String: Any]] ?? []
-            XCTAssertEqual(scenarios.count, 4, "\(engine): \(document)")
+            XCTAssertEqual(scenarios.count, 6, "\(engine): \(document)")
             for scenario in scenarios {
-                let name = "\(engine)/\(scenario["scenario"] as? String ?? "?")"
+                let title = scenario["scenario"] as? String ?? "?"
+                let name = "\(engine)/\(title)"
                 print("Stream/send \(name): \(scenario)")
                 XCTAssertEqual(scenario["violationCount"] as? Int, 0, "\(name) violations \(scenario["violations"] ?? "") first \(scenario["firstViolations"] ?? "")")
                 XCTAssertGreaterThan(scenario["strictPairSamples"] as? Int ?? 0, 0, "\(name): no visible pair was sampled")
@@ -47,9 +48,20 @@ final class StreamSendInteractionTests: XCTestCase {
                 XCTAssertLessThanOrEqual(abs(scenario["newestGapToInset"] as? Double ?? 1000), 0.5, "\(name): newest row is off the inset line")
                 XCTAssertLessThanOrEqual(abs(scenario["newestGapToComposer"] as? Double ?? 1000), 0.5, "\(name): newest row does not meet the composer")
                 XCTAssertEqual(scenario["modelOK"] as? Bool, true, "\(name): \(scenario["modelProblems"] ?? "")")
-                let hits = scenario["midGrowHits"] as? [[String: Any]] ?? []
-                XCTAssertTrue(hits.contains { $0["required"] as? Bool == true }, "\(name): no send was scheduled mid-grow")
-                if scenario["scenario"] as? String == "keyboardSendMidGrow" {
+                if title.lowercased().contains("multiline") {
+                    let composer = scenario["composerSend"] as? [String: Any] ?? [:]
+                    print("Stream/send \(name) composer: \(composer)")
+                    XCTAssertEqual(composer["draftGrew"] as? Bool, true, name)
+                    XCTAssertEqual(composer["composerShrank"] as? Bool, true, name)
+                    XCTAssertEqual(composer["insertStartedDuringShrink"] as? Bool, true, name)
+                    XCTAssertLessThanOrEqual(composer["insertionResidualMax"] as? Double ?? 1000, 1, "\(name): composer and insertion use different timing")
+                    XCTAssertGreaterThan(composer["postInsertSamples"] as? Int ?? 0, 0, name)
+                    XCTAssertLessThanOrEqual(composer["postInsertMaxGap"] as? Double ?? 1000, 0.5, name)
+                } else {
+                    let hits = scenario["midGrowHits"] as? [[String: Any]] ?? []
+                    XCTAssertTrue(hits.contains { $0["required"] as? Bool == true }, "\(name): no send was scheduled mid-grow")
+                }
+                if title.hasPrefix("keyboard") {
                     XCTAssertEqual(scenario["keyboardVisible"] as? Bool, true, "\(name): the software keyboard did not appear")
                 }
             }

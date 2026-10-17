@@ -30,8 +30,17 @@ host at a time. Returning to a row during its departure transfers that live host
 to the incoming wrapper; the departing wrapper keeps a snapshot. A newly created
 `NodeRow` can prepare its content asynchronously even when its height is cached.
 
-The host prepares its measured size before display and never waits for drawing.
+The host prepares its measured size before display without blocking main for drawing.
 `ListRowView.isDisplayReady` and `onDisplayReady` report the first ready commit.
+Custom asynchronous views call `reportDisplayReady()` after their visible
+content becomes ready. A pure immediate jump to a disjoint window keeps the
+old window visible until measurements cover the destination's visible band
+and its row views are ready. The pass reuses those staged views. A newer jump
+discards the obsolete band and its callbacks.
+The readiness follow-up passed 343 simulator unit tests and 80 focused tests
+under each sanitizer. Coverage includes real node rows and late readiness
+callbacks after a superseding jump in every engine. The 137 Lean checks passed;
+the display-readiness predicate itself is outside the proof model.
 During a revision, the ready host remains visible until its replacement applies
 the current-size visible commit. A shrinking row keeps its tall ready host until
 the animated outer clip reaches the new height, then reveals the shorter host.
@@ -149,6 +158,15 @@ The chat composer uses a text view that grows to five lines and then scrolls
 inside its fixed width. Send and Stream retain their trailing positions; composer
 height changes use the same inset path as keyboard changes. A queued inserted
 block animation waits for its asynchronous mutation pass before starting.
+Send clears and measures the input before submitting its collection, then keeps
+the old composer height until that collection applies. Its shrink shares the
+list's 0.3-second duration and viewport-animation start time, including time
+spent applying the prepared pass. The demo copies UIKit's generated geometry
+tracks to assign that start time.
+In a compact vertical size class, the demo's screen, engine and blocker controls
+share one horizontal row so the keyboard leaves room for chat gestures. Seven
+keyboard interaction methods passed, including landscape dismissal in every
+engine, with recorded drag samples and releases required by the assertions.
 
 The chat list keeps its full frame behind the composer and keyboard. The
 keyboard's notification supplies the occlusion target and duration in the same
@@ -400,6 +418,13 @@ system cost. The same run measured an unchanged controller layout at 0.31 ms.
 These simulator action timings describe the measured system limits alongside
 the library budget. Device input costs require their own measurements.
 
+A four-run comparison kept the standard text setter. Replacing the whole input
+range saved 3.4–4.1 ms for the clear with the keyboard up, but added a text-change
+notification and made an already-sent draft undoable. Direct text-storage deletion
+did not save more than 3 ms and increased main-thread busy time over the following
+300 ms by 12–18 ms. Both composer tests passed, including typing and sending the
+next message with the real software keyboard.
+
 The Stream/Send probe reproduced a 41–51 point gap between a sent message and
 the streaming row beside it in all twelve scenarios across the three engines.
 The target pass already moved the new row with its neighbours; a second
@@ -409,6 +434,14 @@ error below 0.001 point. The scenarios cover Send during growth, keyboard-up
 Send during growth, two Sends, and Stream → Send → Stream. At rest, model and
 presentation geometry matched and the newest row met the composer in every
 scenario.
+
+The expanded interaction test added four- and seven-line drafts that shrink the
+composer during Send. All eighteen scenarios passed, with no gap violations
+across 14,313 strict visible-pair samples; the newest row met the composer after
+insertion in each multiline scenario. The maximum composer residual from the
+expected insertion curve was 0.205 point, below the test's one-point limit.
+Measurements use presentation layers. Long-input button placement and typing
+the next message with the real software keyboard also passed.
 
 The inset and Send fixes passed 221 Linux tests, 336 simulator unit tests,
 69 focused tests under each of Address Sanitizer and Thread Sanitizer, and

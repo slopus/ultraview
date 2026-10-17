@@ -6,7 +6,8 @@ import UltraView
 ///
 ///     -screen lists -listScreen chat -listStreamSendProbe YES
 ///     [-listStreamSendEngines uiKit,stepped,keyframe]
-///     [-listStreamSendScenarios sendMidGrow,keyboardSendMidGrow,twoSends,streamSendStream]
+///     [-listStreamSendScenarios sendMidGrow,keyboardSendMidGrow,twoSends,streamSendStream,
+///                               multilineSendShrink,keyboardMultilineSendShrink]
 ///
 /// Each scenario starts from a fresh chat, rebuilt through the engine control,
 /// and presses the real Stream and Send buttons. Every display frame, adjacent
@@ -26,7 +27,8 @@ import UltraView
 /// Chat contract the probe relies on: Send inserts `sent-*` and Stream inserts
 /// `stream-*` at index 0; a stream ends at revision 40 (override with
 /// `-listStreamSendFinalRevision`); rows conforming to `ListProbeDeclaredHeight`
-/// also have their resting height checked.
+/// also have their resting height checked. Multiline scenarios grow a draft
+/// before Send and measure the newest row against the shrinking composer.
 @MainActor
 final class ListStreamSendProbe: NSObject {
     private static var current: ListStreamSendProbe?
@@ -38,7 +40,10 @@ final class ListStreamSendProbe: NSObject {
         Task { await probe.run() }
     }
 
-    private enum Scenario: String, CaseIterable { case sendMidGrow, keyboardSendMidGrow, twoSends, streamSendStream }
+    private enum Scenario: String, CaseIterable {
+        case sendMidGrow, keyboardSendMidGrow, twoSends, streamSendStream, multilineSendShrink, keyboardMultilineSendShrink
+        var raisesKeyboard: Bool { self == .keyboardSendMidGrow || self == .keyboardMultilineSendShrink }
+    }
 
     /// The gap of one adjacent pair that contains a row inserted by a tap.
     private struct Opening {
@@ -58,6 +63,75 @@ final class ListStreamSendProbe: NSObject {
         var time: Double
     }
 
+    private struct InsertCurve {
+        // A row slide, otherwise the viewport track; "assumed" is diagnostic.
+        var source: String
+        var begin: Double
+        var duration: Double
+        var from: Double
+        var to: Double
+        var points: [Double]
+        static func fallback(begin: Double) -> InsertCurve {
+            .init(source: "assumed", begin: begin, duration: 0.3, from: 0, to: 0, points: [0.42, 0, 0.58, 1])
+        }
+        var name: String { "\(source) cubic(\(points.map { String(format: "%.3f", $0) }.joined(separator: ","))) \(String(format: "%.3f", duration)) s" }
+        func progress(at time: Double) -> Double {
+            let x = min(1, max(0, (time - begin) / duration))
+            func bezier(_ s: Double, _ a: Double, _ b: Double) -> Double { 3 * a * s * (1 - s) * (1 - s) + 3 * b * s * s * (1 - s) + s * s * s }
+            var low = 0.0, high = 1.0
+            for _ in 0..<40 {
+                let mid = (low + high) / 2
+                if bezier(mid, points[0], points[2]) < x { low = mid } else { high = mid }
+            }
+            return bezier((low + high) / 2, points[1], points[3])
+        }
+        func value(at time: Double) -> Double { from + (to - from) * progress(at: time) }
+    }
+
+    @MainActor private final class ComposerSend {
+        static let fields = ["t", "gap", "slide", "slotResidual", "expectedSlide", "insertionResidual",
+                             "barMinY", "barHeight", "viewportOffset", "sentIsNewest"]
+        weak var bar: UIView?
+        let lines: Int, before: Set<String>
+        var sendTime = 0.0, firstSent: Double?
+        var heights: [String: Double] = [:]
+        var baselineGap: Double?
+        var grew: Bool?, shrank: Bool?
+        var curve: InsertCurve?
+        var distance: Double?
+        var insertStart: Double?, insertEnd: Double?
+        var lastShrinking: Double?, shrinkEnd: Double?
+        var postInsertSamples = 0, postInsertWhileShrinking = 0, postInsertMaxGap = 0.0
+        var slotMax = 0.0, slotAboveHalf = 0, slotWorst: [String: Any] = [:]
+        var insertionMax = 0.0, insertionAboveHalf = 0, insertionWorst: [String: Any] = [:]
+        var curveErrorMax: Double?
+        var trace: [[Any]] = []
+        init(bar: UIView, lines: Int, before: Set<String>) { self.bar = bar; self.lines = lines; self.before = before }
+        var dictionary: [String: Any] {
+            var value: [String: Any] = [
+                "draftLines": lines, "heights": heights.mapValues(ListStreamSendProbe.json), "insertCurve": curve?.name ?? "unavailable",
+                "postInsertSamples": postInsertSamples, "postInsertWhileShrinking": postInsertWhileShrinking,
+                "postInsertMaxGap": ListStreamSendProbe.json(postInsertMaxGap),
+                "slotResidualMax": ListStreamSendProbe.json(slotMax), "slotResidualFramesAboveHalf": slotAboveHalf, "slotResidualWorst": slotWorst,
+                "insertionResidualMax": ListStreamSendProbe.json(insertionMax), "insertionResidualFramesAboveHalf": insertionAboveHalf,
+                "insertionResidualWorst": insertionWorst,
+                "samples": trace.count, "traceFields": Self.fields,
+                "traceSparse": stride(from: 0, to: trace.count, by: max(1, (trace.count + 29) / 30)).map { trace[$0] },
+            ]
+            if let firstSent { value["firstSentFrame"] = ListStreamSendProbe.json(firstSent) }
+            if let baselineGap { value["baselineGap"] = ListStreamSendProbe.json(baselineGap) }
+            if let grew { value["draftGrew"] = grew }
+            if let shrank { value["composerShrank"] = shrank }
+            if let distance { value["insertDistance"] = ListStreamSendProbe.json(distance) }
+            if let insertStart { value["insertStart"] = ListStreamSendProbe.json(insertStart) }
+            if let insertEnd { value["insertEnd"] = ListStreamSendProbe.json(insertEnd) }
+            if let shrinkEnd { value["composerShrinkEnd"] = ListStreamSendProbe.json(shrinkEnd) }
+            if let insertStart, let shrinkEnd { value["insertStartedDuringShrink"] = insertStart < shrinkEnd }
+            if let curveErrorMax { value["slideCurveErrorMax"] = ListStreamSendProbe.json(curveErrorMax) }
+            return value
+        }
+    }
+
     @MainActor private final class ScenarioResult {
         let engine: String, scenario: String
         var frames = 0, strictSamples = 0, offscreenSamples = 0, unpresented = 0, nonFinite = 0
@@ -73,6 +147,7 @@ final class ListStreamSendProbe: NSObject {
         var inserted: [String] = []
         var settled = false, settleSeconds = 0.0
         var lingering: [String] = []
+        var composer: ComposerSend?
         var final: [String: Any] = [:]
         init(engine: String, scenario: String) { self.engine = engine; self.scenario = scenario }
 
@@ -94,6 +169,7 @@ final class ListStreamSendProbe: NSObject {
                 "settleSeconds": ListStreamSendProbe.json(settleSeconds), "lingeringAnimations": lingering,
             ]
             if let keyboardVisible { value["keyboardVisible"] = keyboardVisible }
+            if let composer { value["composerSend"] = composer.dictionary }
             value.merge(final) { _, new in new }
             return value
         }
@@ -189,7 +265,7 @@ final class ListStreamSendProbe: NSObject {
         openings.removeAll(); settledGaps.removeAll(); gapChanges.removeAll()
         let initialCount = chat.list.items.count
         if notReadyAtStart { result.violate("rowsNotReadyAtStart", ["loaded": "\(chat.list.loadedIndexRange)"]) }
-        if scenario == .keyboardSendMidGrow, let composer = composer(in: chat) {
+        if scenario.raisesKeyboard, let composer = composer(in: chat) {
             composer.becomeFirstResponder()
             result.keyboardVisible = await wait(3) {
                 chat.view.keyboardLayoutGuide.layoutFrame.height > chat.view.safeAreaInsets.bottom + 40
@@ -217,12 +293,17 @@ final class ListStreamSendProbe: NSObject {
             await send(chat, result, stream: first, duringGrow: true)
             try? await Task.sleep(for: .milliseconds(300))
             lastStream = await tap("Stream", chat, result)
+        case .multilineSendShrink:
+            await sendDraft(chat, result, lines: 4)
+        case .keyboardMultilineSendShrink:
+            await sendDraft(chat, result, lines: 7)
         }
         if let lastStream { await waitForRevision(lastStream, finalRevision, chat, timeout: 10) }
         let begin = CACurrentMediaTime()
         let rested = await rest(chat, timeout: 12)
         result.settled = rested.settled; result.lingering = rested.lingering
         result.settleSeconds = CACurrentMediaTime() - begin
+        if let send = result.composer { finishDraft(send, result) }
         self.result = nil
         result.final = finalChecks(chat, result, initialCount: initialCount, lastStream: lastStream)
         if let composer = composer(in: chat), composer.isFirstResponder { composer.resignFirstResponder() }
@@ -262,6 +343,35 @@ final class ListStreamSendProbe: NSObject {
         result.midGrowHits.append(["required": duringGrow, "hit": hit, "revision": revision, "t": elapsed])
         if duringGrow && !hit { result.violate("midGrowMissed", ["stream": stream ?? "", "revision": revision, "t": elapsed]) }
         await tap("Send", chat, result)
+    }
+
+    private func sendDraft(_ chat: ListChatController, _ result: ScenarioResult, lines: Int) async {
+        guard let composer = composer(in: chat), let bar = composerBar(in: chat) else {
+            result.violate("missingControl", ["title": "composer"]); return
+        }
+        let single = Double(bar.bounds.height), line = Double(composer.font?.lineHeight ?? 20)
+        composer.text = (1...lines).map { "Draft line \($0)" }.joined(separator: "\n")
+        composer.delegate?.textViewDidChange?(composer)
+        _ = await wait(2) { [bar.layer, composer.layer].allSatisfy { ($0.animationKeys() ?? []).isEmpty } }
+        _ = await rest(chat, timeout: 3)
+        let send = ComposerSend(bar: bar, lines: lines, before: Set(chat.list.items.map(\.identity)))
+        let drafted = Double(bar.bounds.height)
+        send.heights = ["single": single, "draft": drafted, "line": line]
+        send.grew = drafted - single >= 2 * line - 0.5
+        if send.grew == false { result.violate("draftNotMultiline", ["single": single, "draft": drafted, "t": elapsed]) }
+        send.baselineGap = measureNewest(chat.list, bar: bar)?.gap
+        send.sendTime = CACurrentMediaTime()
+        result.composer = send
+        await tap("Send", chat, result)
+    }
+    private func finishDraft(_ send: ComposerSend, _ result: ScenarioResult) {
+        guard let bar = send.bar, let single = send.heights["single"], let draft = send.heights["draft"] else { return }
+        let final = Double(bar.bounds.height)
+        send.heights["final"] = final
+        send.shrank = abs(final - single) <= 0.5 && draft - final > 0.5
+        if send.shrank == false { result.violate("composerDidNotShrink", ["heights": send.heights.mapValues(Self.json)]) }
+        if send.insertStart == nil { result.violate("insertNotSampled", ["samples": send.trace.count]) }
+        else if send.postInsertSamples == 0 { result.violate("noFrameAfterInsert", ["insertEnd": Self.json(send.insertEnd ?? .nan), "samples": send.trace.count]) }
     }
 
     private func waitForRevision(_ identity: String?, _ revision: UInt64, _ chat: ListChatController, timeout: Double = 5) async {
@@ -344,6 +454,92 @@ final class ListStreamSendProbe: NSObject {
             if let previous { check(previous, row, inverted: inverted, time: time, result: result) }
             previous = row
         }
+        if let send = result.composer { sampleComposer(send, list, result: result) }
+    }
+
+    private struct NewestSample {
+        var identity: String
+        var gap: Double
+        var slide: Double
+        var scale: Double
+        var bar: CGRect
+        var viewport: Double
+    }
+    private func measureNewest(_ list: UltraListView, bar: UIView) -> NewestSample? {
+        guard let listLayer = list.layer.presentation(), let barLayer = bar.layer.presentation(), list.loadedIndexRange.contains(0),
+              let view = list.loadedItemView(at: 0), let layer = view.layer.presentation(),
+              let parent = view.layer.superlayer?.presentation() else { return nil }
+        let barRect = barLayer.convert(barLayer.bounds, to: listLayer), rect = layer.convert(layer.bounds, to: listLayer)
+        let scale = Double(parent.convert(CGPoint(x: 0, y: 1), to: listLayer).y - parent.convert(CGPoint.zero, to: listLayer).y)
+        let content = list.contentView.layer
+        let sample = NewestSample(identity: list.items[0].identity, gap: Double(barRect.minY - rect.maxY),
+                                  slide: scale * Double(layer.position.y - view.layer.position.y), scale: scale, bar: barRect,
+                                  viewport: Double((content.presentation() ?? content).bounds.minY - content.bounds.minY))
+        let values = [sample.gap, sample.slide, sample.scale, Double(barRect.minY), Double(barRect.height), sample.viewport]
+        return values.allSatisfy(\.isFinite) ? sample : nil
+    }
+    private func sampleComposer(_ send: ComposerSend, _ list: UltraListView, result: ScenarioResult) {
+        // Residuals diagnose curve differences. The strict composer gap starts
+        // after insertion ends and at least 0.3 s after the sent row appears.
+        let t = CACurrentMediaTime() - send.sendTime
+        guard t >= 0, t <= 1.2, let bar = send.bar, let sample = measureNewest(list, bar: bar) else { return }
+        let sent = sample.identity.hasPrefix("sent-") && !send.before.contains(sample.identity)
+        let shrinking = abs(sample.bar.height - bar.bounds.height) > 0.5
+        if shrinking { send.lastShrinking = t; send.shrinkEnd = nil }
+        else if send.lastShrinking != nil, send.shrinkEnd == nil { send.shrinkEnd = t }
+        if sent, send.firstSent == nil { send.firstSent = t }
+        if sent, send.curve == nil, let first = send.firstSent, let view = list.loadedItemView(at: 0) {
+            if let slide = insertCurve("rowSlide", view.layer, "ultraview.list.positionY", sendTime: send.sendTime) {
+                send.curve = slide; send.distance = abs(slide.to - slide.from)
+            } else if let track = insertCurve("viewport", list.contentView.layer, "ultraview.list.viewportOffset", sendTime: send.sendTime) {
+                send.curve = track
+            } else if t - first > 0.1 { send.curve = .fallback(begin: first) }
+            if let curve = send.curve {
+                if send.distance == nil { send.distance = list.settledFrame(at: 0).map { Double($0.height) } }
+                send.insertStart = curve.begin
+                send.insertEnd = max(curve.begin + curve.duration, first + 0.3)
+            }
+        }
+        let slot = sample.gap + sample.slide
+        var expectedSlide: Double?, insertion: Double?
+        if sent, let curve = send.curve {
+            if curve.source == "rowSlide" {
+                expectedSlide = sample.scale * curve.value(at: t)
+                send.curveErrorMax = max(send.curveErrorMax ?? 0, abs(sample.slide - (expectedSlide ?? 0)))
+            }
+            if let distance = send.distance { insertion = sample.gap + distance * (1 - curve.progress(at: t)) }
+        }
+        var entry: [String: Any] = ["t": t, "gap": sample.gap, "slide": sample.slide, "slotResidual": slot,
+                                    "newest": sample.identity, "barHeight": Double(sample.bar.height), "shrinking": shrinking]
+        if let insertion { entry["insertionResidual"] = insertion }
+        if abs(slot) > 0.5 { send.slotAboveHalf += 1 }
+        if abs(slot) > send.slotMax { send.slotMax = abs(slot); send.slotWorst = entry }
+        if let insertion {
+            if abs(insertion) > 0.5 { send.insertionAboveHalf += 1 }
+            if abs(insertion) > send.insertionMax { send.insertionMax = abs(insertion); send.insertionWorst = entry }
+        }
+        if sent, let end = send.insertEnd, t >= end + 0.002 {
+            send.postInsertSamples += 1
+            if shrinking { send.postInsertWhileShrinking += 1 }
+            send.postInsertMaxGap = max(send.postInsertMaxGap, abs(sample.gap))
+            if abs(sample.gap) > 0.5 { result.violate("composerGapAfterInsert", entry) }
+        }
+        guard send.trace.count < 160 else { return }
+        func trim(_ value: Double?, _ scale: Double = 100) -> Any { value.map { ($0 * scale).rounded() / scale } ?? NSNull() }
+        send.trace.append([trim(t, 1000), trim(sample.gap), trim(sample.slide), trim(slot), trim(expectedSlide), trim(insertion),
+                           trim(Double(sample.bar.minY)), trim(Double(sample.bar.height)), trim(sample.viewport), sent ? 1 : 0])
+    }
+    private func insertCurve(_ source: String, _ layer: CALayer, _ key: String, sendTime: Double) -> InsertCurve? {
+        guard let animation = layer.animation(forKey: key) as? CABasicAnimation, !(animation is CASpringAnimation),
+              let from = (animation.fromValue as? NSNumber)?.doubleValue, let to = (animation.toValue as? NSNumber)?.doubleValue,
+              animation.duration > 0, animation.speed > 0 else { return nil }
+        let begin = animation.beginTime == 0 ? CACurrentMediaTime() : layer.convertTime(animation.beginTime, to: nil)
+        guard begin >= sendTime - 0.002 else { return nil }
+        var start: [Float] = [0, 0], end: [Float] = [1, 1]
+        animation.timingFunction?.getControlPoint(at: 1, values: &start)
+        animation.timingFunction?.getControlPoint(at: 2, values: &end)
+        return InsertCurve(source: source, begin: begin - sendTime, duration: animation.duration / Double(animation.speed),
+                           from: from, to: to, points: (start + end).map(Double.init))
     }
 
     private func check(_ low: Row, _ high: Row, inverted: Bool, time: Double, result: ScenarioResult) {
@@ -428,7 +624,7 @@ final class ListStreamSendProbe: NSObject {
             let edge = Double(inverted ? rect.maxY : rect.minY)
             let line = inverted ? Double(list.bounds.height) - list.viewportInsets.top : list.viewportInsets.top
             value["newestGapToInset"] = Self.json(inverted ? line - edge : edge - line)
-            if let bar = Self.find(in: chat.view, UIView.self, { $0.accessibilityIdentifier == "composerBar" }) {
+            if let bar = composerBar(in: chat) {
                 value["newestGapToComposer"] = Self.json(Double(bar.convert(bar.bounds, to: list).minY) - Double(rect.maxY))
             }
         } else { value["newestLoaded"] = false }
@@ -464,6 +660,9 @@ final class ListStreamSendProbe: NSObject {
             report.accessibilityValue = String(decoding: data, as: UTF8.self)
         }
         document["violationSamples"] = results.map { ["engine": $0.engine, "scenario": $0.scenario, "samples": $0.samples] }
+        document["composerTraces"] = results.compactMap { result in
+            result.composer.map { ["engine": result.engine, "scenario": result.scenario, "fields": ComposerSend.fields, "trace": $0.trace] }
+        }
         if let data = try? JSONSerialization.data(withJSONObject: document, options: [.prettyPrinted, .sortedKeys]),
            let directory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
             try? data.write(to: directory.appendingPathComponent("list-stream-send-geometry.json"), options: .atomic)
@@ -475,6 +674,10 @@ final class ListStreamSendProbe: NSObject {
 
     private func composer(in chat: ListChatController) -> UITextView? {
         Self.find(in: chat.view, UITextView.self) { $0.accessibilityIdentifier == "composer" }
+    }
+
+    private func composerBar(in chat: ListChatController) -> UIView? {
+        Self.find(in: chat.view, UIView.self) { $0.accessibilityIdentifier == "composerBar" }
     }
 
     private static func find<T: UIView>(in root: UIView, _ type: T.Type, _ matches: (T) -> Bool) -> T? {

@@ -10,6 +10,8 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
     private let composerBar = UIStackView()
     private let placeholder = UILabel()
     private var composerHeight: NSLayoutConstraint?
+    private var waitsForSentCollection = false
+    private var pendingComposerHeight: CGFloat?
     private var keyboardProbe: ListKeyboardGeometryProbe?
     private var keyboardTransition: ListTransition?
     private var keyboardHeight = 0.0
@@ -67,6 +69,14 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
             composerBar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12), composerBar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12), composerBar.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor, constant: -8), height,
             composer.heightAnchor.constraint(equalTo: composerBar.heightAnchor), composer.widthAnchor.constraint(greaterThanOrEqualToConstant: 60),
         ])
+        list.onVisibleWindowChanged = { [weak self] in
+            guard let self, waitsForSentCollection, let height = pendingComposerHeight,
+                  list.items.first?.identity == rows.first?.identity,
+                  !list.loadedIndexRange.isEmpty else { return }
+            waitsForSentCollection = false; pendingComposerHeight = nil
+            composerInset = list.viewportInsets.top
+            resizeComposer(to: height, animated: true, duration: 0.3, synchronizesWithList: true)
+        }
         let initialIndex = UserDefaults.standard.integer(forKey: "listInitialRow")
         list.applyChanges(items: rows, scrollTo: initialIndex > 0 ? .init(index: initialIndex) : nil)
         list.willBeginDragging = { [weak self] in
@@ -182,11 +192,11 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
         }
     }
     func textViewDidChange(_ textView: UITextView) { updateComposerHeight(animated: true) }
-    private func updateComposerHeight(animated: Bool = false) {
+    private func updateComposerHeight(animated: Bool = false, duration: Double = 0.18) {
         let started = CACurrentMediaTime()
         defer { MainThreadMonitor.shared.note("composer measure \((CACurrentMediaTime() - started) * 1000) ms") }
         placeholder.isHidden = !(composer.text ?? "").isEmpty
-        guard composer.bounds.width > 0, let composerHeight else { return }
+        guard composer.bounds.width > 0 else { return }
         let line = composer.font?.lineHeight ?? 21
         let singleLine = max(44, ceil(line + composer.textContainerInset.top + composer.textContainerInset.bottom))
         let available = max(0, view.bounds.height - max(keyboardHeight, view.safeAreaInsets.bottom))
@@ -195,11 +205,31 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
         let desired = max(44, min(maximum, measured))
         let scrolls = measured > maximum + 0.5
         if composer.isScrollEnabled != scrolls { composer.isScrollEnabled = scrolls }
+        if waitsForSentCollection { pendingComposerHeight = desired; return }
+        resizeComposer(to: desired, animated: animated, duration: duration)
+    }
+    private func resizeComposer(to desired: CGFloat, animated: Bool, duration: Double, synchronizesWithList: Bool = false) {
+        guard let composerHeight else { return }
         guard abs(composerHeight.constant - desired) > 0.5 else { return }
         composerHeight.constant = desired
         if animated {
-            keyboardTransition = .easeInOut(0.18)
-            UIView.animate(withDuration: 0.18, delay: 0, options: [.beginFromCurrentState, .allowUserInteraction]) { self.view.layoutIfNeeded() }
+            keyboardTransition = .easeInOut(duration)
+            let content = list.contentView.layer
+            let start = synchronizesWithList ? content.animation(forKey: "ultraview.list.viewportOffset").map { content.convertTime($0.beginTime, to: nil) } : nil
+            UIView.animate(withDuration: duration, delay: 0, options: [.beginFromCurrentState, .allowUserInteraction]) { self.view.layoutIfNeeded() }
+            if let start {
+                // UIKit creates the layout tracks; use the prepared pass's
+                // clock even if applying that pass took part of a frame.
+                for view in [composerBar] + composerBar.arrangedSubviews {
+                    for key in view.layer.animationKeys() ?? [] {
+                        guard let animation = view.layer.animation(forKey: key)?.copy() as? CABasicAnimation,
+                              let path = animation.keyPath, path.hasPrefix("position") || path.hasPrefix("bounds"),
+                              abs(animation.duration - duration) < 0.000001 else { continue }
+                        animation.beginTime = view.layer.convertTime(start, from: nil)
+                        view.layer.add(animation, forKey: key)
+                    }
+                }
+            }
         } else { view.setNeedsLayout() }
     }
     private func headers(group: Int, sender: String) -> [String: any ListAttachment] {
@@ -239,8 +269,13 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
         var row = DemoListRow(identity: "sent-\(nextID)", title: "You", body: body, height: 100, tint: .systemIndigo, inverted: true)
         if hostProbe { row.extraAttachments = headers(group: -1, sender: "You") }
         rows.insert(row, at: 0)
-        monitor.measureAction("send-clear-composer") { composer.text = ""; updateComposerHeight(animated: true) }
-        monitor.measureAction("send-apply-list") { list.applyChanges(items: rows, scrollTo: .init(index: 0), animatesInsertions: false, transition: .easeInOut(0.3)) }
+        // Keep the old bar height until the asynchronously prepared collection
+        // applies, then start its shrink alongside the list's viewport track.
+        waitsForSentCollection = true
+        monitor.measureAction("send-clear-composer") { composer.text = ""; updateComposerHeight() }
+        let singleLine = max(44, ceil((composer.font?.lineHeight ?? 21) + composer.textContainerInset.top + composer.textContainerInset.bottom))
+        let inset = max(keyboardHeight, view.safeAreaInsets.bottom) + singleLine + 8
+        monitor.measureAction("send-apply-list") { list.applyChanges(items: rows, newInsets: .init(top: inset), scrollTo: .init(index: 0), animatesInsertions: false, transition: .easeInOut(0.3)) }
     }
     @objc private func beginStreaming() {
         followsComposer = true
