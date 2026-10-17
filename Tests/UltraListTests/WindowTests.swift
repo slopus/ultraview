@@ -155,6 +155,28 @@ import Testing
         for time in [0.5, 0.75, 1, 1.25, 1.5, 2] { #expect(abs(gap(model, at: time)) < 1e-9) }
         #expect(model.value(.row("a"), .positionY, at: 0.5) == -50)
     }
+    /// Halfway through a slide and a growth, an immediate change keeps the remaining motion on top of the new values.
+    @Test func immediateChangesStackOnMotionInFlight() {
+        var model = ListAnimationModel()
+        let slide = ListTransition(duration: 1, curve: .linear)
+        model.replace(.row("a"), .height, from: 100, to: 100, at: 0, transition: .immediate)
+        model.transition(.row("b"), .positionY, old: 0, new: 100, at: 0, transition: slide)
+        model.transition(.row("a"), .height, old: 100, new: 200, at: 0, transition: slide)
+        let kept = model.transition(.row("b"), .positionY, old: 100, new: 300, at: 0.5, transition: .immediate)
+        #expect(kept == model.tracks[.init(.row("b"), .positionY)] && kept?.startTime == 0)
+        model.transition(.row("a"), .height, old: 200, new: 400, at: 0.5, transition: .immediate)
+        for (time, delta, height) in [(0.5, -50.0, 350.0), (0.75, -25, 375), (1, 0, 400), (2, 0, 400)] {
+            #expect(model.value(.row("b"), .positionY, at: time) == delta)
+            #expect(model.value(.row("a"), .height, at: time) == height)
+        }
+        // Below zero the growth can't follow, so the height lands at once.
+        #expect(model.transition(.row("a"), .height, old: 400, new: 0, at: 0.75, transition: .immediate) == nil)
+        #expect(model.value(.row("a"), .height, at: 0.75) == 0)
+        // Opacity lands at once too.
+        model.replace(.row("a"), .opacity, from: 0, to: 1, at: 0, transition: slide)
+        #expect(model.transition(.row("a"), .opacity, old: 1, new: 0.5, at: 0.5, transition: .immediate) == nil)
+        #expect(model.value(.row("a"), .opacity, at: 0.5) == 0.5)
+    }
     @Test func scrollCurveMatchesPublicShape() {
         var error = 0.0
         for index in 0...1000 {

@@ -206,6 +206,37 @@ simulator tests check release-turn mounting and finite-edge discovery.
 All 98 theorems pass at this review. The scroll driver, opacity lifetime,
 render-server playback and keyboard integration remain outside the model.
 
+## Immediate passes and retiming's selection at `8afead2`
+
+These rows pin `8afead2` plus the commit that adds this section.
+
+| Model (`Proofs/UltraProofs/List/Animation.lean`) | Swift |
+| --- | --- |
+| `Model.transitionNow`, `nowPass` | `ListAnimationModel.transition`'s immediate branch (ListAnimation.swift:153-161): opacity lands at once; an additive key in flight keeps its track; an absolute key in flight moves its track by the change unless an end would go below zero; otherwise `replace` |
+| a moved track keeps its timing | `AnimationController.transition` reinstalls it at the running animation's `beginTime` (AnimationController.swift:62-68) |
+| `Model.retime`'s `incl` | `AnimationController.retime`'s `including:` (AnimationController.swift:87-88): a bound layer, not `.viewport`, not `.opacity` |
+
+`fixed_one_timeline` and `fixed_pass_sync` now hold over the accepted keys, and
+`fixed_keeps_excluded` shows retiming leaves the others unchanged.
+`common_mode_cancels` is the reason the viewport may keep its own timing: a
+relation between content positions whose coefficients sum to zero does not
+depend on it. The model still does not cover completions, layer binding or
+`resumeValue`'s presentation snapshots.
+
+**Gap, fixed in the same commit.** `immediate_desyncs`: an immediate change
+mid-slide (a row measured again during an insertion slide, flushed with
+`.immediate`) landed the keys whose settled value changed and left the rest
+sliding. The model gives 50 points between two rows at the pass and 25 at
+0.75 s. `touchingRowsKeepTouchingWhenARowGrowsImmediatelyMidSlide` reproduced
+it on main (100, 75 and 50 points at 0.5, 0.75 and 1 s of a 1 s slide; the
+stopped test clock starts the first slide when the test flushes, so the gap
+it reads is larger). With `transitionNow` the rows touch throughout:
+`now_shifts` shifts every shown value by exactly its settled change, and
+`now_keeps_relations` carries any relation the settled values keep. Where a
+size would go below zero the key lands at once (`aGrowingRowSetImmediatelyToZeroNeverHasANegativeHeight`);
+then `now_nonneg` does not apply and the relation can break for the rest of
+that slide. `now_nonneg` needs a curve that does not overshoot.
+
 ## Theorems
 
 **Correctness**

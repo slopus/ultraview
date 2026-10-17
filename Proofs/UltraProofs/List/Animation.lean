@@ -37,9 +37,18 @@ new settled value; size and opacity animate the value itself.
   starts one (`fixedPass`, what the Swift now does in
   `AnimationController.retime`) keeps a single timeline
   (`fixed_one_timeline`), so every pass is in sync (`fixed_pass_sync`), and
-  the same scenario stays touching (`fixed_scenario_touches`). Or stacking: each pass adds its own additive
+  the same scenario stays touching (`fixed_scenario_touches`). Retiming
+  accepts row geometry only: the viewport offset is common mode
+  (`common_mode_cancels`) and keeps its own timing, and fades keep their
+  deadlines (`fixed_keeps_excluded`). Or stacking: each pass adds its own additive
   delta tracks instead of replacing, and any relation every pass keeps holds
   on screen throughout (`stacked_sync`), with no velocity reset.
+* `immediate_desyncs` (the gap before `transitionNow`): an immediate change
+  mid-slide landed the keys it changed and left the others sliding, 50
+  points apart. `now_shifts`, `now_keeps_relations`: keeping each key's
+  remaining motion on top of its new value shifts what is shown by exactly
+  the settled change, so settled relations hold throughout. `now_nonneg`: a
+  moved size stays at least zero.
 -/
 
 namespace UltraProofs.ListAnimation
@@ -457,51 +466,55 @@ theorem kept_track_desyncs :
 
 /-! ## The fix: one timeline -/
 
-/-- `ListAnimationModel.retime(since:at:transition:)` for one key: restart a
-track the pass did not start (generation at most `since`, the counter before
-the pass) that is still in flight, from its current value toward the same
-destination, on the pass's timing. -/
-def Model.retime (C : Curves) (M : Model K) (since : Nat) (time : Rat) (τ : Transition) (k : K) :
-    Option Track :=
+/-- `ListAnimationModel.retime(since:at:transition:including:)` for one key:
+restart a track the pass did not start (generation at most `since`, the
+counter before the pass) that is still in flight and that `incl` accepts,
+from its current value toward the same destination, on the pass's timing.
+`AnimationController.retime` accepts bound row, carry and block geometry: not
+the viewport offset, which moves everything in the content view alike
+(`common_mode_cancels`) and must keep an input's timing (`ListPass.lockstep_iff`),
+and not opacity, whose fades no geometry relation involves. -/
+def Model.retime (C : Curves) (M : Model K) (incl : K → Bool) (since : Nat) (time : Rat)
+    (τ : Transition) (k : K) : Option Track :=
   match M.tracks k with
-  | some tr => if tr.generation ≤ since ∧ tr.inFlight time then
+  | some tr => if incl k ∧ tr.generation ≤ since ∧ tr.inFlight time then
       some { tr with src := tr.value C time, start := time, transition := τ } else some tr
   | none => none
 
 /-- The fixed pass (`applyChanges` ending in `AnimationController.retime`):
 the Swift pass, then, if it started a track and is animated, every older
-in-flight track retimed onto the pass's timing. Retiming keeps each key's
-current value, so nothing jumps (`retime_continuous`). -/
-def fixedPass (C : Curves) (Ks : Keys K) (eps time : Rat) (τ : Transition) (M : Model K)
-    (rs : List (Req K)) : Model K :=
+in-flight track `incl` accepts retimed onto the pass's timing. Retiming keeps
+each key's current value, so nothing jumps (`retime_continuous`). -/
+def fixedPass (C : Curves) (Ks : Keys K) (incl : K → Bool) (eps time : Rat) (τ : Transition)
+    (M : Model K) (rs : List (Req K)) : Model K :=
   let M' := swiftPass C Ks eps time τ M rs
   if M'.generation = M.generation ∨ τ.duration ≤ 0 then M'
-  else { M' with tracks := M'.retime C M.generation time τ }
+  else { M' with tracks := M'.retime C incl M.generation time τ }
 
 omit [DecidableEq K] in
-theorem retime_continuous (C : Curves) (Ks : Keys K) (M : Model K) (since : Nat) (time : Rat)
-    {τ : Transition} (hτ : 0 < τ.duration) (k : K) :
-    ({ M with tracks := M.retime C since time τ } : Model K).value C Ks k time =
+theorem retime_continuous (C : Curves) (Ks : Keys K) (M : Model K) (incl : K → Bool) (since : Nat)
+    (time : Rat) {τ : Transition} (hτ : 0 < τ.duration) (k : K) :
+    ({ M with tracks := M.retime C incl since time τ } : Model K).value C Ks k time =
       M.value C Ks k time := by
   simp only [Model.value, Model.retime]
   cases M.tracks k with
   | none => rfl
   | some tr =>
-    by_cases hf : tr.generation ≤ since ∧ tr.inFlight time
+    by_cases hf : incl k = true ∧ tr.generation ≤ since ∧ tr.inFlight time
     · simp only [hf, and_self, ite_true]
       exact value_start C { tr with src := tr.value C time, start := time, transition := τ } hτ
     · simp only [hf, ite_false]
 
-/-- All tracks in flight at `time` share one timing. -/
-def Model.OneTimeline (M : Model K) (time : Rat) : Prop :=
-  ∀ k k' a b, M.tracks k = some a → M.tracks k' = some b → a.inFlight time → b.inFlight time →
-    a.start = b.start ∧ a.transition = b.transition
+/-- All tracks in flight at `time` that `incl` accepts share one timing. -/
+def Model.OneTimeline (M : Model K) (incl : K → Bool) (time : Rat) : Prop :=
+  ∀ k k' a b, incl k → incl k' → M.tracks k = some a → M.tracks k' = some b →
+    a.inFlight time → b.inFlight time → a.start = b.start ∧ a.transition = b.transition
 
 omit [DecidableEq K] in
-theorem oneTimeline_later (M : Model K) {t t' : Rat} (ht : t ≤ t') (h : M.OneTimeline t) :
-    M.OneTimeline t' := by
-  intro k k' a b ha hb fa fb
-  exact h k k' a b ha hb ⟨fa.1, by have := fa.2; grind⟩ ⟨fb.1, by have := fb.2; grind⟩
+theorem oneTimeline_later (M : Model K) (incl : K → Bool) {t t' : Rat} (ht : t ≤ t')
+    (h : M.OneTimeline incl t) : M.OneTimeline incl t' := by
+  intro k k' a b ik ik' ha hb fa fb
+  exact h k k' a b ik ik' ha hb ⟨fa.1, by have := fa.2; grind⟩ ⟨fb.1, by have := fb.2; grind⟩
 
 /-- A track the Swift pass leaves is either one it started (at `time` with
 `τ`) or one it found. -/
@@ -595,11 +608,11 @@ theorem swiftPass_started (C : Curves) (Ks : Keys K) (eps time : Rat) {τ : Tran
     · have := swiftPass_generation C Ks eps time τ M rs
       exact ⟨k, tr, hk, by omega⟩
 
-/-- What the fixed pass's retiming leaves in flight is on the pass's timing:
-retimed, or started by the pass (newer than `M`'s counter). -/
-theorem fixed_retimed (C : Curves) (Ks : Keys K) (eps time : Rat) (τ : Transition)
-    (M : Model K) (rs : List (Req K)) (hM : M.GenInv) {k : K} {c : Track}
-    (hc : (swiftPass C Ks eps time τ M rs).retime C M.generation time τ k = some c)
+/-- What the fixed pass's retiming leaves in flight for an accepted key is on
+the pass's timing: retimed, or started by the pass (newer than `M`'s counter). -/
+theorem fixed_retimed (C : Curves) (Ks : Keys K) (incl : K → Bool) (eps time : Rat)
+    (τ : Transition) (M : Model K) (rs : List (Req K)) (hM : M.GenInv) {k : K} {c : Track}
+    (ik : incl k) (hc : (swiftPass C Ks eps time τ M rs).retime C incl M.generation time τ k = some c)
     (fc : c.inFlight time) : c.start = time ∧ c.transition = τ := by
   simp only [Model.retime] at hc
   split at hc
@@ -610,19 +623,20 @@ theorem fixed_retimed (C : Curves) (Ks : Keys K) (eps time : Rat) (τ : Transiti
       cases hc
       rcases swiftPass_tracks C Ks eps time τ M rs k c e with h | h
       · exact h
-      · exact absurd ⟨hM k c h, fc⟩ nr
+      · exact absurd ⟨ik, hM k c h, fc⟩ nr
   · cases hc
 
-/-- **The fixed pass keeps one timeline.** If every track in flight shared
-one timing before the pass, they all do after it, so the invariant holds over
-any sequence of passes. -/
-theorem fixed_one_timeline (C : Curves) (Ks : Keys K) (eps time : Rat) (τ : Transition)
-    (M : Model K) (rs : List (Req K)) (hM : M.GenInv) (h : M.OneTimeline time) :
-    (fixedPass C Ks eps time τ M rs).OneTimeline time := by
+/-- **The fixed pass keeps one timeline** over the keys it accepts. If every
+accepted track in flight shared one timing before the pass, they all do after
+it, so the invariant holds over any sequence of passes. -/
+theorem fixed_one_timeline (C : Curves) (Ks : Keys K) (incl : K → Bool) (eps time : Rat)
+    (τ : Transition) (M : Model K) (rs : List (Req K)) (hM : M.GenInv)
+    (h : M.OneTimeline incl time) :
+    (fixedPass C Ks incl eps time τ M rs).OneTimeline incl time := by
   simp only [fixedPass]
   split
   · rename_i hc
-    intro k k' a b ha hb fa fb
+    intro k k' a b ik ik' ha hb fa fb
     have old : ∀ {k c}, (swiftPass C Ks eps time τ M rs).tracks k = some c → c.inFlight time →
         M.tracks k = some c := by
       intro k c hk fc
@@ -631,34 +645,67 @@ theorem fixed_one_timeline (C : Curves) (Ks : Keys K) (eps time : Rat) (τ : Tra
       · rcases swiftPass_tracks C Ks eps time τ M rs k c hk with ⟨_, ht⟩ | hk
         · have := fc.1; rw [ht] at this; grind
         · exact hk
-    exact h k k' a b (old ha fa) (old hb fb) fa fb
-  · intro k k' a b ha hb fa fb
-    have := fixed_retimed C Ks eps time τ M rs hM ha fa
-    have := fixed_retimed C Ks eps time τ M rs hM hb fb
+    exact h k k' a b ik ik' (old ha fa) (old hb fb) fa fb
+  · intro k k' a b ik ik' ha hb fa fb
+    have := fixed_retimed C Ks incl eps time τ M rs hM ik ha fa
+    have := fixed_retimed C Ks incl eps time τ M rs hM ik' hb fb
     grind
 
-/-- **The fixed pass is in sync.** Every key either shows a constant from
-the pass time on, or has a track on the pass's timing. -/
-theorem fixed_pass_sync (C : Curves) (Ks : Keys K) (eps time : Rat) (τ : Transition)
-    (M : Model K) (rs : List (Req K)) (k : K) (hM : M.GenInv) (hτ : 0 < τ.duration)
-    (hstart : (swiftPass C Ks eps time τ M rs).generation ≠ M.generation) :
-    let M' := fixedPass C Ks eps time τ M rs
+/-- **The fixed pass is in sync** over the keys it accepts. Every accepted key
+either shows a constant from the pass time on, or has a track on the pass's
+timing. -/
+theorem fixed_pass_sync (C : Curves) (Ks : Keys K) (incl : K → Bool) (eps time : Rat)
+    (τ : Transition) (M : Model K) (rs : List (Req K)) (k : K) (ik : incl k) (hM : M.GenInv)
+    (hτ : 0 < τ.duration) (hstart : (swiftPass C Ks eps time τ M rs).generation ≠ M.generation) :
+    let M' := fixedPass C Ks incl eps time τ M rs
     (∃ tr, M'.tracks k = some tr ∧ tr.start = time ∧ tr.transition = τ) ∨
       (∀ t, time ≤ t → M'.value C Ks k t = M'.value C Ks k time) := by
   intro M'
   have hc : ¬((swiftPass C Ks eps time τ M rs).generation = M.generation ∨ τ.duration ≤ 0) := by
     grind
   simp only [M', fixedPass, hc, ite_false]
-  cases e : (swiftPass C Ks eps time τ M rs).retime C M.generation time τ k with
+  cases e : (swiftPass C Ks eps time τ M rs).retime C incl M.generation time τ k with
   | none => right; intro _ _; simp only [Model.value, e]
   | some c =>
     by_cases fc : c.inFlight time
-    · left; exact ⟨c, rfl, fixed_retimed C Ks eps time τ M rs hM e fc⟩
+    · left; exact ⟨c, rfl, fixed_retimed C Ks incl eps time τ M rs hM ik e fc⟩
     · right; intro t ht
       simp only [Model.value, e, value_at_rest C c fc, value_at_rest C c (not_inFlight_later fc ht)]
 
+/-- **Retiming leaves the keys it does not accept alone**: a running viewport
+spring keeps its curve, duration and start, and a fade keeps its deadline. -/
+theorem fixed_keeps_excluded (C : Curves) (Ks : Keys K) (incl : K → Bool) (eps time : Rat)
+    (τ : Transition) (M : Model K) (rs : List (Req K)) (k : K) (ik : incl k = false) :
+    (fixedPass C Ks incl eps time τ M rs).tracks k = (swiftPass C Ks eps time τ M rs).tracks k := by
+  simp only [fixedPass]
+  split
+  · rfl
+  · simp only [Model.retime]
+    split <;> simp_all
+
+/-- **The viewport is common mode.** Everything in the content view is drawn
+at its own position minus the viewport offset, so a relation between content
+positions with coefficients summing to zero (a row touching the next, a block
+welded to a row) does not depend on the viewport's delta, whatever its
+timing. -/
+theorem sum_mul_sub_const (v : Rat) :
+    ∀ (cs ys : List Rat), cs.length = ys.length →
+      (List.zipWith (fun c y => c * (y - v)) cs ys).sum =
+        (List.zipWith (· * ·) cs ys).sum - v * cs.sum
+  | [], _, _ => by simp; grind
+  | _ :: _, [], hl => by simp at hl
+  | c :: cs, y :: ys, hl => by
+    have ih := sum_mul_sub_const v cs ys (by simpa using hl)
+    simp only [List.zipWith_cons_cons, List.sum_cons, ih]
+    grind
+
+theorem common_mode_cancels (v : Rat) (cs ys : List Rat) (hl : cs.length = ys.length)
+    (hs : cs.sum = 0) :
+    (List.zipWith (fun c y => c * (y - v)) cs ys).sum = (List.zipWith (· * ·) cs ys).sum := by
+  rw [sum_mul_sub_const v cs ys hl, hs]; grind
+
 def demoFixed : Model Demo :=
-  fixedPass linear demoKeys eps (1 / 2) oneSecond demoPass1
+  fixedPass linear demoKeys (fun _ => true) eps (1 / 2) oneSecond demoPass1
     [⟨.ay, 0, 0⟩, ⟨.ah, 100, 150⟩, ⟨.by_, 100, 150⟩]
 
 /-- **The same scenario with the fix stays touching**, before, during and
@@ -667,6 +714,112 @@ theorem fixed_scenario_touches :
     demoGap demoFixed 0 150 (1 / 2) = 0 ∧ demoGap demoFixed 0 150 (3 / 4) = 0 ∧
     demoGap demoFixed 0 150 1 = 0 ∧ demoGap demoFixed 0 150 (5 / 4) = 0 ∧
     demoGap demoFixed 0 150 2 = 0 := by
+  decide +kernel
+
+/-! ## Immediate passes
+
+`ListAnimationModel.transition` with an immediate transition. Before, every
+key whose settled value changed lost its track and landed at once, while a
+key whose settled value did not change kept its track: mid-slide, an
+immediate growth snapped the row below into place while the growing row
+still slid (`immediate_desyncs`). Now a key still in flight keeps what remains
+of its motion on top of its new value (`now_shifts`), so every relation the
+settled values keep holds on screen throughout (`now_keeps_relations`). -/
+
+/-- `transition(...)` under an immediate transition. `fades` marks opacity,
+which lands at once; an absolute track moves with its destination only if
+neither end goes below zero. Otherwise it is the earlier behaviour: the key
+lands at once. -/
+def Model.transitionNow (C : Curves) (Ks : Keys K) (fades : K → Bool) (eps : Rat)
+    (M : Model K) (k : K) (old new time : Rat) : Model K × Option Track :=
+  if max (new - old) (old - new) ≤ eps then (M, M.tracks k)
+  else match M.tracks k with
+    | some tr =>
+      if fades k = false ∧ time < tr.deadline then
+        if Ks.additive k then (M, some tr)
+        else if 0 ≤ min (tr.src + new - tr.dst) new then
+          let moved : Track := ⟨M.generation + 1, tr.src + new - tr.dst, new, tr.start, tr.transition⟩
+          ({ tracks := set M.tracks k (some moved), stored := set M.stored k (some new),
+             generation := M.generation + 1 }, some moved)
+        else M.transition C Ks eps k old new none time ⟨0, 0, 1⟩
+      else M.transition C Ks eps k old new none time ⟨0, 0, 1⟩
+    | none => M.transition C Ks eps k old new none time ⟨0, 0, 1⟩
+
+/-- **An immediate change shifts what is shown by exactly the change**, at
+every time from the pass on, for a key still in flight: an additive delta
+rides on the new settled value, and a moved absolute track carries the
+change at both ends. `old` is the key's settled value, which for an absolute
+key is its track's destination. -/
+theorem now_shifts (C : Curves) (Ks : Keys K) (fades : K → Bool) {eps : Rat} (M : Model K)
+    (k : K) (old new time : Rat) (tr : Track) (htr : M.tracks k = some tr)
+    (hf : fades k = false) (hd : time < tr.deadline) (hch : eps < max (new - old) (old - new))
+    (habs : Ks.additive k = false → tr.dst = old ∧ 0 ≤ min (tr.src + new - tr.dst) new) (t : Rat) :
+    (M.transitionNow C Ks fades eps k old new time).1.shown C Ks k new t =
+      M.shown C Ks k old t + (new - old) := by
+  have hle : ¬max (new - old) (old - new) ≤ eps := by grind
+  simp only [Model.transitionNow, hle, ite_false, htr, hf, hd, and_self, ite_true]
+  cases ha : Ks.additive k
+  · obtain ⟨hdst, hmin⟩ := habs ha
+    simp only [hmin, ite_true, Bool.false_eq_true, ite_false, Model.shown, ha, Model.value,
+      set_same, htr]
+    have hp := progress_timing C (a := ⟨M.generation + 1, tr.src + new - tr.dst, new, tr.start,
+      tr.transition⟩) (b := tr) rfl rfl t
+    simp only [Track.value, hp]
+    rw [hdst]; grind
+  · simp only [ite_true, Model.shown, ha]; grind
+
+theorem shift_sum : ∀ (es : List (Rat × Rat × Rat)),
+    (es.map fun e => e.1 * (e.2.1 + e.2.2)).sum =
+      (es.map fun e => e.1 * e.2.1).sum + (es.map fun e => e.1 * e.2.2).sum
+  | [] => by simp; grind
+  | e :: es => by simp only [List.map_cons, List.sum_cons, shift_sum es]; grind
+
+/-- **Relations survive an immediate pass.** Each entry is a coefficient, a
+key's shown value before the pass and its settled change. If the settled
+values keep a linear relation (`Σ c * old = Σ c * new`, so the changes sum to
+zero), the shown values after the pass (before plus change, `now_shifts`)
+satisfy whatever the shown values before it did, at every time. -/
+theorem now_keeps_relations (es : List (Rat × Rat × Rat))
+    (h : (es.map fun e => e.1 * e.2.2).sum = 0) :
+    (es.map fun e => e.1 * (e.2.1 + e.2.2)).sum = (es.map fun e => e.1 * e.2.1).sum := by
+  rw [shift_sum, h]; grind
+
+/-- **A moved size never goes below zero** with a curve that does not
+overshoot: both ends are at least zero. (An overshooting spring can still dip
+past its destination.) -/
+theorem now_nonneg (C : Curves) (hC : C.Bounded) (tr : Track) (h : 0 ≤ min tr.src tr.dst)
+    (t : Rat) : 0 ≤ tr.value C t := by
+  rw [lerp]
+  have hp := progress_bounded C hC tr t
+  have a : 0 ≤ (1 - tr.progress C t) * tr.src := Rat.mul_nonneg (by grind) (by grind)
+  have b : 0 ≤ tr.progress C t * tr.dst := Rat.mul_nonneg hp.1 (by grind)
+  grind
+
+/-- The Swift's immediate pass, before and after: the same calls as
+`swiftPass`, with `transition` or `transitionNow`. -/
+def nowPass (C : Curves) (Ks : Keys K) (fades : K → Bool) (eps time : Rat) (M : Model K) :
+    List (Req K) → Model K
+  | [] => M
+  | r :: rs => nowPass C Ks fades eps time (M.transitionNow C Ks fades eps r.key r.old r.new time).1 rs
+
+/-- Pass 2 of the demo made immediate: at 0.5 s, mid-slide, the upper row
+grows to 150 at once. -/
+def demoImmediate : Model Demo :=
+  swiftPass linear demoKeys eps (1 / 2) ⟨0, 0, 1⟩ demoPass1
+    [⟨.ay, 0, 0⟩, ⟨.ah, 100, 150⟩, ⟨.by_, 100, 150⟩]
+
+def demoNow : Model Demo :=
+  nowPass linear demoKeys (fun _ => false) eps (1 / 2) demoPass1
+    [⟨.ay, 0, 0⟩, ⟨.ah, 100, 150⟩, ⟨.by_, 100, 150⟩]
+
+/-- **An immediate change mid-slide desynced (Swift before `transitionNow`).**
+The lower row landed while the upper one kept sliding: they are 50 points
+apart at the pass and 25 at 0.75 s, as the simulator shows. With the
+remaining motion kept, they touch throughout. -/
+theorem immediate_desyncs :
+    demoGap demoImmediate 0 150 (1 / 2) = 50 ∧ demoGap demoImmediate 0 150 (3 / 4) = 25 ∧
+    demoGap demoNow 0 150 (1 / 2) = 0 ∧ demoGap demoNow 0 150 (3 / 4) = 0 ∧
+    demoGap demoNow 0 150 1 = 0 ∧ demoGap demoNow 0 150 2 = 0 := by
   decide +kernel
 
 /-! ## The other fix: stacking additive passes

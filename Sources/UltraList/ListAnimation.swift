@@ -143,10 +143,22 @@ public struct ListAnimationModel: Sendable {
         tracks[key] = track; return track
     }
     /// A settled no-op keeps the old track's phase and generation intact, unless `restarts` asks for a track on this
-    /// timing anyway.
+    /// timing anyway. An immediate change to a key still in flight keeps what remains of its motion on top of the new
+    /// value, so keys that moved together keep moving together: an additive delta rides on the new settled value as it
+    /// is, and an absolute track moves with its destination unless that would take it below zero. Opacity lands at once.
     @discardableResult
     public mutating func transition(_ owner: AnimationOwner, _ property: AnimatedProperty, old: Double, new: Double, resume: Double? = nil, at time: Double, transition: ListTransition, restarts: Bool = false) -> AnimationTrack? {
-        guard restarts || abs(new - old) > 1e-6 else { return tracks[Key(owner, property)] }
+        let key = Key(owner, property)
+        guard restarts || abs(new - old) > 1e-6 else { return tracks[key] }
+        if transition.isImmediate, property != .opacity, let track = tracks[key], time < track.deadline {
+            if property.additive { return track }
+            let from = track.from + new - track.to
+            if min(from, new) >= 0 {
+                generation += 1; stored[key] = new
+                let moved = AnimationTrack(generation: generation, from: from, to: new, startTime: track.startTime, transition: track.transition)
+                tracks[key] = moved; return moved
+            }
+        }
         let current = resume ?? value(owner, property, at: time)
         return replace(owner, property, from: property.additive ? old + current - new : (stored[Key(owner, property)] == nil ? old : current), to: property.additive ? 0 : new, at: time, transition: transition)
     }

@@ -133,6 +133,66 @@ private final class SyncRowView: ListRowView {
         let upper = try #require(list.presentedFrame(at: 1)), lower = try #require(list.presentedFrame(at: 2))
         #expect(abs(upper.maxY - lower.minY) < 0.5, "upper bottom \(upper.maxY), lower top \(lower.minY)")
     }
+    /// The bottom of row `index` and the top of row `index + 1` on screen, from the presentation tree.
+    func seam(_ list: UltraListView, at index: Int) async throws -> (upper: Double, lower: Double, height: Double) {
+        let upper = try await shown(try #require(list.loadedItemView(at: index)), in: list)
+        let lower = try await shown(try #require(list.loadedItemView(at: index + 1)), in: list)
+        return (upper.maxY, lower.minY, upper.height)
+    }
+
+    /// An immediate change during a slide stacks on it: rows land on their new places with the slide's remaining
+    /// distance still to go, so they touch throughout (Animation.lean, `now_shifts`).
+    @Test func touchingRowsKeepTouchingWhenARowGrowsImmediatelyMidSlide() async throws {
+        let list = list(count: 10)
+        var rows = (0..<10).map { SyncRow(identity: String($0)) }
+        rows.insert(SyncRow(identity: "new"), at: 0)
+        list.applyChanges(items: rows, transition: .init(duration: 1, curve: .linear))
+        advance(list, to: 100.5)
+        _ = try await seam(list, at: 1)
+        rows[1].height = 150; rows[1].revision = 1
+        list.applyChanges(items: rows, transition: .immediate)
+        for time in [100.5, 100.75, 101] {
+            advance(list, to: time)
+            let seam = try await seam(list, at: 1)
+            #expect(abs(seam.upper - seam.lower) < 0.5, "at \(time): upper bottom \(seam.upper), lower top \(seam.lower)")
+        }
+    }
+
+    /// An immediate change to a row whose height is animating moves that animation with it.
+    @Test func touchingRowsKeepTouchingWhenAGrowingRowChangesImmediately() async throws {
+        let list = list(count: 10)
+        var rows = (0..<10).map { SyncRow(identity: String($0)) }
+        rows[1].height = 200; rows[1].revision = 1
+        list.applyChanges(items: rows, transition: .init(duration: 1, curve: .linear))
+        advance(list, to: 100.5)
+        _ = try await seam(list, at: 1)
+        rows[1].height = 300; rows[1].revision = 2
+        list.applyChanges(items: rows, transition: .immediate)
+        for time in [100.5, 100.75, 101] {
+            advance(list, to: time)
+            let seam = try await seam(list, at: 1)
+            #expect(abs(seam.upper - seam.lower) < 0.5, "at \(time): upper bottom \(seam.upper), lower top \(seam.lower)")
+            #expect(seam.height >= 0)
+        }
+    }
+
+    /// Moving a growth below zero would show a negative height, so the row lands at its new height at once.
+    @Test func aGrowingRowSetImmediatelyToZeroNeverHasANegativeHeight() async throws {
+        let list = list(count: 10)
+        var rows = (0..<10).map { SyncRow(identity: String($0)) }
+        rows[1].height = 200; rows[1].revision = 1
+        list.applyChanges(items: rows, transition: .init(duration: 1, curve: .linear))
+        advance(list, to: 100.5)
+        _ = try await seam(list, at: 1)
+        rows[1].height = 0; rows[1].revision = 2
+        list.applyChanges(items: rows, transition: .immediate)
+        for time in [100.5, 100.75, 101] {
+            advance(list, to: time)
+            let seam = try await seam(list, at: 1)
+            #expect(seam.height >= 0, "at \(time): height \(seam.height)")
+        }
+    }
+
     @Test func rowOnlyRetimingPreservesAnExistingViewportSpring() throws {
         let list = list(count: 10)
         list.applyChanges(newInsets: .init(top: 100), transition: .spring(1, damping: 22))

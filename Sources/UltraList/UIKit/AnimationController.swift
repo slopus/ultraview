@@ -56,11 +56,16 @@ final class AnimationController {
     @discardableResult
     func transition(_ owner: AnimationOwner, _ property: AnimatedProperty, old: Double, new: Double, at time: Double, transition: ListTransition, restarts: Bool = false, completion: (() -> Void)? = nil) -> UInt64? {
         let key = ListAnimationModel.Key(owner, property)
-        let prior = model.tracks[key]?.generation
+        let prior = model.tracks[key]
         let resolvedCompletion = completion ?? completions[key]?.1
         let track = model.transition(owner, property, old: old, new: new, resume: resumeValue(owner, property), at: time, transition: transition.scaled(by: durationScale), restarts: restarts)
         if let track {
-            if track.generation != prior { install(owner, property, track: track) }
+            if track.generation != prior?.generation {
+                // A track moved by an immediate change keeps its timing, so it keeps the running animation's begin.
+                let running = layers[owner]?.animation(forKey: "ultraview.list.\(property.rawValue)")?.beginTime
+                let keepsTiming = prior.map { $0.startTime == track.startTime && $0.transition == track.transition } ?? false
+                install(owner, property, track: track, explicitOrigin: keepsTiming ? running.flatMap { $0 != 0 ? $0 : nil } : nil)
+            }
             if let resolvedCompletion { completions[key] = (track.generation, resolvedCompletion) }
         } else { clear(owner, property); completions.removeValue(forKey: key); resolvedCompletion?() }
         return track?.generation

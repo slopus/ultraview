@@ -88,6 +88,12 @@ open UltraProofs
 #print axioms ListAnimation.swiftPass_started
 #print axioms ListAnimation.fixed_retimed
 #print axioms ListAnimation.fixed_scenario_touches
+#print axioms ListAnimation.fixed_keeps_excluded
+#print axioms ListAnimation.common_mode_cancels
+#print axioms ListAnimation.now_shifts
+#print axioms ListAnimation.now_keeps_relations
+#print axioms ListAnimation.now_nonneg
+#print axioms ListAnimation.immediate_desyncs
 #print axioms ListAnimation.pass_deltas
 #print axioms ListAnimation.stacked_sync
 #print axioms ListPass.displaced_row_screen
