@@ -223,3 +223,17 @@ open UltraProofs
 #print axioms ListLayers.pinned_kink
 #print axioms ListLayers.pinned_symm
 #print axioms ListLayers.kink_bound
+#print axioms ListDepartures.walk_sound
+#print axioms ListDepartures.no_cycle
+#print axioms ListDepartures.link_inv
+#print axioms ListDepartures.insert_inv
+#print axioms ListDepartures.promote_inv
+#print axioms ListDepartures.drop_inv
+#print axioms ListDepartures.modify_inv
+#print axioms ListDepartures.inv_run
+#print axioms ListDepartures.stable
+#print axioms ListDepartures.resolves
+#print axioms ListDepartures.weld_block
+#print axioms ListDepartures.weld_row
+#print axioms ListDepartures.keeps_root
+#print axioms ListDepartures.collect_empties

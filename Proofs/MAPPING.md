@@ -776,6 +776,50 @@ their presented values. It is not yet mapped to Swift.
 - `alone_drifts`: retiming the row alone, with a 10-point inset bubble left
   on its timing, overlaps the row's edge by 2.5 points at 1 s.
 
+## Departure blocks at `b4461c3`
+
+`Proofs/UltraProofs/List/Departures.lean` models `DepartureLedger`
+(DepartureGeometry.swift, unchanged since `e0a2c2c`). The list's calls pin
+UltraListView.swift at `b4461c3`. Block ids and row identities are numbers,
+coordinates rationals.
+
+| Model (`Proofs/UltraProofs/List/Departures.lean`) | Swift |
+| --- | --- |
+| `Edge`, `Witness`, `Block` | `BoundaryEdge`, `DepartureLedger.Witness`, `.Block` (DepartureGeometry.swift:3-25) |
+| `insert` | `insert(_:)` (:28); its precondition is the model's guard, and the list's ids come from `serial` (UltraListView.swift:952, 963) |
+| `walk`, `link` | `link(_:to:edge:)` and its loop over `seen` (:29-42), with the loop bounded by `fuel` |
+| `bound`, `solve` | `targets(rows:)`'s `solve` (:43-60); `solve 0` is the `visiting` guard's value |
+| `promote` | `promoteToViewport(_:offset:)` (:63-66) |
+| `modify` with `setRoot`, `close`, `shift`, `finish`, `addMember` | `setRoot`, `seal`, `shift(by:)`, `finishMember`, `addMember` (:61-75) |
+| `drop` | one removal of `collect()`'s loop (:76-83) |
+| `Op`, `run` | the calls in UltraListView.swift: `makeDepartures` (:963, :983-984), `updateGhosts` (:1006-1040), `shiftDetached` (:918), `promoteCarousel` (:1061-1063) and `departAttachment` (:1211, :1220-1221) |
+
+- `inv_run`: after any sequence of these operations from an empty ledger,
+  every chain of carriers ends (`Inv.acyclic`) and every carrier exists
+  (`Inv.closed`). `link_inv` rests on `walk_sound`: the loop accepts a
+  carrier only when its chain ends without reaching the block being linked.
+  A Swift link that accepts after `n` steps is the model's with fuel
+  `n + 1`; one that rejects is the model's with any fuel.
+- `no_cycle`: no chain returns to a block on it, so `targets`' `visiting`
+  guard never fires. `stable`, `resolves`: each target is fixed after
+  finitely many steps of the recursion, so the memo holds the recursion's
+  value whatever order `blocks.keys.sorted()` visits.
+- `weld_block`, `weld_row`: a block's riding edge (`localTop` or
+  `localBottom` by its `edge`) lands on its carrier's resolved edge, or on
+  its witness row's edge. `keeps_root`: with no witness, or a witness row
+  outside `live`, it stays at its root. The list then animates each block
+  from its old root to that target on the pass's timing
+  (UltraListView.swift:1036-1040), and
+  `ListPass.ghost_follows_witness` gives that the block moves with what it
+  rides at every frame when the witness's track shares the timing.
+- `collect_empties`: once every member has finished, a stopped `collect()`
+  leaves no block, so no wrapper outlives its rows.
+
+Which witness `updateGhosts` picks (the predecessor survivor, a matching
+inserted row, the nearest row on the anchor's side) is the list's choice and
+not modeled; the theorems hold for every choice. Member fades finishing is a
+hypothesis (`finished`).
+
 ## Theorems
 
 **Correctness**
@@ -854,7 +898,13 @@ their presented values. It is not yet mapped to Swift.
 - `ListFlight.flight_in_band`, `flight_rows_kept`: the flight stays in its
   covered band until the horizon, so rows it will show stay loaded.
 - `ListLayers.superpose`: motions on separate timings keep every linear
-  relation when each is its own additive layer.
+  relation when each is its own additive layer. `common_seam`,
+  `position_top`: rows following every height above them touch at every
+  frame with any shared term. `kink_bound`: a pinned anchor's chord is off
+  its boundary only across half the viewport, and by a stated bound.
+- `ListDepartures.inv_run`, `no_cycle`, `weld_block`, `collect_empties`:
+  departure blocks never ride in a cycle or ride a missing block, land on
+  what they ride, and are all collected once their rows have faded.
 - `ListContent.retimes_keep`: inner content retimed with its row keeps a
   constant inset through any number of retimings.
 
