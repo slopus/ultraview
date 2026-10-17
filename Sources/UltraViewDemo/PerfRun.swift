@@ -171,6 +171,7 @@ final class PerfRun {
             device: UIDevice.current.model + " " + Self.machine,
             system: UIDevice.current.systemVersion,
             thresholdMs: monitor.threshold,
+            mainThreadWork: Diagnostics.shared.counts.mainThreadWork,
             maxTurnMs: summaries.map(\.maxTurnMilliseconds).max() ?? 0,
             phases: summaries.map(PerfResult.Phase.init),
             stalls: monitor.stalls.map { PerfResult.Stall(phase: $0.phase, ms: $0.milliseconds, at: $0.startTime, notes: $0.notes) },
@@ -273,6 +274,7 @@ struct PerfResult: Codable {
     var device: String
     var system: String
     var thresholdMs: Double
+    var mainThreadWork: Int
     var maxTurnMs: Double
     var phases: [Phase]
     var stalls: [Stall]

@@ -34,9 +34,10 @@ targetTemplates:
         GENERATE_INFOPLIST_FILE: YES
         PRODUCT_BUNDLE_IDENTIFIER: dev.ultraview.tests.$(TARGET_NAME)
 targets:
-  UltraViewDemo:
+  UltraViewDemoApp:
     type: application
     platform: iOS
+    productName: UltraViewDemo
     sources:
       - path: Sources/UltraViewDemo
     dependencies:
@@ -67,21 +68,45 @@ targets:
     templates: [PackageTests]
     sources:
       - path: Tests/UltraViewUIKitTests
+  UltraViewPerformanceTests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: Tests/UltraViewPerformanceTests
+    dependencies:
+      - target: UltraViewDemoApp
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: dev.ultraview.performance
+        CODE_SIGN_STYLE: Automatic
 schemes:
   UltraViewDemo:
     build:
       targets:
-        UltraViewDemo: all
+        UltraViewDemoApp: all
         UltraLayoutTests: [test]
         UltraCoreTests: [test]
         UltraListTests: [test]
         UltraViewUIKitTests: [test]
+        UltraViewPerformanceTests: [test]
     run:
       config: Debug
     test:
       config: Debug
       targets:
-        - UltraLayoutTests
-        - UltraCoreTests
-        - UltraListTests
-        - UltraViewUIKitTests
+        - name: UltraLayoutTests
+        - name: UltraCoreTests
+        - name: UltraListTests
+        - name: UltraViewUIKitTests
+        - name: UltraViewPerformanceTests
+          skipped: true
+  UltraViewPerformance:
+    build:
+      targets:
+        UltraViewDemoApp: all
+        UltraViewPerformanceTests: [test]
+    test:
+      config: Release
+      targets:
+        - name: UltraViewPerformanceTests

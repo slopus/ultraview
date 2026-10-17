@@ -92,11 +92,13 @@ or drawing runs on it, and `Diagnostics` counts them by thread.
 The main thread never waits for the pipeline. When a host's size, window or
 appearance changes, it asks for a pass and keeps showing what it has until
 that pass's commit arrives. Views for nodes on screen are created in the
-turn their commit arrives; views prepared ahead of the screen are created a
-few per frame, within `mountBudget`. A host outside a window keeps its views
-and bitmaps, and `prepare(size:)` lays out and draws one before it first
-appears, so it shows its content in its first frame in a window
-(`keepsContentOutsideWindow = false` gives the memory back instead).
+turn their commit arrives; creating and removing views off screen is spread
+over frames within `mountBudget`. A host outside a window keeps its views
+and bitmaps. `prepare(size:)` starts layout and drawing before it first
+appears; once prepared, the content is available on entering the window.
+If preparation hasn't finished, the host displays its last committed content
+until the new commit arrives (`keepsContentOutsideWindow = false` gives the
+memory back instead). Showing a host never waits for preparation.
 
 ```swift
 // Off the main thread: the height of a tree at a width. A host that later
@@ -125,6 +127,25 @@ brew install xcodegen
 xcodegen                       # writes UltraView.xcodeproj (not committed)
 open UltraView.xcodeproj       # scheme UltraViewDemo: run the demo, ⌘U for tests
 ```
+
+The `UltraViewPerformance` scheme runs a separate Release UI test covering
+first appearances, repeated and rapid tab switches, a fast pass through the
+feed in both directions, jumps, stress, rotation, and background/return. It
+attaches the full JSON report and requires zero main-thread layout, text
+measurement or drawing. Run it with `xcodebuild test -project
+UltraView.xcodeproj -scheme UltraViewPerformance -destination '<destination>'`.
+
+For a device without UI automation, launch the Release demo with `-perfRun
+YES` and capture its console output. `python3 scripts/check-performance.py
+<console.log>` checks the result; add `--simulator` for simulator output.
+The device regression budgets in milliseconds are 200 for launch, 50 for
+first Feed, 33.33 for repeated switches and feed jumps, 25 for rapid switches,
+66.67 for rotation, 50 for background/return, and 16.67 for the other phases.
+The simulator budget is 200 for startup and 50 for other phases. These allow
+headroom over measured results; they do not establish a one-frame guarantee. Every overrun of
+16.67 ms is printed. `--one-frame` checks the stricter benchmark, which
+currently fails on device startup, rotation and some tab switches. Use
+`--require-background` when checking a run driven through background/return.
 
 The demo has three tabs: Layout (flexbox, borders, text, presses), Feed
 (1,000 cards in a scroll node) and Stress (background threads changing
