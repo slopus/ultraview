@@ -852,7 +852,7 @@ row stays beyond its loaded neighbour through stream revisions during a
 Send, for every engine, normal and inverted rows. The setter hypothesis is
 the observed behavior, not documented API.
 
-## Swipe actions at `76eab99`
+## Swipe actions at `76eab99`, guarded at `dc430c2`
 
 `Proofs/UltraProofs/List/Swipe.lean` models the pure decisions in
 SwipeReveal.swift, which last changed at `76eab99`, and how the controller
@@ -887,10 +887,13 @@ rationals.
   or one animating closed, after any sequence of begins, settles, finished
   closings and removals in which the caller closes what `begin` returns and
   settles open only the active row (`RunOk`); so at most one row is revealed
-  and not closing. `guarded_inv`: with the pan guarded by the active row,
-  that holds for every sequence of pan events, closes and removals.
+  and not closing. `guarded_inv`: with the pan guarded by the active row
+  (`tracked(_:)` at `dc430c2`), that holds for every sequence of pan
+  events, closes and removals, with no hypothesis on the caller.
+  `unguarded_breaks`, `guarded_drops`: the sequence the chaos soak hit,
+  without and with the guard.
 
-**Gap at `a489e36` (through `2a3e2d3`), found by the swipe agent's chaos
+**Gap from `a489e36` until `dc430c2`, found by the swipe agent's chaos
 soak.** `RunOk` was read as the controller's: `release` settles the pan's
 candidate, which its `.began` made active. But the pan keeps `tracking`
 apart from the registry, and `close()` (a list pan, a tap, a performed
@@ -899,23 +902,36 @@ dropping the row's actions clears the registry's active row while the pan
 still tracks it; only a deleted row clears `tracking` (:397), and
 `release`'s early return needs `reveals[x]` gone, which a close keeps. The
 next `.ended` then settles a row open with no active row (chaos seeds 101
-and 303). `unguarded_breaks` is that sequence. The swipe agent's fix makes
+and 303). `unguarded_breaks` is that sequence. The fix (`dc430c2`) makes
 the pan's `changed` and `ended` act only while `registry.active` is the
 tracked row and drop the gesture otherwise: `T.acts` with `guarded`, and
 `guarded_inv` proves the invariant over any sequence of pan, close, finish
 and removal events with no `RunOk` hypothesis (`guarded_issues_ok`
-discharges it). The rows for the guard (`tracked(_:)`) are mapped when it
-lands. `GEv.close` stands for every closed settle (`close()`, :60-61;
-`perform`, :212; `begin`'s returned row, :110, :492), `GEv.remove` for the
-registry removals in `reconcile` (:393-409) and `settle`'s missing reveal
-(:215). Gesture delivery, the reveal's rubber band and spring
+discharges it).
+
+| Model (`Proofs/UltraProofs/List/Swipe.lean`) | Swift at `dc430c2` |
+| --- | --- |
+| `T.tracking` | `ListSwipeController.tracking` (SwipeActions.swift:38) |
+| `GEv.panBegin` | `beginTracking` (:132-139), from the pan's `.began` (:108) or `receiveInput`'s (:123-126): `registry.begin`, the returned row settled closed, `tracking` set |
+| `T.acts true` | `tracked(_:)` (:152-156): the gesture on the row, while `registry.active` is that row; otherwise `tracking` is cleared |
+| `GEv.panChange` | `continueTracking` (:140-143), from `.changed` (:109, :127) |
+| `GEv.panEnd` | `endTracking` (:144-148), from `.ended` and `.cancelled` (:110-111, :128-129): clears `tracking` and calls `release` (:230-240), which settles the decided outcome, or removes the row from the registry when it has no reveal |
+| `GEv.close` | every closed settle (`settle`, :246-266): `close()` (:60-61), a tap, `perform` (:241-245, including VoiceOver's custom actions and a full swipe's action), `begin`'s returned row (:134) |
+| `GEv.remove` | `registry.remove` in `reconcile` (:425-441: a gone view, a deleted row, a replaced view, no actions left) and in `settle`/`release` for a row with no reveal (:231, :247) |
+| `GEv.finish` | a closing animation's completion calling `finish` (:257-261, :269) |
+
+A deleted row also clears `tracking` in `reconcile` (:429); with the guard
+that is redundant, since the next sample finds the row inactive. The test
+hooks `simulateDrag` and `simulateRelease` (:528-535) go through
+`continueTracking` and `endTracking`; `simulateBegin` (:523-527) sets
+`tracking` without the first `track` and is `panBegin`. Gesture delivery, the reveal's rubber band and spring
 (`displayed`, `SwipeMotion`) and the buttons' spans are outside the model.
 At `a489e36` the controller refuses a touch while the list moves
 (`shouldReceive`) and counts size position layers as neighbour motion in a
 collapse; neither touches the registry, so the rows above still hold.
 `ListRubber.rubber_unrubber` covers `displayed` and `proposed`.
 
-## Content inside an animating row at `44f8a0c`
+## Content inside an animating row at `163e3f0`
 
 `Proofs/UltraProofs/List/Content.lean` proves that inner node frames on the
 row's own height timing, with running inner animations moved onto each new
@@ -923,18 +939,25 @@ row timing from their presented values, keep a constant inset from the
 row's edge at every frame. A `Track` is one scalar of a frame (a
 `CABasicAnimation` interpolates a `CGRect` or `CGPoint` value componentwise
 with one progress); an edge in row coordinates is a sum of such scalars on
-one timing, which is again a track on it.
+one timing, which is again a track on it. (First mapped at `44f8a0c`; the
+per-axis retiming and the moved content are `163e3f0`'s, and the other rows
+are unchanged since.)
 
-| Model (`Proofs/UltraProofs/List/Content.lean`) | Swift at `44f8a0c` |
+| Model (`Proofs/UltraProofs/List/Content.lean`) | Swift at `163e3f0` |
 | --- | --- |
 | a `Track`'s `start`, `transition` | a `CABasicAnimation`'s begin time, duration, speed and curve or spring, held by `NodeAnimationTiming` (NodeTransitionAnimator.swift:11) and copied by `animation(_:from:to:)` (:75) |
 | `Shared` | `NodeAnimationTiming.isTiming(of:)` (NodeTransitionAnimator.swift:52): same begin (within 1e-6), duration, speed, offset, and curve or spring |
 | a new timing at `t0` | `NodeRowLayer.add` (NodeRowTransition.swift:21-31) reporting the list's height or width animation to `NodeRowMotion.rowDidAnimate` (:142-156), which takes its timing only when `beginTime == 0` (added in this transaction, so it begins at the commit) |
-| `retime`, `retimes` | `NodeTransitionAnimator.retime(root:_:axis:)` (NodeTransitionAnimator.swift:316-336), called through `retimeTransitions` from `rowDidAnimate` (NodeRowTransition.swift:148-155): every transition animation under the root not on the timing restarts toward its `toValue`; with an axis, x or y key paths of the other axis are skipped (:321) |
+| `retime`, `retimes` | `NodeTransitionAnimator.retime(root:_:axis:)` (NodeTransitionAnimator.swift:316-335), called through `retimeTransitions` from `rowDidAnimate` (NodeRowTransition.swift:148-155): every transition animation under the root not on the timing restarts toward its `toValue`; with an axis, x or y key paths of the other axis are skipped (:321) |
 | `retime`'s `tr.value C t0` | the start value: the presentation layer's value (:325-326); `retime_unstarted`: an animation with `beginTime == 0` has not started and restarts from `fromValue` (:323-324) |
 | `retime_same` | the `!timing.isTiming(of: running)` skip (:320) |
 | the row's track restarted from its presented value | `ListAnimationModel.transition`/`retime` (ListAnimation.swift:222, :234) with the height resumed from the row's presentation captured at the pass's start (`capturePositions`, AnimationController.swift:44-57, `resumeValue` :204-205) |
 | a track that continues unchanged | `value(...)`'s carrier copy (NodeTransitionAnimator.swift:409-424): a new tree's layer takes the old layer's running animation when it ends at the same value |
+| `Axis`, `onAxis` | `TransitionAxis(keyPath:)` (LayoutTransition.swift:236-248): `position.x`, `bounds.size.width`, `bounds.origin.x` horizontal, the `y` and height paths vertical, anything else none; `rowDidAnimate` takes the axis from the row animation's key path (NodeRowTransition.swift:152), and `retime` skips key paths of the other axis (NodeTransitionAnimator.swift:321), so each axis's key paths see only its own row animation's retimings |
+| `axes_keep` | the two filters together: x and y insets each through `retimes_keep` on their own row animation |
+| `shift` | `TransitionShift.start(from:to:target:)` (LayoutTransition.swift:254-259), `from + (target - to)`, applied by `NodeTransitionAnimator.shift(root:from:)` (NodeTransitionAnimator.swift:341-364): a copy of the old view's running animation (same begin, duration, speed and curve) on the matching new view, from that start to the new model value |
+| content replaced with no timing | `NodeRowMotion.show`'s `else` branch (NodeRowTransition.swift:116-122): `replacementTiming()` is `nil` (an immediate pass, or one whose time is up), so `NodeHostView.continueTransitions(from:)` (NodeHostView.swift:317-322) calls `shift` |
+| the row's moved track | `ListAnimationModel.transition`'s immediate branch (ListAnimation.swift:212-219): `from + new - to`, same start and transition, which is `shift` of the row's height |
 
 - `edge_lerp`, `edge_constant`: on one timing, a child edge minus the row
   edge is `(1 - p) * d0 + p * d1`; equal end differences make it constant.
@@ -944,9 +967,18 @@ one timing, which is again a track on it.
   the Swift's two special cases are that same step.
 - `alone_drifts`: retiming the row alone, with a 10-point inset bubble left
   on its timing, overlaps the row's edge by 2.5 points at 1 s.
-- `shift_value`, `shift_keeps`, `row_only_off`, `join_jump`, `join_exact`,
-  `shift_sample`: content replaced with no timing, and content joining a
-  running animation (below).
+- `axes_keep`: x key paths retimed only by the row's width animation and y
+  key paths only by its height animation keep both insets through any
+  interleaving. `last_wins_drifts`: moving all content onto the last one
+  added (the Swift before `163e3f0`) puts the bubble 35 points off instead
+  of 10 at 1 s in the sample.
+- `shift_value`, `shift_keeps`: content replaced with no timing, each
+  running animation moved by its own destination's change on its own
+  timing, is the old motion plus that change at every frame, and keeps the
+  inset with the row moved the same way. `row_only_off`: moving only the row
+  (before `163e3f0`) left the inset off by the row's change.
+- `join_jump`, `join_exact`, `shift_sample`: content joining a running
+  animation (below).
 
 Both start values are read from the same rendered frame: the inner one from
 its presentation layer in `retime`, the row's from the presentation captured
@@ -966,33 +998,24 @@ assumes that is the value at `t0`. Not covered:
   `(s - T p) / (1 - p)` would show `s` there (it can lie outside `[s, T]`
   as `p` nears 1). Only the late path (pre-render timeout, a row not live)
   takes this branch;
-- a re-installed row animation with an explicit begin (`beginTime != 0`),
-  which `rowDidAnimate` ignores, including an immediate change to an
-  in-flight height (ListAnimation.swift:212-219) that shifts the row's ends
-  by the change and keeps its timing. At `44f8a0c` inner animations kept
-  their ends, so the inset moved by that change until a pass laid the
-  content out again (`row_only_off`). Since the commit that adds this note,
-  the pass's replacement without a timing calls
-  `NodeHostView.continueTransitions(from:)` (NodeRowTransition.swift:116-122),
-  whose `NodeTransitionAnimator.shift(root:from:)` (NodeTransitionAnimator.swift:341-364)
-  moves each running position, size, opacity and radius onto the new view
-  with its timing, from `TransitionShift.start(from:to:target:) =
-  from + (target - to)` (LayoutTransition.swift:254-259) to the new value:
-  `shift`, and `shift_keeps` proves the inset holds at every frame; not yet
-  mapped row by row. A child whose parent is unmatched lands instead
-  (positions carry only within a matched parent), outside `shift_keeps`;
-- a height and a width animation on different timings: at `44f8a0c` each
-  `rowDidAnimate` moved all content onto its own, so the last one added won
-  and the other axis was off its row's timing (`last_wins_drifts`: 35
-  points instead of 10 at 1 s in the sample). `axes_keep` proves x key
-  paths on the width animation and y key paths on the height animation
-  keep both insets through any interleaving. Since the commit that adds
-  this note, `rowDidAnimate` takes the axis from the row animation's key
-  path, not its key (`TransitionAxis(keyPath:)`,
-  LayoutTransition.swift:236-248), and `retime` moves only that axis's key
-  paths with the axis-less ones; not yet mapped row by row. A turned row
-  reports its width under the height key with key path
-  `bounds.size.width`, so the cards across follow their width;
+- in `shift`, a child whose parent is unmatched: positions carry only
+  within a matched parent (NodeTransitionAnimator.swift:347-352), so its
+  position lands at the new value while the row still moves, outside
+  `shift_keeps`. Its size, opacity and radius still carry. Values that are
+  not single numbers (colors, transforms) land, which has no inset
+  consequence;
+- `shift` needs nothing about where the old animation came from: a
+  non-additive `CABasicAnimation` shows `fromValue + (toValue - fromValue)
+  * p` on its own timing, retimed or carried or not, which is the `Track`
+  it shifts. A key whose carrier has no running animation, or whose values
+  are not numbers, lands;
+- axis-less key paths (opacity, corner radius, the ghost's and the reveal
+  bands' opacity) follow every retiming, so with width and height on
+  different timings the last one wins for them; they set no edge, so no
+  inset depends on them;
+- a turned row (the cards across) reports its width under the height key
+  with key path `bounds.size.width`; the axis comes from the key path, so
+  its content's x follows it. `ElasticResizeTests` checks both directions;
 - springs and curves past their duration: `Track.progress` is 1 from the
   deadline on, the model's reading of `CASpringAnimation.duration`.
 
