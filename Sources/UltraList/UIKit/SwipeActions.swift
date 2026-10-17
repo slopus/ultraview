@@ -70,7 +70,13 @@ public final class ListSwipeController: NSObject, UIGestureRecognizerDelegate {
         guard let list else { return false }
         if let platform = list.engine as? PlatformEngine { return platform.scroll.isDecelerating || platform.scroll.isDragging }
         guard let physics = list.engine as? PhysicsEngine else { return false }
-        return physics.flightState != nil || physics.core.isDecelerating || physics.core.isDragging
+        // A forced pan caught moving content in this touch, whichever recognizer saw it first.
+        return physics.flightState != nil || physics.core.isDecelerating || physics.core.isDragging || physics.pan.forced
+    }
+    /// A touch on moving content catches it. The list's pan takes that touch
+    /// at once, which it can only do if no reveal is still pending.
+    public func gestureRecognizer(_ recognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        recognizer !== pan || !listIsMoving
     }
     private var rightToLeft: Bool { list?.effectiveUserInterfaceLayoutDirection == .rightToLeft }
     private func edgeIsRight(_ side: Side) -> Bool { (side == .trailing) != rightToLeft }

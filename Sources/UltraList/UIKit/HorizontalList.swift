@@ -29,12 +29,31 @@ public final class HorizontalListView: UIView, UIGestureRecognizerDelegate {
         crossGate.delegate = self; mainGate.delegate = self
         addGestureRecognizer(crossGate); addGestureRecognizer(mainGate)
         listPan?.require(toFail: crossGate)
+        crossGate.onClaim = { [weak self] in self?.cancelListPan() }
         list.horizontalAccessibilityScroll = { [weak self] direction in self?.mapped(direction) }
     }
     @available(*, unavailable)
     public required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
     private var listPan: UIPanGestureRecognizer? {
         (list.engine as? PhysicsEngine)?.pan ?? (list.engine as? PlatformEngine)?.scroll.panGestureRecognizer
+    }
+
+    /// A list pan that began in the gate's deciding event still waits on the
+    /// gate, and while it waits it fails the enclosing pans. Cancelling it
+    /// before UIKit resolves the event leaves the vertical drag to them.
+    private func cancelListPan() {
+        guard let pan = listPan, pan.isEnabled else { return }
+        pan.isEnabled = false; pan.isEnabled = true
+    }
+
+    /// Hit testing precedes every recognizer's view of a touch, so motion is
+    /// recorded here before a catching touch stops it.
+    public override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        if let event, event.type == .touches {
+            let moving = AxisGate.Motion(time: event.timestamp, list: AxisGate.isMoving(list), ancestor: AxisGate.ancestorIsMoving(of: self))
+            crossGate.motion = moving; mainGate.motion = moving
+        }
+        return super.hitTest(point, with: event)
     }
 
     public override func layoutSubviews() {
@@ -62,6 +81,11 @@ public final class HorizontalListView: UIView, UIGestureRecognizerDelegate {
         }
     }
 
+    /// A gate stays out of a touch that catches moving content, so the
+    /// catching pan isn't left waiting for it.
+    public func gestureRecognizer(_ recognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        (recognizer as? AxisGate)?.landsOnMotion(at: touch.timestamp) != true
+    }
     public func gestureRecognizer(_ recognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
     public func gestureRecognizer(_ recognizer: UIGestureRecognizer, shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool {
         // Enclosing scrollers wait until the motion is known not to be horizontal.
@@ -77,6 +101,11 @@ public final class HorizontalListView: UIView, UIGestureRecognizerDelegate {
 final class AxisGate: UIGestureRecognizer {
     let claims: GestureAxis
     weak var guarded: UltraListView?
+    struct Motion { var time: Double; var list: Bool; var ancestor: Bool }
+    /// Motion when the touch was hit-tested, before any recognizer caught it.
+    var motion: Motion?
+    /// Runs when the gate decides on `claims`, before it recognizes.
+    var onClaim: (() -> Void)?
     private var lock = AxisLock()
     private var start = CGPoint.zero
     init(claims: GestureAxis) {
@@ -86,20 +115,35 @@ final class AxisGate: UIGestureRecognizer {
     }
     override func reset() { super.reset(); lock = AxisLock() }
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
-        guard let view, let touch = touches.first, event.allTouches?.count ?? 1 == 1 else { state = .failed; return }
-        // Touching moving content catches it; that touch belongs to the moving scroller.
-        if claims == .vertical, let guarded, Self.isMoving(guarded) { state = .failed; return }
-        if claims == .horizontal, Self.ancestorIsMoving(of: view) { state = .failed; return }
+        guard let view, let touch = touches.first, event.allTouches?.count ?? 1 == 1, !landsOnMotion(at: event.timestamp) else { state = .failed; return }
         start = touch.location(in: view)
+    }
+    /// Touching moving content catches it, and that touch belongs to the
+    /// moving scroller: the guarded list for the vertical gate, an enclosing
+    /// one for the horizontal gate.
+    func landsOnMotion(at time: Double) -> Bool {
+        let recorded = motion.flatMap { abs($0.time - time) < 1e-6 ? $0 : nil }
+        switch claims {
+        case .vertical:
+            guard let guarded else { return false }
+            return recorded?.list ?? (Self.isMoving(guarded) || (guarded.engine as? PhysicsEngine)?.pan.forced == true)
+        case .horizontal:
+            guard let view else { return false }
+            return recorded?.ancestor ?? Self.ancestorIsMoving(of: view)
+        }
     }
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
         guard state == .possible, let view, let touch = touches.first else { return }
         let point = touch.location(in: view)
         guard let axis = lock.update(dx: point.x - start.x, dy: point.y - start.y) else { return }
+        if axis == claims { onClaim?() }
         state = axis == claims ? .ended : .failed
     }
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) { if state == .possible { state = .failed } }
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) { if state == .possible { state = .failed } }
+    // A gate only ever makes its dependents fail; it never excludes anyone by recognizing.
+    override func canPrevent(_ preventedGestureRecognizer: UIGestureRecognizer) -> Bool { false }
+    override func canBePrevented(by preventingGestureRecognizer: UIGestureRecognizer) -> Bool { false }
 
     static func isMoving(_ list: UltraScrollView) -> Bool {
         if let platform = list.engine as? PlatformEngine { return platform.scroll.isDecelerating }
