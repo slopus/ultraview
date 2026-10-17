@@ -506,8 +506,10 @@ departing row against its neighbours on every frame. The demo's
 
 On an iPhone 17 Pro simulator (Debug) these interactions ran with zero layout,
 text or drawing on main. Main-thread p99 while swiping and deleting was
-0.8–1.7 ms across engines. Carousel scrolling measured 1.0–2.0 ms; the platform
-engine's carousel sits at the 2 ms budget. The worst seam between a departing
+0.8–1.7 ms across engines. Carousel scrolling measured 0.9–2.5 ms across runs and
+engines, so it sits at the 2 ms budget: a drag has about 130 turns, which
+makes p99 the second-slowest one, and mounting a card into the carousel's
+window costs up to 1.6 ms of list work in a single turn. The worst seam between a departing
 row and its neighbours was 0.005 point; the buttons stayed attached within
 1e-13 point. A full-swipe delete in the 10,000-row feed has one release turn
 of roughly 30–50 ms: `applyChanges` diffs the whole collection on main in
