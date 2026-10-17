@@ -1369,6 +1369,47 @@ the same invariants in stopped time at six points of a resize, in height and
 in width: card edges on the row's less the inset, title at the card's
 padding, radius 16 with no bitmap, one revision shown.
 
+## The keyboard's viewport profile (for the chat's next change)
+
+`Proofs/UltraProofs/List/Profile.lean` covers agfv's coming change, as
+reviewed in its frozen prototype on `2edf931`: the composer's inset follows
+the keyboard's overlap clamped to the resting edge, `max(resting, height)`
+(`KeyboardViewportMotion.height(at:)`), and the viewport correction follows
+the same clamped height through a sampled progress profile
+(`ViewportCurve`, `viewportCurve(physicalProgress:)`), which the bar's
+animation copies. It is not yet mapped to Swift.
+
+- `profile_exact`: at every sample the viewport and the bar are on the
+  clamped keyboard edge. `profile_unit`, `profile_mono`: with the
+  keyboard's progress in `[0, 1]` and moving forward, the samples are in
+  `[0, 1]` and never go back, so the profile is a `Curves.Bounded` curve
+  and its samples' hull (`ViewportCurve.progressBounds`) is the coverage
+  read's range.
+- `kink_bound`, `kink_bound_down`: between samples the interpolated clamp is
+  never below the clamp of the keyboard's interpolated edge and above it by
+  at most a quarter of that segment's travel, only in the segment where the
+  keyboard crosses the resting edge. With 480 samples over a 335-point
+  keyboard that is well under a point.
+
+What the prototype keeps, checked against the models: `ViewportCurve`'s
+precondition puts the first sample at 0 (`Curves.start`) and the last at 1
+(`Track.progress` is 1 from the deadline, so no jump at the end); the
+compiled `CAKeyframeAnimation` uses the samples' values, linear calculation,
+even key times and no timing functions, which is the Swift's
+`ViewportCurve.value` exactly, so attachments read what is shown; only the
+viewport's offset track takes the profile, and only on an inset-only pass
+(every other `applyChanges` path drops it), so the sync theorems relating
+rows and the viewport (one progress) are unchanged, and rows all move with
+the viewport, so relations among them don't depend on its curve
+(`common_mode_cancels`). The bar copies the keyframe animation (same begin,
+duration, speed, values profile), so `ListPass.lockstep_iff` applies.
+Appearances of node rows revealed by an inset-only pass are skipped
+(their timing needs a basic animation). Assumed, not proved: the
+keyboard's sampled progress (from the reported duration and the fitted
+keyboard spring) stays in `[0, 1]` and moves forward, as a critically
+damped spring from rest does; the forced first and last samples equal the
+computed ones when the keyboard's progress starts at 0 and ends at 1.
+
 ## Theorems
 
 **Correctness**

@@ -351,3 +351,11 @@ open UltraProofs
 #print axioms ListReturn.begin_flushes
 #print axioms ListReturn.touch_loses
 #print axioms ListReturn.touch_drops
+#print axioms ListProfile.profile_exact
+#print axioms ListProfile.height_between
+#print axioms ListProfile.height_mono
+#print axioms ListProfile.ratio_unit
+#print axioms ListProfile.profile_unit
+#print axioms ListProfile.profile_mono
+#print axioms ListProfile.kink_bound
+#print axioms ListProfile.kink_bound_down
