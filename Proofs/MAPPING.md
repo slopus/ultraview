@@ -912,7 +912,7 @@ discharges it).
 | Model (`Proofs/UltraProofs/List/Swipe.lean`) | Swift at `dc430c2` |
 | --- | --- |
 | `T.tracking` | `ListSwipeController.tracking` (SwipeActions.swift:38) |
-| `GEv.panBegin` | `beginTracking` (:132-139), from the pan's `.began` (:108) or `receiveInput`'s (:123-126): `registry.begin`, the returned row settled closed, `tracking` set |
+| `GEv.panBegin` | `beginTracking` (:132-139), from the pan's `.began` (:108) or `receiveInput`'s (:120, :123-126, only with no gesture tracked, the list still by `listIsMoving` :69, the row loaded and with actions or active): `registry.begin`, the returned row settled closed, `tracking` set. A refused begin is no event; `guarded_inv` holds for every sequence, so for the refused ones too |
 | `T.acts true` | `tracked(_:)` (:152-156): the gesture on the row, while `registry.active` is that row; otherwise `tracking` is cleared |
 | `GEv.panChange` | `continueTracking` (:140-143), from `.changed` (:109, :127) |
 | `GEv.panEnd` | `endTracking` (:144-148), from `.ended` and `.cancelled` (:110-111, :128-129): clears `tracking` and calls `release` (:230-240), which settles the decided outcome, or removes the row from the registry when it has no reveal |
@@ -924,7 +924,9 @@ A deleted row also clears `tracking` in `reconcile` (:429); with the guard
 that is redundant, since the next sample finds the row inactive. The test
 hooks `simulateDrag` and `simulateRelease` (:528-535) go through
 `continueTracking` and `endTracking`; `simulateBegin` (:523-527) sets
-`tracking` without the first `track` and is `panBegin`. Gesture delivery, the reveal's rubber band and spring
+`tracking` without the first `track` and is `panBegin`. Chaos seeds 101 and
+303, the `unguarded_breaks` sequence, run with no violation at `163e3f0`.
+Gesture delivery, the reveal's rubber band and spring
 (`displayed`, `SwipeMotion`) and the buttons' spans are outside the model.
 At `a489e36` the controller refuses a touch while the list moves
 (`shouldReceive`) and counts size position layers as neighbour motion in a
