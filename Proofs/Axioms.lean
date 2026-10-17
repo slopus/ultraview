@@ -252,6 +252,12 @@ open UltraProofs
 #print axioms ListRubber.reanchor_idle
 #print axioms ListRubber.reanchor_capped
 #print axioms ListRubber.capped_jump
+#print axioms ListRubber.adapt_ge
+#print axioms ListRubber.adapt_covers
+#print axioms ListRubber.adapt_idle
+#print axioms ListRubber.adapt_no_jump
+#print axioms ListRubber.adapt_example
+#print axioms ListRubber.adapt_depth
 #print axioms ListDecel.coast_compose
 #print axioms ListDecel.spring_compose
 #print axioms ListDecel.coast_frames

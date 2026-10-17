@@ -30,6 +30,10 @@ Swift's `ulpOfOne` guard is `0 < r` here.
 * `reanchor_capped`: beyond the cap the next drag sample jumps toward the
   edge, to `r * cap` past it. `capped_jump`: with a 400-point range and an
   offset 500 points past a new edge, by just over 100 points.
+* `adapt_covers`, `adapt_no_jump`: re-anchoring with the range raised to
+  twice the shown overscroll when that is past the cap (`adapt`) meets the
+  cap for any overscroll, so nothing jumps; `adapt_example` is the
+  500-point case. `adapt_idle`: within the cap the range is kept.
 -/
 
 namespace UltraProofs.ListRubber
@@ -313,5 +317,71 @@ theorem capped_jump (s : Drag) (t : Rat) (ht : s.proposed = s.anchor - t) (ho : 
   rw [reanchor_capped (by decide +kernel) (by decide +kernel) (by decide +kernel) (by decide +kernel) s t ht
     (by rw [ho]; decide +kernel), ho]
   decide +kernel
+
+/-! ## An adaptive range -/
+
+/-- The range a re-anchor bands the drag with from then on: the current one,
+or twice the shown overscroll `x` when `x` is past the cap. -/
+def adapt (R cap x : Rat) : Rat := if R * cap < x then max R (2 * x) else R
+
+theorem adapt_ge (R cap x : Rat) : R ≤ adapt R cap x := by
+  unfold adapt; split
+  · rw [Rat.max_def]; split <;> grind
+  · exact Rat.le_refl
+
+/-- **The adapted range always meets the cap**, for a cap of at least one
+half, so `reanchor_no_jump` applies with it. -/
+theorem adapt_covers {R cap x : Rat} (hcap : 1 / 2 ≤ cap) (hx : 0 ≤ x) :
+    x ≤ adapt R cap x * cap := by
+  unfold adapt
+  split
+  · rename_i h
+    have hm : 2 * x ≤ max R (2 * x) := by rw [Rat.max_def]; split <;> grind
+    have h2 : x ≤ 2 * x * cap := by
+      have := Rat.mul_le_mul_of_nonneg_left hcap (show 0 ≤ 2 * x by grind); grind
+    have h3 : 2 * x * cap ≤ max R (2 * x) * cap :=
+      Rat.mul_le_mul_of_nonneg_right hm (by grind)
+    exact Rat.le_trans h2 h3
+  · grind
+
+/-- **Within the cap the range is kept**, so drags that never pass it band
+exactly as before. -/
+theorem adapt_idle {R cap x : Rat} (hx : x ≤ R * cap) : adapt R cap x = R := by
+  unfold adapt; rw [ite_eq_right_iff]; intro h; exact absurd hx (Rat.not_le.mpr h)
+
+/-- **With the adapted range, an edge change mid-drag moves nothing under
+the finger, however far past the new edge the content is.** -/
+theorem adapt_no_jump {e : Edges} {R c cap : Rat} (hR : 0 < R) (hc : 0 < c) (hcap0 : 1 / 2 ≤ cap)
+    (hcap : cap < 1) (s : Drag) (t : Rat) (ht : s.proposed = s.anchor - t) :
+    let R' := adapt R cap (absR (s.offset - clamp e s.offset))
+    (drag e R' c (reanchor e R' c cap s) t).offset = s.offset := by
+  intro R'
+  have hx : 0 ≤ absR (s.offset - clamp e s.offset) := by
+    unfold absR; split <;> grind
+  have hR' : 0 < R' := by have := adapt_ge R cap (absR (s.offset - clamp e s.offset)); grind
+  have hcov : absR (s.offset - clamp e s.offset) ≤ R' * cap := adapt_covers hcap0 hx
+  exact reanchor_no_jump hR' hc hcap s t ht hcov
+
+/-- The capped case again with the range adapted: 500 points past a new edge
+in a 400-point viewport, the range becomes 1000 and nothing jumps. -/
+theorem adapt_example (s : Drag) (t : Rat) (ht : s.proposed = s.anchor - t) (ho : s.offset = 500) :
+    adapt 400 (1 - 1 / 1000000) (absR (s.offset - clamp ⟨some 0, some 0⟩ s.offset)) = 1000 ∧
+      (drag ⟨some 0, some 0⟩ 1000 (11 / 20)
+        (reanchor ⟨some 0, some 0⟩ 1000 (11 / 20) (1 - 1 / 1000000) s) t).offset = 500 := by
+  have ha : adapt 400 (1 - 1 / 1000000) (absR (s.offset - clamp ⟨some 0, some 0⟩ s.offset)) = 1000 := by
+    rw [ho]; decide +kernel
+  refine ⟨ha, ?_⟩
+  have := adapt_no_jump (e := ⟨some 0, some 0⟩) (R := 400) (c := 11 / 20) (cap := 1 - 1 / 1000000)
+    (by decide +kernel) (by decide +kernel) (by decide +kernel) (by decide +kernel) s t ht
+  simp only at this; rw [ha, ho] at this; exact this
+
+/-- How far a drag has gone past the edge to show `b`, with the range twice
+`b`: `2b / c`. The band's slope there, `c ((r - b) / r)²`, is a quarter of
+its slope at the edge; at the cap of an unadapted range it is about
+`c · 10⁻¹²`, so the content would barely follow the finger. -/
+theorem adapt_depth {b c : Rat} (hb : 0 < b) (hc : 0 < c) : unband (2 * b) c b = 2 * b / c := by
+  have h1 : c ≠ 0 := by grind
+  have h2 : b ≠ 0 := by grind
+  simp only [unband]; grind
 
 end UltraProofs.ListRubber

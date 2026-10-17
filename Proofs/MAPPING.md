@@ -806,7 +806,7 @@ the observed behavior, not documented API.
 
 `Proofs/UltraProofs/List/Swipe.lean` models the pure decisions in
 SwipeReveal.swift, which last changed at `76eab99`, and how the controller
-(UIKit/SwipeActions.swift at `0e5c7b6`) drives the registry. Distances are
+(UIKit/SwipeActions.swift at `a489e36`) drives the registry. Distances are
 rationals.
 
 | Model (`Proofs/UltraProofs/List/Swipe.lean`) | Swift |
@@ -816,7 +816,7 @@ rationals.
 | `release`, `projection` | `SwipeRelease.decide` (:104-108), `projection` (:101) |
 | `threshold_above_half` | `SwipeRevealLayout.fullSwipeThreshold` (:54-58) |
 | `begin`, `settle`, `remove` | `SwipeRegistry` (:196-209) |
-| `C`, `cstep` | the controller's `registry`, the rows with a reveal, and the rows animating closed: `begin` settles the returned row closed (SwipeActions.swift:104, :483); `settle` (:208-228); a closing animation's `finish`; `remove` in `release`, `settle` and `reconcile` (:193, :209, :387-403) |
+| `C`, `cstep` | the controller's `registry`, the rows with a reveal, and the rows animating closed: `begin` settles the returned row closed (SwipeActions.swift:110, :492); `settle` (:214-234); a closing animation's `finish`; `remove` in `release`, `settle` and `reconcile` (:199, :215, :393-409) |
 
 - `lock_keeps`, `lock_run_keeps`: once decided, every later `update` and
   `force` returns the same axis, for any translation. `run_none_iff`: from
@@ -843,6 +843,10 @@ rationals.
 its `.began` made active, and a removal in between makes `release` return
 early. Gesture delivery, the reveal's rubber band and spring
 (`displayed`, `SwipeMotion`) and the buttons' spans are outside the model.
+At `a489e36` the controller refuses a touch while the list moves
+(`shouldReceive`) and counts size position layers as neighbour motion in a
+collapse; neither touches the registry, so the rows above still hold.
+`ListRubber.rubber_unrubber` covers `displayed` and `proposed`.
 
 ## Content inside an animating row (for the node-row transitions change)
 
@@ -934,6 +938,17 @@ drag. Swipe reveals use the same pair (SwipeReveal.swift at `76eab99`).
   under the finger), the next drag sample jumps to `range * cap` past it:
   with a 400-point viewport and an offset 500 past the edge, by just over
   100 points.
+
+- `adapt`, `adapt_covers`, `adapt_no_jump` (for the list's next change): if
+  the re-anchor raises the drag's range to `max(range, 2x)` when the shown
+  overscroll `x` is past `range * cap`, the cap always holds and nothing
+  jumps, whatever `x`; `adapt_example`: 500 points past the edge in a
+  400-point viewport bands with 1000 and stays at 500. `adapt_idle`: within
+  the cap the range is unchanged. The theorems need `drag` and `reanchor`
+  to use the same range, so the raised range must stay for the rest of
+  that drag (`reanchor_idle` with it) and reset when a drag begins.
+  `adapt_depth`: there the band's slope is a quarter of its slope at the
+  edge, so the content keeps following the finger.
 
 The shift before the re-anchor (`ScrollAxis.shift(by:)`, :78) moves offset,
 anchor and proposed together, so the model's `Drag` is the state after it.
