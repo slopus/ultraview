@@ -20,7 +20,7 @@ private final class SyncRowView: ListRowView {
 /// Lists in a window with their layer clock stopped, so each check reads what
 /// Core Animation shows at one moment of the pass's animation.
 /// `Proofs/UltraProofs/List/Pass.lean` and `Animation.lean` prove the
-/// properties these pin; the known issues are the gaps found there.
+/// properties these regressions pin.
 @MainActor
 @Suite(.serialized) struct ListSyncTests {
     let window = makeWindow()
@@ -74,10 +74,8 @@ private final class SyncRowView: ListRowView {
         let start = try await shown(row0, in: list)
         advance(list, to: 100.5)
         let half = try await shown(row0, in: list)
-        withKnownIssue("Detached views are moved by the offset shift, not the reference row's move (Pass.lean, scroll_carry_jumps)") {
-            #expect(abs(start.minY - before.minY) < 0.5, "row 0 was at \(before.minY), starts at \(start.minY)")
-            #expect(row0.superview != nil && abs(half.minY - (before.minY - 150)) < 0.5, "row 0 is at \(half.minY) halfway")
-        }
+        #expect(abs(start.minY - before.minY) < 0.5, "row 0 was at \(before.minY), starts at \(start.minY)")
+        #expect(row0.superview != nil && abs(half.minY - (before.minY - 150)) < 0.5, "row 0 is at \(half.minY) halfway")
     }
 
     /// A size with the insets (a host relayout) takes the full pass, which rebuilds the window; its rows follow the
@@ -133,9 +131,34 @@ private final class SyncRowView: ListRowView {
         list.applyChanges(items: rows, transition: linear)
         advance(list, to: 101)
         let upper = try #require(list.presentedFrame(at: 1)), lower = try #require(list.presentedFrame(at: 2))
-        withKnownIssue("A kept track stays on the previous pass's timeline (Animation.lean, kept_track_desyncs)") {
-            #expect(abs(upper.maxY - lower.minY) < 0.5, "upper bottom \(upper.maxY), lower top \(lower.minY)")
-        }
+        #expect(abs(upper.maxY - lower.minY) < 0.5, "upper bottom \(upper.maxY), lower top \(lower.minY)")
+    }
+    @Test func rowOnlyRetimingPreservesAnExistingViewportSpring() throws {
+        let list = list(count: 10)
+        list.applyChanges(newInsets: .init(top: 100), transition: .spring(1, damping: 22))
+        let key = "ultraview.list.viewportOffset"
+        let original = try #require(list.contentView.layer.animation(forKey: key) as? CASpringAnimation)
+        advance(list, to: 100.2)
+        var rows = (0..<10).map { SyncRow(identity: String($0)) }
+        rows[1].height = 150; rows[1].revision = 1
+        list.applyChanges(items: rows, transition: .easeInOut(0.4))
+        let kept = try #require(list.contentView.layer.animation(forKey: key) as? CASpringAnimation)
+        #expect(kept.beginTime == original.beginTime && kept.duration == original.duration)
+        #expect(kept.stiffness == original.stiffness && kept.damping == original.damping)
+    }
+    @Test func rowOnlyRetimingPreservesAnExistingOpacityDeadline() throws {
+        let list = list(count: 10)
+        var rows = (0..<10).map { SyncRow(identity: String($0)) }
+        rows.insert(SyncRow(identity: "new"), at: 0)
+        list.applyChanges(items: rows, transition: .easeInOut(1))
+        let inserted = try #require(list.loadedItemView(at: 0))
+        let key = "ultraview.list.opacity"
+        let original = try #require(inserted.layer.animation(forKey: key))
+        advance(list, to: 100.2)
+        rows[1].height = 150; rows[1].revision = 1
+        list.applyChanges(items: rows, transition: .easeInOut(0.4))
+        let kept = try #require(inserted.layer.animation(forKey: key))
+        #expect(kept.beginTime == original.beginTime && kept.duration == original.duration)
     }
 }
 #endif

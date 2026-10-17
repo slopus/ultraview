@@ -76,10 +76,11 @@ final class AnimationController {
         } else { clear(owner, property); completions.removeValue(forKey: key); resolvedCompletion?() }
         return track?.generation
     }
-    /// Once the pass has started a track, puts every bound track it kept on the pass's timeline, so they move with the
-    /// ones it started.
+    /// Kept geometry follows this pass. Viewport motion remains common to every
+    /// row, and opacity retains its deadline so ongoing mutations cannot keep
+    /// departing views alive indefinitely.
     func retime(at time: Double, transition: ListTransition) {
-        let restarted = model.retime(since: passGeneration, at: time, transition: transition.scaled(by: durationScale), resume: { [self] in resumeValue($0.owner, $0.property) }, including: { [self] in layers[$0.owner] != nil })
+        let restarted = model.retime(since: passGeneration, at: time, transition: transition.scaled(by: durationScale), resume: { [self] in resumeValue($0.owner, $0.property) }, including: { [self] in $0.owner != .viewport && $0.property != .opacity && layers[$0.owner] != nil })
         for (key, track) in restarted {
             install(key.owner, key.property, track: track)
             if let entry = completions[key] { completions[key] = (track.generation, entry.1) }

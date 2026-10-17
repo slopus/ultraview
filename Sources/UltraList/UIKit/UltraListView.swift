@@ -390,6 +390,8 @@ public final class UltraListView: UltraScrollView {
         if let reference, let newIndex = newLookup[oldItems[reference.index].identity], let next = newWindow.rows.first(where: { $0.index == newIndex }) {
             coordinateMap = newBase + next.y - oldBase - reference.y
         } else { coordinateMap = shift }
+        let displacing = !isCarousel && (target != nil || displaces)
+        let detachedShift = displacing ? coordinateMap : shift
         let oldSnapshot = Dictionary(uniqueKeysWithValues: oldWindow.rows.map { (oldItems[$0.index].identity, $0) })
         let outgoing = oldWindow.rows.filter { !nextIDs.contains(oldItems[$0.index].identity) }
         if transition.isImmediate, target != nil || fullReplace {
@@ -398,18 +400,18 @@ public final class UltraListView: UltraScrollView {
                 view.removeFromSuperview()
             }
         }
-        shiftDetached(by: shift)
+        shiftDetached(by: detachedShift)
         if isCarousel && !transition.isImmediate {
             promoteCarousel(oldWindow: oldWindow, oldItems: oldItems, oldViews: oldViews, oldBase: oldBase, oldOffset: oldOffset, oldCorrection: oldCorrection, newWindow: newWindow, newOrigin: newOrigin, newOffset: destination, target: target!, witness: survivor.flatMap { newLookup[oldItems[$0.index].identity] }, time: time, transition: transition)
         } else {
             let departures = outgoing.filter { newLookup[oldItems[$0.index].identity] == nil }
-            makeDepartures(departures, oldItems: oldItems, oldViews: oldViews, oldBase: oldBase, coordinateShift: shift, time: time, transition: transition)
+            makeDepartures(departures, oldItems: oldItems, oldViews: oldViews, oldBase: oldBase, coordinateShift: detachedShift, time: time, transition: transition)
             for row in outgoing where newLookup[oldItems[row.index].identity] != nil {
                 let id = oldItems[row.index].identity
                 guard let view = oldViews[id] else { continue }
                 if !transition.isImmediate && (target != nil || mutatesRows) {
                     view.onContentDidChange = nil; crossings.addSubview(view)
-                    view.place(in: .init(x: oldViewport.insets.left, y: oldBase + row.y + shift, width: oldViewport.contentWidth, height: row.height))
+                    view.place(in: .init(x: oldViewport.insets.left, y: oldBase + row.y + detachedShift, width: oldViewport.contentWidth, height: row.height))
                     carried[id] = (view, newLookup[id]!)
                 } else { animations.unbind(.row(id)); view.removeFromSuperview() }
             }
@@ -433,7 +435,7 @@ public final class UltraListView: UltraScrollView {
         engine.setEdges(newEdges); declaredEdges = newEdges
         engine.shift(by: destination - engine.offset); previousOffset = engine.offset
         if absorbsEdgeChangeIntoOverscroll { engine.reanchorDrag() }
-        if !isCarousel && (target != nil || displaces) {
+        if displacing {
             animations.replace(.viewport, .viewportOffset, from: oldOffset + coordinateMap + oldCorrection - engine.offset, to: 0, at: time, transition: transition)
         }
         transitionDetachedHorizontalGeometry(at: time, transition: transition)
@@ -442,7 +444,7 @@ public final class UltraListView: UltraScrollView {
         let samples = shared.compactMap { row -> CrossingPlanner.Sample? in
             let id = oldItems[row.index].identity
             guard let newIndex = newLookup[id], let next = newWindow.rows.first(where: { $0.index == newIndex }), !diff.moves.contains(where: { $0.old == row.index }) else { return nil }
-            return .init(oldIndex: row.index, newIndex: newIndex, oldY: oldBase + row.y + shift, newY: newBase + next.y)
+            return .init(oldIndex: row.index, newIndex: newIndex, oldY: oldBase + row.y + detachedShift, newY: newBase + next.y)
         }
         var crossingEndpoints: [CrossingPlanner.Endpoint] = []
         for (id, carry) in carried {
@@ -460,7 +462,7 @@ public final class UltraListView: UltraScrollView {
         for (id, next) in plans {
             guard let carry = carried[id] else { continue }
             let oldY = carry.view.frame.minY; carry.view.frame.origin.y = next
-            animations.transition(.row(id), .positionY, old: oldY, new: next, at: time, transition: transition) { [weak self, weak view = carry.view] in
+            animations.transition(.row(id), .positionY, old: oldY, new: next, at: time, transition: transition, restarts: displacing) { [weak self, weak view = carry.view] in
                 guard let self, let view, carried[id]?.view === view, views[id] == nil else { return }
                 carried.removeValue(forKey: id); view.removeFromSuperview(); animations.unbind(.row(id))
             }
@@ -484,6 +486,7 @@ public final class UltraListView: UltraScrollView {
                 animations.replace(owner, .positionY, from: inferred - newY, to: 0, at: time, transition: transition)
             }
         }
+        animations.retime(at: time, transition: transition)
         CATransaction.commit()
         sweepPreparations(force: newItems != nil || sizeChanged)
         renderAttachments()
