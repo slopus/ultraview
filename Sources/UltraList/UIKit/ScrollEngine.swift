@@ -143,6 +143,8 @@ final class PhysicsEngine: NSObject, ScrollEngine, UIGestureRecognizerDelegate {
     func halt() { catchMotion(braking: false); core.halt(); writeBase(offset) }
     func sync() { flightState?.beginTick(at: now, core: &core) }
     func shift(by delta: Double) {
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
         core.shift(by: delta)
         coveragePrediction?.coordinateShift += delta
         if flightState != nil {
@@ -153,6 +155,8 @@ final class PhysicsEngine: NSObject, ScrollEngine, UIGestureRecognizerDelegate {
     }
     func setEdges(_ edges: ScrollEdges) {
         guard self.edges != edges else { return }
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
         let discoversEdge = self.edges.minimum == nil && edges.minimum != nil || self.edges.maximum == nil && edges.maximum != nil
         self.edges = edges; core.setEdges(edges); flightState?.edgesChanged(to: edges)
         if discoversEdge, var state = flightState, state.rebakePending {
@@ -183,6 +187,8 @@ final class PhysicsEngine: NSObject, ScrollEngine, UIGestureRecognizerDelegate {
     }
 
     private func catchMotion(braking: Bool) {
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
         let predicted = coveragePrediction != nil
         coveragePrediction = nil
         if let state = flightState {
@@ -211,6 +217,10 @@ final class PhysicsEngine: NSObject, ScrollEngine, UIGestureRecognizerDelegate {
     }
     private func startMotion() {
         guard core.isDecelerating else { return }
+        // Publish the parked base, its compensating animation and the rows
+        // mounted by the flight callback in one render-server transaction.
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
         if mode == .keyframe {
             let saved = core
             let settled = core.step(seconds: 0.5 / Double(max(60, maxFPS)))
@@ -238,6 +248,8 @@ final class PhysicsEngine: NSObject, ScrollEngine, UIGestureRecognizerDelegate {
         host.layer.add(animation, forKey: flightKey)
     }
     func tick(_ link: CADisplayLink) {
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
         core.viewport = host.bounds.height
         if var state = flightState {
             let time = now

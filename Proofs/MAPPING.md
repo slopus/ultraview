@@ -600,6 +600,14 @@ ticks is the physics' own, and the `maximumAdditionalRows: 64` budget, which
 `rebalanceIn_keeps` does not need (it bounds new rows, never removes loaded
 ones).
 
+The flight-publication follow-up after `460d78f` groups `startMotion`,
+`catchMotion`, `shift`, `setEdges` and `tick` in outer Core Animation
+transactions. A parked bounds origin, its compensating animation and the
+synchronous rows and attachments mounted by their callbacks reach the render
+server together. The trajectory and coverage equations above are unchanged;
+they assume UIKit's transaction semantics and do not model intermediate
+render-server commits or pixels.
+
 ## Independent size and position motion at `460d78f`
 
 `Proofs/UltraProofs/List/Layers.lean` states what keeping a size motion's
