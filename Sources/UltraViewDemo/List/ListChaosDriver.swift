@@ -21,6 +21,9 @@ protocol ListChaosRowHost: AnyObject, Sendable {
 /// `viewDidLoad`. Documents/list-chaos-<seed>.jsonl records every step;
 /// list-chaos-<seed>-summary.json is rewritten every 10 s and at the end.
 /// Add `-listHostProbe YES` to cover Chat headers and the pinned stream row.
+/// Swipe actions (reveals, full swipes, VoiceOver actions, closing) are part
+/// of the mix; `-listChaosSwipes NO` leaves them out and replays seeds as
+/// they ran before swipes existed.
 @MainActor
 final class ListChaosDriver {
     private static var current: ListChaosDriver?
@@ -41,9 +44,12 @@ final class ListChaosDriver {
         case stream, send, keyboard, multiline
         case screen, engine, blocker, appearance, typeSize, rotation, appTab
         case burst, quiet
+        // Appended, so that with swipes off the weighted draw matches earlier runs.
+        case swipe, swipeAction, swipeClose
     }
 
     private let seed: UInt64, minutes: Double, checks: Bool
+    private let swipes = UserDefaults.standard.object(forKey: "listChaosSwipes") == nil || UserDefaults.standard.bool(forKey: "listChaosSwipes")
     private weak var lists: ListsScreenController?
     private var random: ListChaosRandom
     private let log: ListChaosLogFile
@@ -53,6 +59,7 @@ final class ListChaosDriver {
     private var checkCount = 0, settledChecks = 0, pinChecks = 0, violationCount = 0, advisoryCount = 0
     private var violationKinds: [String: Int] = [:], actionCounts: [String: Int] = [:]
     private var activeGestures = 0, awayFromLists = false
+    private var swipeGestures = 0, swipeHandlers = 0, swipeOutcomes: [String: Int] = [:], restingReveals = 0
     private var pinDisturbed = true
     private var rotationRequests = 0, rotationErrors = 0
     private var peakFootprint: UInt64 = 0, lastFootprint: UInt64 = 0, ledgerPeak: Int64 = 0, minimumAvailable = UInt64.max
@@ -68,7 +75,7 @@ final class ListChaosDriver {
     // MARK: Run
 
     private func run() async {
-        log.append(["type": "start", "seed": String(seed), "minutes": minutes, "checksEnabled": checks,
+        log.append(["type": "start", "seed": String(seed), "minutes": minutes, "checksEnabled": checks, "swipes": swipes,
                     "hostProbe": UserDefaults.standard.bool(forKey: "listHostProbe"),
                     "runID": UserDefaults.standard.string(forKey: "listProbeRunID") ?? "",
                     "system": UIDevice.current.systemVersion, "model": UIDevice.current.model], durable: true)
@@ -154,10 +161,12 @@ final class ListChaosDriver {
     // MARK: Choice
 
     private func weight(_ action: Action, on screen: Screen) -> Double {
+        if [.swipe, .swipeAction, .swipeClose].contains(action), !swipes { return 0 }
         let feed: [Action: Double] = [.insert: 8, .delete: 6, .move: 5, .resize: 7, .reinsert: 3, .rebuild: 1.5, .replace: 0.8, .insets: 2.5, .demoButton: 3,
-                                      .jump: 6, .fling: 8, .drag: 6, .halt: 1.5]
+                                      .jump: 6, .fling: 8, .drag: 6, .halt: 1.5, .swipe: 7, .swipeAction: 2, .swipeClose: 1]
         let chat: [Action: Double] = [.insert: 3, .delete: 3, .move: 1.5, .resize: 3, .reinsert: 1.5, .rebuild: 1, .replace: 0.5,
-                                      .jump: 4, .fling: 6, .drag: 5, .halt: 1, .stream: 5, .send: 5, .keyboard: 4, .multiline: 4]
+                                      .jump: 4, .fling: 6, .drag: 5, .halt: 1, .stream: 5, .send: 5, .keyboard: 4, .multiline: 4,
+                                      .swipe: 5, .swipeAction: 1.5, .swipeClose: 0.7]
         let compare: [Action: Double] = [.jump: 4, .fling: 8, .drag: 8, .halt: 2]
         let global: [Action: Double] = [.screen: 1.5, .engine: 1.5, .blocker: 1.2, .appearance: 0.6, .typeSize: 0.6, .rotation: 0.5,
                                         .appTab: 0.4, .burst: 4, .quiet: 2.5]
@@ -211,7 +220,8 @@ final class ListChaosDriver {
             let velocity = (random.bool() ? 1.0 : -1.0) * random.double(300...12_000)
             if list.holdsPinnedRow { pinDisturbed = true }
             list.beginMomentum(velocity: velocity); detail = String(Int(velocity))
-        case .drag: if let list = randomList() { drag(list) }
+        // One finger: a list drag never overlaps a row swipe, and the other way round.
+        case .drag: if swipeGestures == 0, let list = randomList() { drag(list) }
         case .halt: randomList()?.haltScrolling()
         case .stream: button("Stream")?.sendActions(for: .touchUpInside); pinDisturbed = false
         case .send:
@@ -252,6 +262,13 @@ final class ListChaosDriver {
             }
             detail = names.joined(separator: ",")
         case .quiet: break
+        case .swipe: if let host = rowHost { swipe(host.list) }
+        case .swipeAction: if let host = rowHost { accessibilityAction(host.list) }
+        case .swipeClose:
+            guard let list = rowHost?.list else { return }
+            let animated = random.bool(0.8)
+            detail = "\(list.swipeActions.revealedIdentity ?? "none")\(animated ? "" : " immediate")"
+            list.swipeActions.close(animated: animated)
         }
     }
 
@@ -266,15 +283,105 @@ final class ListChaosDriver {
 
     private func makeRow(inverted: Bool, section: String?) -> DemoListRow {
         serial += 1
-        return DemoListRow(identity: "chaos-\(seed)-\(serial)", title: "Chaos \(serial)", body: String(repeating: "Randomized row. ", count: random.int(1...8)),
-                           height: Double(random.int(24...420)), tint: random.pick([.systemGreen, .systemOrange, .systemPink]), inverted: inverted, section: section)
+        var row = DemoListRow(identity: "chaos-\(seed)-\(serial)", title: "Chaos \(serial)", body: String(repeating: "Randomized row. ", count: random.int(1...8)),
+                              height: Double(random.int(24...420)), tint: random.pick([.systemGreen, .systemOrange, .systemPink]), inverted: inverted, section: section)
+        if swipes, random.bool(0.7) { addSwipeActions(to: &row) }
+        return row
     }
 
     private static func freshCopy(_ row: DemoListRow) -> DemoListRow {
         var copy = DemoListRow(identity: row.identity, revision: row.revision, title: row.title, body: row.body, height: row.height, tint: row.tint,
                                inverted: row.inverted, pinsToBottomEdge: row.pinsToBottomEdge, section: row.section)
         copy.extraAttachments = row.extraAttachments
+        copy.leadingSwipeActions = row.leadingSwipeActions; copy.trailingSwipeActions = row.trailingSwipeActions
         return copy
+    }
+
+    // MARK: Swipes
+
+    /// Delete removes the row, Archive moves it while it closes, Grow resizes it
+    /// in place. Everything random is drawn here, so handlers that run later
+    /// from a gesture don't shift the seed's sequence.
+    private func addSwipeActions(to row: inout DemoListRow) {
+        let identity = row.identity
+        let deleteTransition = transition(), moveTransition = transition(), growTransition = transition()
+        let moveBy = random.int(2...10), grownHeight = Double(random.int(40...360))
+        let widths = (0..<3).map { _ in random.bool(0.7) ? 76.0 : random.double(56...120) }
+        row.trailingSwipeActions = [
+            ListSwipeAction(title: "Delete", isDestructive: true, width: widths[0]) { [weak self] in
+                self?.handleSwipe(identity, "delete") { rows, index in rows.remove(at: index); return deleteTransition }
+            },
+            ListSwipeAction(title: "Archive", color: .systemIndigo, width: widths[1]) { [weak self] in
+                self?.handleSwipe(identity, "archive") { rows, index in
+                    let row = rows.remove(at: index); rows.insert(row, at: min(rows.count, index + moveBy)); return moveTransition
+                }
+            },
+        ]
+        if random.bool(0.6) {
+            row.leadingSwipeActions = [ListSwipeAction(title: "Grow", color: .systemOrange, width: widths[2]) { [weak self] in
+                self?.handleSwipe(identity, "grow") { rows, index in rows[index].height = grownHeight; rows[index].revision += 1; return growTransition }
+            }]
+        }
+    }
+    private func handleSwipe(_ identity: String, _ name: String, _ change: (inout [DemoListRow], Int) -> ListTransition) {
+        guard let host = rowHost else { return }
+        var rows = host.chaosRows
+        guard let index = rows.firstIndex(where: { $0.identity == identity }) else { return }
+        let transition = change(&rows, index)
+        host.chaosRows = rows
+        host.list.applyChanges(items: rows, transition: transition)
+        swipeHandlers += 1
+        log.append(["type": "swipeHandler", "step": step, "action": name, "identity": identity])
+    }
+
+    /// A horizontal drag on a loaded row with actions, fed like a touch: short,
+    /// to the open width, or past the full-swipe threshold, with any release.
+    private func swipe(_ list: UltraListView) {
+        guard activeGestures == 0 else { detail = "gesture active"; return }
+        let candidates = list.loadedIndexRange.filter { !list.items[$0].leadingSwipeActions.isEmpty || !list.items[$0].trailingSwipeActions.isEmpty }
+        guard !candidates.isEmpty else { detail = "no row"; return }
+        let open = list.swipeActions.revealedIdentity
+        let identity = open != nil && random.bool(0.4) ? open! : list.items[random.pick(candidates)].identity
+        let width = Double(list.bounds.width), sign = random.bool() ? 1.0 : -1.0
+        let distance: Double
+        switch random.int(0...9) {
+        case 0, 1, 2: distance = sign * random.double(8...60)
+        case 3, 4, 5, 6: distance = sign * random.double(70...220)
+        default: distance = sign * random.double((0.6 * width)...(1.1 * width))
+        }
+        let samples = random.int(3...10), cancels = random.bool(0.1)
+        let release = random.bool(0.3) ? 0 : random.double(-3000...3000)
+        swipeGestures += 1; activeGestures += 1
+        detail = "\(identity) \(Int(distance)) v\(Int(release))\(cancels ? " cancel" : "")"
+        Task { @MainActor [weak self, weak list] in
+            defer { self?.swipeGestures -= 1; self?.activeGestures -= 1 }
+            @MainActor func send(_ phase: GestureRecording.Event.Phase, _ dx: Double, _ velocity: Double = 0) {
+                list?.swipeActions.receiveInput(.init(time: CACurrentMediaTime(), phase: phase, translation: .init(x: dx), velocity: .init(x: velocity)), row: identity)
+            }
+            send(.touchDown, 0)
+            send(.began, distance / Double(samples))
+            // Like a touch, a swipe on a moving list or a row without actions never begins.
+            let began = list?.swipeActions.revealedIdentity == identity
+            self?.swipeOutcomes[began ? "began" : "refused", default: 0] += 1
+            let speed = distance / (Double(samples) * 0.016)
+            for sample in 2...max(2, samples) {
+                try? await Task.sleep(for: .milliseconds(16))
+                send(.changed, distance * Double(sample) / Double(samples), speed)
+            }
+            send(cancels ? .cancelled : .ended, distance, release)
+        }
+    }
+
+    /// Runs one of a loaded row's VoiceOver custom actions, as VoiceOver would.
+    private func accessibilityAction(_ list: UltraListView) {
+        let rows = list.loadedIndexRange.compactMap { index -> UIAccessibilityCustomAction? in
+            guard let actions = list.loadedItemView(at: index)?.accessibilityCustomActions, !actions.isEmpty else { return nil }
+            return random.pick(actions)
+        }
+        guard !rows.isEmpty else { detail = "no row"; return }
+        let action = random.pick(rows)
+        detail = action.name
+        _ = action.actionHandler?(action)
     }
 
     /// Mostly near the loaded window, sometimes anywhere.
@@ -467,7 +574,8 @@ final class ListChaosDriver {
 
     private func state() -> [String: Any] {
         var record: [String: Any] = ["t": Self.json(elapsed), "screen": screen.rawValue, "away": awayFromLists,
-                                     "blocker": control("listMainBlocker")?.selectedSegmentIndex ?? -1]
+                                     "blocker": control("listMainBlocker")?.selectedSegmentIndex ?? -1,
+                                     "revealed": currentLists.compactMap(\.swipeActions.revealedIdentity)]
         record["lists"] = currentLists.map { list -> [String: Any] in
             let insets = list.viewportInsets
             return ["engine": list.engineMode.rawValue, "items": list.items.count, "loaded": "\(list.loadedIndexRange)",
@@ -511,6 +619,7 @@ final class ListChaosDriver {
         for list in currentLists {
             findings += inspector.settled(list, model: rowHost?.list === list ? rowHost?.chaosRows : nil, checksPin: checksPin)
             settledChecks += 1; checkCount += 1
+            if list.swipeActions.revealedIdentity != nil { restingReveals += 1 }
             if checksPin && list.holdsPinnedRow { pinChecks += 1 }
         }
         let readyBegin = CACurrentMediaTime()
@@ -574,7 +683,7 @@ final class ListChaosDriver {
             "violations": violationCount, "advisories": advisoryCount, "violationKinds": violationKinds, "actions": actionCounts,
             "peakFootprintBytes": peakFootprint, "ledgerPeakFootprintBytes": ledgerPeak, "lastFootprintBytes": lastFootprint,
             "liveNodeHostCounts": census.dictionary, "maxNodeHostCounts": maxCensus,
-            "rotationRequests": rotationRequests, "rotationErrors": rotationErrors,
+            "rotationRequests": rotationRequests, "rotationErrors": rotationErrors, "swipes": swipes, "swipeHandlers": swipeHandlers, "swipeGestures": swipeOutcomes, "settledWithReveal": restingReveals,
             "runID": UserDefaults.standard.string(forKey: "listProbeRunID") ?? "", "log": log.logURL.lastPathComponent,
         ]
         if minimumAvailable != .max { record["minimumAvailableBytes"] = minimumAvailable }

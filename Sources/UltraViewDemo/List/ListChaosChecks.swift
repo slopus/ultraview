@@ -101,6 +101,64 @@ final class ListChaosInspector {
             }
             previous = (row, frame)
         }
+        findings += swipeStructure(list)
+        return findings
+    }
+
+    /// At most one row shows its actions, and it is the controller's revealed
+    /// row. A row closing still animates, but its model offset is already zero.
+    private func swipeStructure(_ list: UltraListView) -> [ListChaosFinding] {
+        let items = list.items, revealed = list.swipeActions.revealedIdentity
+        let open = list.loadedIndexRange.compactMap { index -> (String, Double)? in
+            guard let view = list.loadedItemView(at: index) else { return nil }
+            let offset = Double(view.layer.sublayerTransform.m41)
+            return abs(offset) > 0.5 ? (items[index].identity, offset) : nil
+        }
+        var findings: [ListChaosFinding] = []
+        if open.count > 1 { findings.append(.init(kind: "swipeOpenRows", detail: "\(open) revealed \(revealed ?? "nil")")) }
+        if let row = open.first, row.0 != revealed { findings.append(.init(kind: "swipeUntracked", detail: "\(row) revealed \(revealed ?? "nil")")) }
+        return findings
+    }
+
+    /// At rest: the revealed row is loaded at its open width with every button
+    /// covering the uncovered area, no other row keeps buttons or an offset,
+    /// and each row's VoiceOver actions are its current swipe actions.
+    private func swipeRest(_ list: UltraListView) -> [ListChaosFinding] {
+        var findings: [ListChaosFinding] = []
+        func fail(_ kind: String, _ detail: String) { findings.append(.init(kind: kind, detail: detail)) }
+        let items = list.items, revealed = list.swipeActions.revealedIdentity
+        func buttons(_ view: UIView) -> [CALayer] { (view.layer.sublayers ?? []).filter { $0.name?.hasPrefix("swipe:") == true } }
+        if let revealed {
+            if let index = items.firstIndex(where: { $0.identity == revealed }) {
+                if let view = list.loadedItemView(at: index) {
+                    let offset = Double(view.layer.sublayerTransform.m41), item = items[index]
+                    let actions = offset < 0 ? item.trailingSwipeActions : item.leadingSwipeActions
+                    let openWidth = actions.reduce(0) { $0 + $1.width }
+                    if abs(abs(offset) - openWidth) > 0.5 { fail("swipeRestingOffset", "\(revealed) offset \(offset) open width \(openWidth)") }
+                    let shown = buttons(view)
+                    if shown.count != actions.count { fail("swipeButtons", "\(revealed) shows \(shown.count) of \(actions.count)") }
+                    if !shown.isEmpty, abs(offset) > 0.5 {
+                        let width = Double(view.layer.bounds.width)
+                        let spans = shown.map { (Double($0.position.x) + offset, Double($0.position.x) + offset + Double($0.bounds.width)) }.sorted { $0.0 < $1.0 }
+                        var union = spans[0], error = 0.0
+                        for span in spans.dropFirst() { error = max(error, span.0 - union.1); union.1 = max(union.1, span.1) }
+                        let expected = offset < 0 ? (width + offset, width) : (0, offset)
+                        error = max(error, abs(union.0 - expected.0), abs(union.1 - expected.1))
+                        if error > 0.5 { fail("swipeButtonDetach", "\(revealed) error \(error) spans \(spans) offset \(offset)") }
+                    }
+                } else { fail("swipeRevealNotLoaded", "\(revealed) at \(index), loaded \(list.loadedIndexRange)") }
+            } else { fail("swipeStaleReveal", "\(revealed) is not in the collection") }
+        }
+        for index in list.loadedIndexRange {
+            guard let view = list.loadedItemView(at: index) else { continue }
+            let item = items[index]
+            if item.identity != revealed, !CATransform3DIsIdentity(view.layer.sublayerTransform) || !buttons(view).isEmpty {
+                fail("swipeLeak", "\(item.identity) offset \(view.layer.sublayerTransform.m41) buttons \(buttons(view).count) revealed \(revealed ?? "nil")")
+            }
+            let expected = (item.leadingSwipeActions + item.trailingSwipeActions).map(\.title)
+            let names = (view.accessibilityCustomActions ?? []).map(\.name)
+            if names != expected { fail("swipeCustomActions", "\(item.identity) has \(names) expected \(expected)") }
+        }
         return findings
     }
 
@@ -122,6 +180,7 @@ final class ListChaosInspector {
             fail("coverageBottom", "last \(last.index) bottom \(Double(frame.maxY) + last.reservedBottom) height \(list.bounds.height)")
         }
         if abs(list.overscrollDistance) > 0.5 { fail("restingOverscroll", "\(list.overscrollDistance)") }
+        findings += swipeRest(list)
         if checksPin, list.holdsPinnedRow, let pinned = items.firstIndex(where: \.pinsToBottomEdge), range.contains(pinned), !list.isStrictlyPinnedToBottomEdge {
             fail("pinEdge", "pinned \(pinned) frame \(list.presentedFrame(at: pinned).map { "\($0)" } ?? "nil") insets \(list.viewportInsets) height \(list.bounds.height)")
         }

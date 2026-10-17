@@ -175,6 +175,9 @@ row.leadingSwipeActions = [ListSwipeAction(title: "Reply", color: .systemBlue) {
 moves a released row to rest. Spring curves start with the finger's velocity,
 limited so the row never overshoots. `allowsFullSwipe` turns full swipes off.
 `revealedIdentity` names the open row, and `close(animated:)` closes it.
+`receiveInput(_:row:)` feeds a recorded or shared horizontal gesture to a row
+without touches, under the same rules: it begins only on a row with actions
+or the revealed row, while the list is still and no other gesture tracks.
 
 - **Tracking.** The content follows the finger exactly up to the buttons' total
   width. With a full swipe available, it follows to the row width, and the
@@ -416,7 +419,15 @@ Adding `-listStall YES` blocks main for 250 ms during that flight. Supply a uniq
 For randomized demo runs, launch with `-screen lists -listChaos <seed>
 -listChaosMinutes 5 -listChaosChecks YES`. The driver interleaves collection
 changes, scrolling, streaming, composer edits, keyboard actions, screen and
-engine changes, traits and deliberate main-thread stalls. It checks settled
+engine changes, traits and deliberate main-thread stalls. It also swipes rows:
+short drags, reveals and full swipes with random releases, VoiceOver custom
+actions and closing. Its rows delete, move or resize themselves from their
+actions. `-listChaosSwipes NO` leaves swipes out and replays a seed exactly as
+it ran before they existed. After every action at most one row may show its
+actions, and it must be the revealed row. At rest the revealed row sits at its
+open width with its buttons covering the uncovered area, no other row keeps
+buttons or an offset, and every row's custom actions match its swipe actions.
+It checks settled
 geometry, collection freshness and visible readiness after quiet periods,
 and checks structural geometry after each action. The first failed required
 check writes its seed and state before trapping. Coverage and resting
