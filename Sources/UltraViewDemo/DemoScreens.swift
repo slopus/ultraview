@@ -60,6 +60,13 @@ class NodeScreenController: UIViewController {
         fatalError("init(coder:) is not supported")
     }
 
+    /// Lays the screen out and draws it at `size` before it is first shown,
+    /// so switching to it shows its content at once.
+    func prepareContent(size: CGSize) {
+        loadViewIfNeeded()
+        host.prepare(size: size)
+    }
+
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .systemGroupedBackground

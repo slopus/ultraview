@@ -18,12 +18,18 @@ public struct CoreTextMeasurer: TextMeasurer {
         layout(text, maxWidth: maxWidth, scale: scale, reusing: nil)
     }
 
-    func layout(_ text: AttributedText, maxWidth: CGFloat?, scale: CGFloat, reusing previous: TextLayout?) -> TextLayout {
+    func layout(
+        _ text: AttributedText,
+        maxWidth: CGFloat?,
+        scale: CGFloat,
+        reusing previous: TextLayout?,
+        source prepared: CoreTextSource? = nil
+    ) -> TextLayout {
         let length = text.length
         guard length > 0 else {
             return TextLayout(text: text, maxWidth: maxWidth, size: .zero, lines: [], alignment: .left, isTruncated: false, didWrap: false)
         }
-        let source = (previous?.storage as? CoreTextLines)?.source ?? CoreTextSource(text)
+        let source = (previous?.storage as? CoreTextLines)?.source ?? prepared ?? CoreTextSource(text)
         let attributed = source.attributed
         let typesetter = source.typesetter
         let units = Array(text.string.utf16)

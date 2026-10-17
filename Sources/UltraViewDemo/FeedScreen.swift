@@ -6,7 +6,17 @@ import UltraView
 /// node, then cards whose text nests bold, italic, colored, underlined and
 /// pressable spans. Only cards near the viewport get views and bitmaps.
 enum FeedScreen {
+    /// The feed's root. Its cards are built on a background thread and added
+    /// when ready, so building a thousand of them never holds up launch.
     static func make(cardCount: Int) -> UltraNode {
+        let root = UltraNode(style: styled { $0.flex = 1 })
+        Task.detached(priority: .userInitiated) {
+            root.setChildren([feed(cardCount: cardCount)])
+        }
+        return root
+    }
+
+    static func feed(cardCount: Int) -> UltraScrollNode {
         let feed = UltraScrollNode(
             style: styled { $0.flex = 1 },
             contentContainerStyle: styled {

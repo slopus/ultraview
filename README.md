@@ -110,9 +110,22 @@ drawing for a node that changed again is thrown away.
 The main thread applies a commit in one Core Animation transaction: it
 creates and removes views, assigns frames, layer properties and bitmaps,
 and nothing else. Debug builds assert that no layout pass, text measurement
-or drawing runs on it, and `Diagnostics` counts them by thread. When a host
-first appears in a window, and when its size changes, it waits for the
-commit for its new state, so there is no blank frame.
+or drawing runs on it, and `Diagnostics` counts them by thread.
+
+The main thread never waits for the pipeline. When a host's size, window or
+appearance changes, it asks for a pass and keeps showing what it has until
+that pass's commit arrives. Views for nodes on screen are created in the
+turn their commit arrives; views prepared ahead of the screen are created a
+few per frame, within `mountBudget`. A host outside a window keeps its views
+and bitmaps, and `prepare(size:)` lays out and draws one before it first
+appears, so it shows its content in its first frame in a window
+(`keepsContentOutsideWindow = false` gives the memory back instead).
+
+```swift
+// Off the main thread: the height of a tree at a width. A host that later
+// shows it at that width reuses the layout and the text measurements.
+let size = await NodeMeasurement.measure(row, width: 390, environment: environment)
+```
 
 ## Building on Linux
 

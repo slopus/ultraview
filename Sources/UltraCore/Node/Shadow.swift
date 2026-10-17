@@ -36,7 +36,12 @@ final class Shadow {
     // MARK: Text
 
     var textVersion: UInt64?
+    /// The environment the attributed text and its layouts were made for.
+    var textEnvironment: RenderEnvironment?
     var attributedText: AttributedText?
+    /// The attributed text prepared for layout (a typesetter), built ahead of
+    /// the layout pass when the measurer supports it.
+    var textSource: AnyObject?
     /// Recent layouts of the current text, newest first. Measuring and
     /// drawing share them.
     var textLayouts: [TextLayout] = []
