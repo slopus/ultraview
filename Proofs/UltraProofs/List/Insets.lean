@@ -29,7 +29,9 @@ frame coordinate: a row is drawn at `base + y - offset`.
   drops rows on screen at its start: with 50-point rows and a 252-point
   inset, row 7 at 350. `rebalanceIn_keeps_covered`, `track_in_hull`: covering
   the offsets the track shows at its progress bounds keeps every row shown at
-  any time of the track.
+  any time of the track. `sum_covers`: with the engine in flight too, the
+  covered interval must be the sum of the two ranges, not their hull
+  (`hull_misses`).
 -/
 
 namespace UltraProofs.ListInsets
@@ -280,6 +282,25 @@ theorem track_in_hull (offset delta lo hi p : Rat) (hp : lo ≤ p ∧ p ≤ hi) 
     have a := Rat.mul_nonneg h1 hd'
     have b := Rat.mul_nonneg h2 hd'
     constructor <;> grind
+
+/-- **A moving engine under a viewport track needs the sum of their ranges.**
+What is shown is the engine offset plus the viewport delta. If the engine's
+flight stays in `[el, eh]` and the track's delta in `[vl, vh]`, the shown
+offset stays in `[el + vl, eh + vh]`, so covering that interval keeps every
+row shown (`rebalanceIn_keeps_covered`). The hull of the two ranges is not
+enough (`hull_misses`). -/
+theorem sum_covers (count : Nat) (measure : Nat → Option Meas) (pf af : Nat) (w : Window)
+    (offset el eh vl vh e v vh' margin : Rat) (hm : 0 ≤ margin) (he : el ≤ e ∧ e ≤ eh)
+    (hv : vl ≤ v ∧ v ≤ vh) (r : Row) (h : r ∈ w) (hs : Shown vh' (e + v) r) :
+    r ∈ rebalanceIn count (min offset (el + vl) - margin) (max offset (eh + vh) + vh' + margin)
+      measure pf af w :=
+  rebalanceIn_keeps_covered count measure pf af w offset _ _ vh' margin (e + v) hm
+    ⟨by grind, by grind⟩ r h hs
+
+/-- The hull of an engine flight over `[0, 100]` and a viewport delta over
+`[0, 252]` is `[0, 252]`, but they show offset 352 together. -/
+theorem hull_misses : ¬((0 : Rat) ≤ 100 + 252 ∧ (100 : Rat) + 252 ≤ max 100 252) := by
+  decide +kernel
 
 /-- Rows of 50 points, loaded at the top: rows 0 to 11 of 40. -/
 def fifty (_ : Nat) : Option Meas := some ⟨50, 0, 0⟩

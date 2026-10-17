@@ -119,3 +119,14 @@ open UltraProofs
 #print axioms ListInsets.rebalanceIn_keeps_covered
 #print axioms ListInsets.track_in_hull
 #print axioms ListInsets.inset_drops_shown
+#print axioms ListPreparation.inv_run
+#print axioms ListPreparation.applied_increasing
+#print axioms ListPreparation.conserves
+#print axioms ListPreparation.newest_applies
+#print axioms ListPreparation.busy_producer
+#print axioms ListPreparation.slot_starves
+#print axioms ListPreparation.alternating_schedule
+#print axioms ListPass.inserted_gap
+#print axioms ListPass.inserted_once
+#print axioms ListInsets.sum_covers
+#print axioms ListInsets.hull_misses

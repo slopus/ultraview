@@ -42,6 +42,10 @@ All positions here are at one progress `p` of the pass's timing; by
   this to the inverted chat, whose top inset is the composer's occlusion.
 * `ghost_follows_witness`: a departure block welded to a surviving row's
   edge stays on it through the pass when it starts there.
+* `inserted_gap`, `inserted_once`: an inserted row and its neighbour, both
+  under the viewport track, stay touching iff their own deltas agree; a row
+  the viewport already carries in that also gets the inserted-block
+  animation moves twice, `h * (1 - p)` off its neighbour.
 -/
 
 namespace UltraProofs.ListPass
@@ -282,5 +286,30 @@ theorem ghost_follows_witness (C : Curves) {s : Rat} {τ : Transition} (local_ r
     (by simp [startSum, hbs, hrs]; grind) (by simp [endSum, hbd, hrd]; grind) time
   simp [nowSum, presented] at h
   grind
+
+/-! ## An inserted row moves with the viewport once -/
+
+/-- **An inserted row and its neighbour stay touching iff their own deltas
+agree.** Two rows that touch when settled (`yb = ya + ha`) are drawn under
+the same viewport delta `(1 - p) * v` and their own deltas `(1 - p) * da`
+and `(1 - p) * db`. The viewport cancels (`ListAnimation.common_mode_cancels`)
+and the gap is `(1 - p) * (db - da)`. A pass that carries the inserted row
+in with the viewport needs no delta of its own; adding the inserted-block
+animation's `-h` on top moves it twice and opens a gap of `h * (1 - p)`. -/
+theorem inserted_gap (ya ha yb offset v da db p : Rat) (hb : yb = ya + ha) :
+    screen yb ((1 - p) * db) offset ((1 - p) * v) - screen (ya + ha) ((1 - p) * da) offset ((1 - p) * v) =
+      (1 - p) * (db - da) := by
+  simp only [screen]; subst hb; grind
+
+/-- **Moved once, they touch; moved twice, they part.** With the inserted
+row's own delta equal to its neighbour's (zero, when the viewport carries
+both), they touch at every progress; with the inserted-block animation's
+`-h` added on top, they are `h * (1 - p)` apart until the pass ends. -/
+theorem inserted_once (ya ha yb offset v db h p : Rat) (hb : yb = ya + ha) :
+    screen yb ((1 - p) * db) offset ((1 - p) * v) - screen (ya + ha) ((1 - p) * db) offset ((1 - p) * v) = 0 ∧
+    screen yb ((1 - p) * db) offset ((1 - p) * v) -
+      screen (ya + ha) ((1 - p) * (db - h)) offset ((1 - p) * v) = h * (1 - p) := by
+  rw [inserted_gap ya ha yb offset v db db p hb, inserted_gap ya ha yb offset v (db - h) db p hb]
+  constructor <;> grind
 
 end UltraProofs.ListPass
