@@ -61,20 +61,20 @@ private final class HeaderView: ListAttachmentView {
     @Test func genuinelyRemovedKeyFadesAndReleasesItsView() async {
         let rows = (0..<20).map { HeaderRow(identity: String($0), header: "same") }
         let list = autoreleasepool { list(rows) }
-        weak var departed = list.loadedAttachmentViews[0]
+        let departed = WeakReference(list.loadedAttachmentViews[0])
         var next = rows
         for index in next.indices { next[index].header = nil; next[index].revision += 1 }
         autoreleasepool { list.applyChanges(items: next, transition: .easeInOut(0.03)) }
         #expect(list.loadedAttachmentViews.isEmpty)
-        #expect(departed != nil)
+        #expect(departed.value != nil)
         try? await Task.sleep(for: .milliseconds(120))
-        #expect(departed == nil)
+        #expect(departed.value == nil)
     }
     @Test func emptyCollectionReleasesAttachmentsImmediately() {
         let list = autoreleasepool { list([HeaderRow(identity: "a", header: "only")]) }
-        weak var attachment = list.loadedAttachmentViews.first
+        let attachment = WeakReference(list.loadedAttachmentViews.first)
         autoreleasepool { list.applyChanges(items: []) }
-        #expect(attachment == nil)
+        #expect(attachment.value == nil)
         #expect(list.loadedAttachmentViews.isEmpty)
     }
 }

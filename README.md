@@ -90,6 +90,17 @@ list.applyChanges(items: updatedRows,
 list.scrollTo(.init(index: 500), transition: .smoothDeceleration())
 ```
 
+Node rows create their trees off main and use the list's display and text environment:
+
+```swift
+let rows = (0..<10_000).map { index in
+    NodeRow(identity: String(index)) {
+        UltraTextNode("Row \(index)", textStyle: TextStyle(fontSize: 17))
+    }
+}
+list.applyChanges(items: rows)
+```
+
 The list publishes settled geometry immediately. Use `settledFrame(at:)` for
 destinations and `presentedFrame(at:)` for animated positions. Floating or
 reserving headers implement `ListAttachment`. See [the list design](Docs/UltraList.md)

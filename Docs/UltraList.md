@@ -24,8 +24,12 @@ measurement.
 are cached by identity, revision, width and environment. A missing measurement
 stops expansion in that direction, leaving the edge open. Completion schedules a
 coalesced pass; it never makes the main thread wait. `NodeRowMeasuring` allows a
-host to supply its measurement policy. A prepared root belongs to one mounted
+host to supply its measurement policy. The default uses `NodeMeasurement` and
+the list's current scale, text size, appearance and layout direction. A prepared root belongs to one mounted
 host at a time.
+
+The host prepares its measured size before display and never waits for drawing.
+`ListRowView.isDisplayReady` and `onDisplayReady` report the first ready commit.
 
 The preload window defaults to 160 points beyond the viewport. The list requests
 up to 80 nearby asynchronous measurements, with the predicted direction first.

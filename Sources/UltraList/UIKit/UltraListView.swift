@@ -1,6 +1,7 @@
 #if canImport(UIKit)
 import UIKit
 import QuartzCore
+import UltraCore
 
 /// A contiguous measured window, with final row geometry and independent render-server motion.
 @MainActor
@@ -43,6 +44,8 @@ public final class UltraListView: UltraScrollView {
     private var views: [String: ListRowView] = [:]
     private var carried: [String: (view: ListRowView, index: Int)] = [:]
     private var viewport = ListViewport(width: 0, height: 0)
+    private var measurementEnvironment = RenderEnvironment()
+    private var measurementEnvironmentKey: UInt64 = 0
     private var origin: Double = 0
     private var declaredEdges = ScrollEdges(minimum: 0, maximum: 0)
     private var previousOffset: Double = 0
@@ -82,12 +85,17 @@ public final class UltraListView: UltraScrollView {
         animations.mirrorViewport(on: carousel.layer)
         engine.onFlightChanged = { [weak self] _ in self?.renderAttachments() }
         engine.didTouchDown = { [weak self] in self?.holdsPinnedRow = false }
+        registerForTraitChanges([UITraitPreferredContentSizeCategory.self, UITraitUserInterfaceStyle.self, UITraitDisplayScale.self, UITraitLayoutDirection.self]) { (view: UltraListView, _: UITraitCollection) in view.setNeedsLayout() }
     }
     public override func layoutSubviews() {
         super.layoutSubviews()
         carousel.frame = bounds
         let size = bounds.size
-        if abs(viewport.width - size.width) > 0.5 || abs(viewport.height - size.height) > 0.5 {
+        let traits = traitCollection
+        let environment = RenderEnvironment(scale: traits.displayScale > 0 ? traits.displayScale : 3, fontScale: UIFontMetrics.default.scaledValue(for: 100, compatibleWith: traits) / 100, isDark: traits.userInterfaceStyle == .dark, isRightToLeft: effectiveUserInterfaceLayoutDirection == .rightToLeft)
+        let changedEnvironment = environment != measurementEnvironment
+        measurementEnvironment = environment; measurementEnvironmentKey = environmentKey(environment)
+        if changedEnvironment || abs(viewport.width - size.width) > 0.5 || abs(viewport.height - size.height) > 0.5 {
             applyChanges(newSize: size, transition: .immediate)
         }
     }
@@ -204,13 +212,16 @@ public final class UltraListView: UltraScrollView {
         var measuredViews: [String: ListRowView] = [:]
         func measure(_ index: Int) -> (height: Double, top: Double, bottom: Double)? {
             let item = items[index], identity = item.identity
-            let key = MeasurementKey(identity: identity, revision: item.revision, width: viewport.contentWidth, environment: item.measurementEnvironment)
+            let key = MeasurementKey(identity: identity, revision: item.revision, width: viewport.contentWidth, environment: measurementEnvironmentKey &+ item.measurementEnvironment &* 0x9e3779b97f4a7c15)
             if item.measuresAsynchronously, measurements.height(for: key) == nil { requestMeasurement(index); return nil }
             let view = oldViews[identity] ?? carried[identity]?.view ?? measuredViews[identity] ?? item.makeView()
             if oldViews[identity] == nil && measuredViews[identity] == nil { item.apply(to: view, transition: .immediate) }
             measuredViews[identity] = view
             let height = item.measuresAsynchronously ? measurements.height(for: key)! : view.update(width: viewport.contentWidth, transition: (reconciled.contains(identity) || sizeChanged) ? transition : .immediate)
-            if item.measuresAsynchronously { view.applyMeasurement(width: viewport.contentWidth, height: height) }
+            if item.measuresAsynchronously {
+                if view.superview == nil { container.addSubview(view) }
+                view.applyMeasurement(width: viewport.contentWidth, height: height, environment: measurementEnvironment)
+            }
             precondition(height.isFinite && height >= 0)
             let reserve = reservedHeights(at: index)
             return (height, reserve.0, reserve.1)
@@ -344,13 +355,16 @@ public final class UltraListView: UltraScrollView {
         previousOffset = engine.offset; onUserScrollDelta?(delta, animations.now)
         let base = origin - settledWindow.minY, previous = settledWindow
         settledWindow.rebalance(count: items.count, offsetInFrameSpace: engine.offset - base, viewportHeight: viewport.height, margin: preloadMargin) { [self] index in
-            let item = items[index], key = MeasurementKey(identity: item.identity, revision: item.revision, width: viewport.contentWidth, environment: item.measurementEnvironment)
+            let item = items[index], key = MeasurementKey(identity: item.identity, revision: item.revision, width: viewport.contentWidth, environment: measurementEnvironmentKey &+ item.measurementEnvironment &* 0x9e3779b97f4a7c15)
             if item.measuresAsynchronously, measurements.height(for: key) == nil { requestMeasurement(index); return nil }
             let view = views[item.identity] ?? carried[item.identity]?.view ?? item.makeView()
             if views[item.identity] == nil { item.apply(to: view, transition: .immediate) }
             views[item.identity] = view
             let height = item.measuresAsynchronously ? measurements.height(for: key)! : view.update(width: viewport.contentWidth, transition: .immediate)
-            if item.measuresAsynchronously { view.applyMeasurement(width: viewport.contentWidth, height: height) }
+            if item.measuresAsynchronously {
+                if view.superview == nil { container.addSubview(view) }
+                view.applyMeasurement(width: viewport.contentWidth, height: height, environment: measurementEnvironment)
+            }
             let reserve = reservedHeights(at: index)
             return (height, reserve.0, reserve.1)
         }
@@ -395,10 +409,11 @@ public final class UltraListView: UltraScrollView {
         guard items.indices.contains(index) else { return }
         let item = items[index]
         guard item.measuresAsynchronously else { return }
-        let width = viewport.contentWidth, key = MeasurementKey(identity: item.identity, revision: item.revision, width: width, environment: item.measurementEnvironment)
+        let width = viewport.contentWidth, environment = measurementEnvironment
+        let key = MeasurementKey(identity: item.identity, revision: item.revision, width: width, environment: measurementEnvironmentKey &+ item.measurementEnvironment &* 0x9e3779b97f4a7c15)
         guard width > 0, let ticket = measurements.request(key) else { return }
         measurementTasks[key] = Task { [weak self] in
-            let height = await item.measure(width: width)
+            let height = await item.measure(width: width, environment: environment)
             guard let self else { return }
             measurementTasks.removeValue(forKey: key)
             if let height, measurements.complete(key, height: height, ticket: ticket) { markDirty(item.identity, animated: false) }

@@ -1,5 +1,6 @@
 #if canImport(UIKit)
 import UIKit
+import UltraCore
 
 /// Stable identity and content equality are separate: changed content reuses its row view.
 @MainActor
@@ -13,7 +14,7 @@ public protocol ListRow {
     func makeView() -> ListRowView
     func apply(to view: ListRowView, transition: ListTransition)
     func isEqual(to other: any ListRow) -> Bool
-    func measure(width: Double) async -> Double?
+    func measure(width: Double, environment: RenderEnvironment) async -> Double?
 }
 public extension ListRow {
     var revision: UInt64 { 0 }
@@ -23,12 +24,14 @@ public extension ListRow {
     var measurementEnvironment: UInt64 { 0 }
     func apply(to view: ListRowView, transition: ListTransition) {}
     func isEqual(to other: any ListRow) -> Bool { identity == other.identity && revision == other.revision }
-    func measure(width: Double) async -> Double? { nil }
+    func measure(width: Double, environment: RenderEnvironment) async -> Double? { nil }
 }
 
 @MainActor
 open class ListRowView: UIView {
     public var onContentDidChange: ((Bool) -> Void)?
+    public var onDisplayReady: (() -> Void)?
+    open var isDisplayReady: Bool { true }
     public override init(frame: CGRect) { super.init(frame: frame); layer.anchorPoint = .zero }
     public convenience init() { self.init(frame: .zero) }
     @available(*, unavailable)
@@ -36,7 +39,7 @@ open class ListRowView: UIView {
     /// Plain view rows implement their sizing here. Node rows use a ready measurement instead.
     open func update(width: Double, transition: ListTransition) -> Double { bounds.height }
     /// An asynchronous row receives its ready size before it enters the view hierarchy.
-    open func applyMeasurement(width: Double, height: Double) {}
+    open func applyMeasurement(width: Double, height: Double, environment: RenderEnvironment) {}
     open func visibleRectUpdated(_ rect: CGRect?) {}
     open func attachedViewsUpdated(_ views: [UIView]) {}
     open var attachmentBandTrim: Double { 0 }

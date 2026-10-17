@@ -3,6 +3,12 @@ import UIKit
 @testable import UltraCore
 import UltraView
 
+@MainActor
+final class WeakReference<Value: AnyObject> {
+    weak var value: Value?
+    init(_ value: Value?) { self.value = value }
+}
+
 /// A node tree shown in a window-backed host, as on screen.
 @MainActor
 final class Hosted {

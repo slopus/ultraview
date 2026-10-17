@@ -128,6 +128,31 @@ private actor MeasurementGate: NodeRowMeasuring {
         #expect(first.height < 101)
         #expect(abs(first.maxY - second.minY) < 0.1)
     }
+    @Test func defaultNodeRowMeasuresDrawsAndSignalsReadinessOffMain() async {
+        let before = Diagnostics.shared.counts
+        let window = makeWindow()
+        window.frame = .init(x: 0, y: 0, width: 320, height: 400)
+        let list = list(count: 0)
+        window.addSubview(list); window.isHidden = false
+        defer { window.isHidden = true }
+        var readySignals = 0
+        list.onVisibleWindowChanged = { [weak list] in
+            for view in list?.loadedItemViews ?? [] { view.onDisplayReady = { readySignals += 1 } }
+        }
+        list.applyChanges(items: [NodeRow(identity: "measured") {
+            var style = Style(); style.padding = 8; style.backgroundColor = .white
+            return UltraNode(style: style, children: [UltraTextNode("Text measured before mounting. " + String(repeating: "A longer paragraph. ", count: 8))])
+        }])
+        for _ in 0..<100 {
+            if list.loadedItemViews.first?.isDisplayReady == true { break }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(list.loadedItemViews.first?.isDisplayReady == true)
+        #expect(readySignals == 1)
+        #expect((list.settledFrame(at: 0)?.height ?? 0) > 20)
+        #expect((Diagnostics.shared.counts - before).mainThreadWork == 0)
+        list.applyChanges(items: [])
+    }
     @Test func animatedGrowthStartsFromOldHeight() {
         let list = list(count: 10)
         var items = (0..<10).map { FixedRow(identity: String($0)) }
@@ -203,6 +228,23 @@ private actor MeasurementGate: NodeRowMeasuring {
         #expect(engine.host.layer.animationKeys()?.isEmpty ?? true)
         #expect(engine.offset > 10)
     }
+    @Test func frozenFlightMutationPreservesActualListGeometry() {
+        let list = list(count: 1000)
+        list.layer.speed = 0; list.layer.timeOffset = 100
+        list.beginMomentum(velocity: 5000)
+        let trajectory = list.engine.activeFlight!.trajectory
+        let before = list.presentedFrame(at: 5)!
+        var rows: [any ListRow] = list.items
+        for insertion in 1...12 {
+            rows.insert(FixedRow(identity: "inserted-\(insertion)", height: 70), at: 0)
+            list.applyChanges(items: rows, anchorMode: .preserveVisibleContent, transition: .easeInOut(0.4))
+            let after = list.presentedFrame(at: 5 + insertion)!
+            #expect(abs(after.minY - before.minY) < 0.001)
+            #expect(list.engine.activeFlight!.trajectory == trajectory)
+            #expect(abs(after.minY + 5 - before.minY) > 4.9)
+        }
+        list.haltScrolling()
+    }
     @Test func overlayPassesEmptySpaceToRows() {
         let overlay = PassthroughView(frame: .init(x: 0, y: 0, width: 300, height: 400))
         #expect(!overlay.point(inside: .init(x: 100, y: 100), with: nil))
@@ -221,10 +263,10 @@ private actor MeasurementGate: NodeRowMeasuring {
     }
     @Test func emptyAndFullReplaceDoNotRetainLiveViews() {
         let list = autoreleasepool { list(count: 10) }
-        weak var old = list.loadedItemView(at: 0)
+        let old = WeakReference(list.loadedItemView(at: 0))
         autoreleasepool { list.applyChanges(items: [FixedRow(identity: "fresh")]) }
         #expect(list.loadedItemViews.count == 1)
-        #expect(old == nil)
+        #expect(old.value == nil)
         list.applyChanges(items: [])
         #expect(list.loadedItemViews.isEmpty && list.loadedIndexRange.isEmpty)
     }

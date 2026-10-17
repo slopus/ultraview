@@ -53,40 +53,40 @@ struct DemoListRow: ListRow {
     var inverted = false
     var pinsToBottomEdge = false
     var section: String?
+    private let storage = DemoRowStorage()
+    init(identity: String, revision: UInt64 = 0, title: String, body: String, height: Double, tint: UIColor = .systemIndigo, inverted: Bool = false, pinsToBottomEdge: Bool = false, section: String? = nil) {
+        self.identity = identity; self.revision = revision; self.title = title; self.body = body; self.height = height
+        self.tint = tint; self.inverted = inverted; self.pinsToBottomEdge = pinsToBottomEdge; self.section = section
+    }
     var attachments: [String: any ListAttachment] { section.map { ["section": DemoListHeader(title: $0)] } ?? [:] }
-    func makeView() -> ListRowView { DemoListRowView() }
-    func apply(to view: ListRowView, transition: ListTransition) { (view as? DemoListRowView)?.configure(self) }
+    var measuresAsynchronously: Bool { true }
+    private var nodeRow: NodeRow {
+        if let row = storage.row, storage.revision == revision { return row }
+        let title = title, body = body, height = height, tint = Color(tint)
+        let cardColor = Palette.card, labelColor = Palette.label, secondaryColor = Palette.secondaryLabel
+        let row = NodeRow(identity: identity, revision: revision) {
+            let text = UltraTextNode(body, textStyle: .init(color: secondaryColor, fontSize: 14))
+            text.style.flex = 1
+            let heading = UltraNode(style: styled { $0.flexDirection = .row; $0.alignItems = .center; $0.gap = 8 }, children: [
+                UltraNode(style: styled { $0.width = 8; $0.height = 8; $0.borderRadius = 4; $0.backgroundColor = tint }),
+                UltraTextNode(title, textStyle: .init(color: labelColor, fontSize: 15, fontWeight: .semibold), numberOfLines: 1),
+            ])
+            let card = UltraNode(style: styled { $0.flex = 1; $0.padding = 14; $0.gap = 6; $0.borderRadius = 16; $0.backgroundColor = cardColor; $0.overflow = .hidden }, children: [heading, text])
+            return UltraNode(style: styled { $0.height = .points(height); $0.paddingHorizontal = 12; $0.paddingVertical = 4 }, children: [card])
+        }
+        storage.row = row; storage.revision = revision
+        return row
+    }
+    func makeView() -> ListRowView { nodeRow.makeView() }
+    func apply(to view: ListRowView, transition: ListTransition) {
+        nodeRow.apply(to: view, transition: transition)
+        view.transform = inverted ? .init(scaleX: 1, y: -1) : .identity
+        view.accessibilityIdentifier = "row-\(identity)"; view.accessibilityLabel = title
+    }
+    func measure(width: Double, environment: RenderEnvironment) async -> Double? { await nodeRow.measure(width: width, environment: environment) }
 }
-
 @MainActor
-final class DemoListRowView: ListRowView {
-    private let card = UIView(), title = UILabel(), body = UILabel(), dot = UIView()
-    private var rowHeight: Double = 60
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        card.layer.cornerRadius = 16; card.backgroundColor = .secondarySystemGroupedBackground
-        title.font = .systemFont(ofSize: 15, weight: .semibold)
-        body.font = .systemFont(ofSize: 14); body.textColor = .secondaryLabel; body.numberOfLines = 0
-        dot.layer.cornerRadius = 4
-        addSubview(card); for view in [title, body, dot] { card.addSubview(view) }
-    }
-    func configure(_ row: DemoListRow) {
-        title.text = row.title; body.text = row.body; rowHeight = row.height; dot.backgroundColor = row.tint
-        transform = row.inverted ? CGAffineTransform(scaleX: 1, y: -1) : .identity
-        accessibilityLabel = row.title; accessibilityIdentifier = "row-\(row.identity)"
-        setNeedsLayout()
-    }
-    override func update(width: Double, transition: ListTransition) -> Double { rowHeight }
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        card.frame = bounds.insetBy(dx: 12, dy: 4)
-        dot.frame = .init(x: 14, y: 17, width: 8, height: 8)
-        title.frame = .init(x: 30, y: 10, width: max(0, card.bounds.width - 44), height: 22)
-        let bodyWidth = max(0, card.bounds.width - 28)
-        let bodyHeight = min(max(0, card.bounds.height - 44), body.sizeThatFits(.init(width: bodyWidth, height: .greatestFiniteMagnitude)).height)
-        body.frame = .init(x: 14, y: 36, width: bodyWidth, height: bodyHeight)
-    }
-}
+private final class DemoRowStorage { var row: NodeRow?; var revision: UInt64 = 0 }
 
 @MainActor
 struct DemoListHeader: ListAttachment {
@@ -94,20 +94,31 @@ struct DemoListHeader: ListAttachment {
     var edge: BoundaryEdge { .top }
     var reservesSpace: Bool { true }
     func makeView() -> ListAttachmentView { DemoHeaderView() }
-    func apply(to view: ListAttachmentView, transition: ListTransition) { (view as? DemoHeaderView)?.label.text = title }
+    func apply(to view: ListAttachmentView, transition: ListTransition) { (view as? DemoHeaderView)?.title = title }
     func combines(with other: any ListAttachment) -> Bool { (other as? DemoListHeader)?.title == title }
 }
 @MainActor
 final class DemoHeaderView: ListAttachmentView {
-    let label = UILabel()
+    var title = "" { didSet { text?.text = title } }
+    private var text: UltraTextNode?
+    private var host: NodeHostView?
     override init(frame: CGRect) {
-        super.init(frame: frame); addSubview(label)
-        label.font = .systemFont(ofSize: 12, weight: .bold); label.textAlignment = .center
-        label.backgroundColor = .tertiarySystemBackground; label.layer.cornerRadius = 12; label.clipsToBounds = true
+        super.init(frame: frame)
         isUserInteractionEnabled = false
     }
     override func update(width: Double, transition: ListTransition) -> Double { 32 }
-    override func layoutSubviews() { super.layoutSubviews(); label.frame = .init(x: max(0, bounds.midX - 70), y: 4, width: 140, height: 24) }
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        guard bounds.width > 0 else { return }
+        if host == nil {
+            let text = UltraTextNode(title, textStyle: .init(color: Palette.label, fontSize: 12, fontWeight: .bold, textAlign: .center), numberOfLines: 1)
+            text.style = styled { $0.width = 140; $0.height = 24; $0.borderRadius = 12; $0.backgroundColor = Palette.card; $0.paddingTop = 4 }
+            let root = UltraNode(style: styled { $0.alignItems = .center; $0.paddingTop = 4 }, children: [text])
+            let host = NodeHostView(rootNode: root)
+            addSubview(host); self.host = host; self.text = text
+        }
+        host?.frame = bounds; host?.prepare(size: bounds.size)
+    }
 }
 
 @MainActor
