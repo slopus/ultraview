@@ -55,6 +55,26 @@ private struct AsyncFixedRow: ListRow {
     }
 }
 
+@MainActor
+private struct UnavailableRow: ListRow {
+    var identity: String
+    var measuresAsynchronously: Bool { true }
+    func makeView() -> ListRowView { FixedRowView() }
+    func measure(width: Double, environment: RenderEnvironment) async -> Double? { nil }
+}
+
+@MainActor
+private final class TransientRow: ListRow {
+    let identity = "transient"
+    var measuresAsynchronously: Bool { true }
+    private(set) var attempts = 0
+    func makeView() -> ListRowView { FixedRowView() }
+    func measure(width: Double, environment: RenderEnvironment) async -> Double? {
+        attempts += 1
+        return attempts == 1 ? nil : 70
+    }
+}
+
 private actor MeasurementGate: NodeRowMeasuring {
     private var opened = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
@@ -67,6 +87,106 @@ private actor MeasurementGate: NodeRowMeasuring {
 
 @MainActor
 @Suite(.serialized) struct ListIntegrationTests {
+    @Test(arguments: ScrollEngineMode.allCases) func keyboardInsetsKeepTheViewportAndRowGeometryWhileCompensatingOnce(mode: ScrollEngineMode) throws {
+        let list = list(mode, count: 1000)
+        list.contentView.transform = .init(scaleX: 1, y: -1)
+        let passes = list.appliedPassCount
+        let host = try #require(list.loadedItemView(at: 0))
+        list.applyChanges(newInsets: .init(top: 120), transition: .none)
+        #expect(list.appliedPassCount == passes)
+        #expect(list.loadedItemView(at: 0) === host)
+        let first = try #require(list.settledFrame(at: 0))
+        #expect(abs(first.minY - 120) < 0.5)
+        #expect(list.bounds.height == 400)
+        let offset = list.currentScrollOffset
+        var durations: [Double] = []
+        for step in 0..<120 {
+            let start = CACurrentMediaTime()
+            list.applyChanges(newInsets: .init(top: 120 + Double(step) / 2), compensatesInsetChange: false, transition: .none)
+            durations.append((CACurrentMediaTime() - start) * 1000)
+            #expect(list.currentScrollOffset == offset)
+            #expect(list.loadedItemView(at: 0) === host)
+            #expect(host.layer.animation(forKey: "ultraview.list.positionY") == nil)
+        }
+        #expect(list.appliedPassCount == passes)
+        let p99 = durations.sorted()[Int(Double(durations.count - 1) * 0.99)]
+        print("Keyboard inset \(mode): p99 \(p99) ms, no row reapplication")
+        #expect(p99 < 2)
+    }
+    @Test func transientMissingMeasurementRecoversWithoutAnotherSnapshot() async throws {
+        let list = list(count: 0), transient = TransientRow()
+        list.applyChanges(items: [AsyncFixedRow(identity: "ready"), transient], transition: .none)
+        for _ in 0..<100 where list.settledFrame(at: 1)?.height != 70 { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(list.items.count == 2 && list.settledFrame(at: 1)?.height == 70)
+        #expect(transient.attempts == 2)
+    }
+    @Test func farPrefetchCompletionsDoNotRepublishTheWindow() async throws {
+        let list = list(count: 0)
+        list.applyChanges(items: (0..<200).map { AsyncFixedRow(identity: "prefetch-\($0)") }, transition: .none)
+        for _ in 0..<100 where list.items.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+        var callbacks = 0
+        list.onVisibleWindowChanged = { callbacks += 1 }
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(callbacks == 0)
+    }
+    @Test func surroundingViewAnimationDoesNotAnimateDepartureCoordinates() async throws {
+        let window = makeWindow()
+        window.frame = .init(x: 0, y: 0, width: 320, height: 400)
+        let controller = UIViewController(); window.rootViewController = controller; window.isHidden = false
+        defer { window.isHidden = true }
+        let list = list(count: 30); controller.view.addSubview(list)
+        UIView.animate(withDuration: 1) {
+            list.applyChanges(items: Array(list.items.dropFirst()), transition: .easeInOut(0.4))
+        }
+        try await Task.sleep(for: .milliseconds(20))
+        func check(_ view: UIView) {
+            #expect((view.layer.animationKeys() ?? []).allSatisfy { $0.hasPrefix("ultraview.") })
+            for child in view.subviews { check(child) }
+        }
+        check(list)
+    }
+    @Test(arguments: ScrollEngineMode.allCases) func pinnedViewportHeightUpdatesKeepTheReadyViewAndDoNotReapplyRows(mode: ScrollEngineMode) throws {
+        let list = list(mode, count: 0)
+        var applications = 0
+        let row = FixedRow(identity: "pinned", height: 600, pinsToBottomEdge: true, onApply: { applications += 1 })
+        list.applyChanges(items: [row], scrollTo: .init(index: 0, resolve: { height, _ in 400 + max(0, height - 200) - height }), transition: .none)
+        let host = try #require(list.loadedItemView(at: 0))
+        let initial = applications
+        var durations: [Double] = []
+        for step in 0..<120 {
+            let height = step < 60 ? 400 - Double(step) * 2 : 280 + Double(step - 60) * 2
+            let start = CACurrentMediaTime()
+            list.frame.size.height = height; list.setNeedsLayout(); list.layoutIfNeeded()
+            durations.append((CACurrentMediaTime() - start) * 1000)
+            #expect(list.loadedItemView(at: 0) === host)
+            #expect(list.isStrictlyPinnedToBottomEdge)
+            #expect(host.layer.animation(forKey: "ultraview.list.positionY") == nil)
+        }
+        #expect(applications == initial)
+        let p99 = durations.sorted()[Int(Double(durations.count - 1) * 0.99)]
+        print("Pinned viewport \(mode): p99 \(p99) ms, no row reapplication")
+        #expect(p99 < 2)
+    }
+    @Test func unavailableMeasurementDoesNotHoldTheEntireMutation() async throws {
+        let list = list(count: 1)
+        let rows: [any ListRow] = [AsyncFixedRow(identity: "ready"), UnavailableRow(identity: "unavailable")]
+        list.applyChanges(items: rows, transition: .none)
+        for _ in 0..<100 where list.items.first?.identity != "ready" { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(list.items.map(\.identity) == ["ready", "unavailable"])
+        #expect(list.loadedItemView(at: 0) != nil)
+        list.applyChanges(items: [AsyncFixedRow(identity: "unavailable", revision: 1)], transition: .none)
+        for _ in 0..<100 where list.items.first?.revision != 1 { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(list.items.first?.revision == 1 && list.loadedItemView(at: 0) != nil)
+    }
+    @Test func unmeasuredScrollTargetRetainsItsRequestedTransition() async throws {
+        let list = list(count: 0)
+        list.applyChanges(items: (0..<200).map { AsyncFixedRow(identity: "async-\($0)") }, transition: .none)
+        for _ in 0..<100 where list.items.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+        list.scrollTo(.init(index: 150), transition: .init(duration: 0.7, curve: .linear))
+        for _ in 0..<100 where !list.loadedIndexRange.contains(150) { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(list.loadedIndexRange.contains(150))
+        #expect(list.contentView.layer.animation(forKey: "ultraview.list.viewportOffset")?.duration == 0.7)
+    }
     @Test func supersededAsyncMutationCannotRestoreClearedRows() async throws {
         let list = list(count: 0)
         for revision in 0..<20 {

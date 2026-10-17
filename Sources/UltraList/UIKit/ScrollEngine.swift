@@ -8,6 +8,7 @@ protocol ScrollEngine: AnyObject {
     var offset: Double { get }
     var activeFlight: ScrollFlight? { get }
     var dragging: Bool { get }
+    var tracking: Bool { get }
     var onScroll: ((Double) -> Void)? { get set }
     var onFlightChanged: ((ScrollFlight?) -> Void)? { get set }
     var willBeginDragging: (() -> Void)? { get set }
@@ -72,6 +73,7 @@ final class PhysicsEngine: NSObject, ScrollEngine, UIGestureRecognizerDelegate {
     var offset: Double { core.offset }
     var activeFlight: ScrollFlight? { flightState?.flight }
     var dragging: Bool { core.isDragging }
+    var tracking: Bool { pan.state == .began || pan.state == .changed }
     var onScroll: ((Double) -> Void)?
     var onFlightChanged: ((ScrollFlight?) -> Void)?
     var willBeginDragging: (() -> Void)?
@@ -80,6 +82,7 @@ final class PhysicsEngine: NSObject, ScrollEngine, UIGestureRecognizerDelegate {
     var didTouchDown: (() -> Void)?
     var shouldStopOnRelease: ((Double) -> Bool)?
     var onInput: ((GestureRecording.Event) -> Void)?
+    weak var keyboardPanRecognizer: UIPanGestureRecognizer?
     private var link: CADisplayLink?
     private let target = SamplingTarget()
     private var baseline = CGPoint.zero
@@ -293,7 +296,7 @@ final class PhysicsEngine: NSObject, ScrollEngine, UIGestureRecognizerDelegate {
         if let control = host.hitTest(pan.location(in: host), with: nil) as? UIControl, control.isTracking { return false }
         return true
     }
-    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { false }
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { other === keyboardPanRecognizer }
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive event: UIEvent) -> Bool {
         if pan.indirect, pan.state == .possible, flightState != nil || core.isDecelerating {
             core.touchDown(at: event.timestamp); didTouchDown?(); catchMotion(braking: true)
@@ -315,6 +318,7 @@ final class PlatformEngine: NSObject, ScrollEngine, UIScrollViewDelegate {
     var host: UIView { scroll }
     var offset: Double { scroll.contentOffset.y }
     var activeFlight: ScrollFlight? { nil }
+    var tracking: Bool { scroll.panGestureRecognizer.state == .began || scroll.panGestureRecognizer.state == .changed }
     var dragging: Bool { scroll.isDragging }
     var onScroll: ((Double) -> Void)?
     var onFlightChanged: ((ScrollFlight?) -> Void)?

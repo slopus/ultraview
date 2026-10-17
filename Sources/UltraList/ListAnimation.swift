@@ -4,6 +4,7 @@ public enum ListCurve: Sendable, Equatable {
     case linear, easeInOut, easeIn, spring, uiKitScroll, smoothDeceleration
     case bezier(Double, Double, Double, Double)
     case dampedSpring(damping: Double)
+    case keyboardSpring
 
     public func value(at phase: Double, duration: Double = 0.3) -> Double {
         let x = min(1, max(0, phase))
@@ -23,6 +24,8 @@ public enum ListCurve: Sendable, Equatable {
             return Self.solve(x, 0.380, 0.700, 0.125, 1)
         case .dampedSpring(let damping):
             return Self.spring(time: x * duration, stiffness: 180, damping: max(0.1, damping))
+        case .keyboardSpring:
+            return Self.spring(time: x * duration, stiffness: 555.027, damping: 47.118)
         }
     }
     /// Closed form of a mass-one oscillator, initially at rest and one unit from its target.
@@ -77,6 +80,7 @@ public struct ListTransition: Sendable, Equatable {
     public static func spring(_ duration: Double, damping: Double) -> Self {
         .init(duration: duration, curve: .dampedSpring(damping: damping))
     }
+    public static func keyboard(_ duration: Double) -> Self { .init(duration: duration, curve: .keyboardSpring) }
     public static func uiKitScroll(_ duration: Double = 0.3) -> Self { .init(duration: duration, curve: .uiKitScroll) }
     public static func smoothDeceleration(_ duration: Double = 1.15) -> Self { .init(duration: duration, curve: .smoothDeceleration) }
     public func scaled(by factor: Double) -> Self {

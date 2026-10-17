@@ -8,6 +8,13 @@ open class UltraScrollView: UIView {
     public var contentView: UIView { engine.host }
     public var currentScrollOffset: Double { engine.offset }
     public var isScrollFlightActive: Bool { engine.activeFlight != nil }
+    public var isDragging: Bool { engine.dragging }
+    public var isTracking: Bool { engine.tracking }
+    private var keyboardInput: UIScrollView?
+    /// Uses the system's keyboard interaction while the selected engine owns list motion.
+    public var keyboardDismissMode: UIScrollView.KeyboardDismissMode = .none {
+        didSet { configureKeyboardInput() }
+    }
     public let engineMode: ScrollEngineMode
     public var onScroll: ((Double) -> Void)?
     public var willBeginDragging: (() -> Void)?
@@ -36,7 +43,37 @@ open class UltraScrollView: UIView {
     open override func layoutSubviews() {
         super.layoutSubviews()
         engine.host.frame = bounds
+        keyboardInput?.frame = bounds
         updateEdges()
+    }
+    private func configureKeyboardInput() {
+        if let platform = engine as? PlatformEngine {
+            platform.scroll.keyboardDismissMode = keyboardDismissMode
+            return
+        }
+        guard let physics = engine as? PhysicsEngine else { return }
+        if keyboardDismissMode == .none {
+            if let input = keyboardInput { input.panGestureRecognizer.view?.removeGestureRecognizer(input.panGestureRecognizer) }
+            keyboardInput?.removeFromSuperview(); keyboardInput = nil
+            physics.keyboardPanRecognizer = nil
+            return
+        }
+        if keyboardInput == nil {
+            // An empty system scroll view brokers the public interactive keyboard API.
+            // Its content offset never controls the list or its render-server flight.
+            let input = UIScrollView(frame: bounds)
+            input.contentInsetAdjustmentBehavior = .never
+            input.contentSize = .init(width: 1, height: 10_000_000)
+            input.contentOffset.y = 5_000_000
+            input.bounces = false; input.scrollsToTop = false
+            input.showsVerticalScrollIndicator = false; input.showsHorizontalScrollIndicator = false
+            input.isAccessibilityElement = false; input.accessibilityElementsHidden = true
+            insertSubview(input, at: 0)
+            addGestureRecognizer(input.panGestureRecognizer)
+            physics.keyboardPanRecognizer = input.panGestureRecognizer
+            keyboardInput = input
+        }
+        keyboardInput?.keyboardDismissMode = keyboardDismissMode
     }
     open override func didMoveToWindow() {
         super.didMoveToWindow()
@@ -55,6 +92,9 @@ open class UltraScrollView: UIView {
     /// The platform engine uses the stepped driver for externally supplied input.
     public func receiveScrollInput(_ event: GestureRecording.Event) { engine.receive(event) }
     /// Moves the input recognizers to a common ancestor for a shared gesture surface.
-    public func attachScrollInput(to view: UIView) { engine.attachInput(to: view) }
+    public func attachScrollInput(to view: UIView) {
+        engine.attachInput(to: view)
+        if let keyboardInput { view.addGestureRecognizer(keyboardInput.panGestureRecognizer) }
+    }
 }
 #endif

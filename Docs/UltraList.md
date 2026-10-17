@@ -26,7 +26,9 @@ stops expansion in that direction, leaving the edge open. Completion schedules a
 coalesced pass; it never makes the main thread wait. `NodeRowMeasuring` allows a
 host to supply its measurement policy. The default uses `NodeMeasurement` and
 the list's current scale, text size, appearance and layout direction. A prepared root belongs to one mounted
-host at a time.
+host at a time. Returning to a row during its departure transfers that live host
+to the incoming wrapper; the departing wrapper keeps a snapshot. A newly created
+`NodeRow` can prepare its content asynchronously even when its height is cached.
 
 The host prepares its measured size before display and never waits for drawing.
 `ListRowView.isDisplayReady` and `onDisplayReady` report the first ready commit.
@@ -41,6 +43,11 @@ The preload window defaults to 160 points beyond the viewport. The list requests
 up to 80 nearby asynchronous measurements, with the predicted direction first.
 Rows outside the loaded window lose their views. Logical row data and measured
 heights can outlive those views.
+
+A missing asynchronous measurement releases the collection's preparation gate,
+so other ready changes can appear. Failed rows retry with exponential delay from
+0.2 to 5 seconds. Identity, revision and measurement-environment checks reject
+stale retries. Cache completions outside the loaded frontier avoid a full pass.
 
 ## Mutations and hosts
 
@@ -62,6 +69,8 @@ visible content and normal anchoring. A target resolver runs once with its
 measured row height. Automatic anchoring keeps the loaded collection top pinned;
 `.preserveVisibleContent` instead follows a surviving visible witness. Insets
 and additional scroll distance participate in the same viewport transition.
+An unmeasured explicit target retains its transition until its measurement is
+ready; that retry uses the current viewport size and insets.
 
 A row may request bottom pinning. Targeting it arms a latch; a user touch releases
 that latch. Slack remains clamped and supplies scroll room without becoming a
@@ -129,6 +138,19 @@ inside its fixed width. Send and Stream retain their trailing positions; compose
 height changes use the same inset path as keyboard changes. A queued inserted
 block animation waits for its asynchronous mutation pass before starting.
 
+The chat list keeps its full frame behind the composer and keyboard. The
+keyboard's notification supplies the occlusion target and duration in the same
+turn; `ListTransition.keyboard(_:)` applies the system keyboard spring to the
+viewport offset. The composer follows the keyboard layout guide. Noninteractive
+layout never reads an early guide destination into the list's inset.
+
+During an interactive drag, guide changes update the inset immediately, with
+anchor compensation disabled while the finger owns the motion. The inset-only
+path avoids collection diffing, row reapplication and individual row animations.
+UIKit drives keyboard interaction through its public scroll API; custom engines
+use an empty system scroll view alongside their own pan recognizer. Release
+suppression belongs only to a gesture that actually dismissed the keyboard.
+
 Animation owners keep independent generations per property. Retargeting resumes
 from the analytic value, with presentation samples for row y and absolute size
 or opacity when available. A no-op preserves a live generation. Analytic
@@ -157,7 +179,7 @@ Numbers provide stable review references.
 | 13 | Momentum keeps physical time. Programmatic transition duration scaling does not stretch a fling. |
 | 14 | Evaluate springs analytically and emit public spring animations. No private solver is called. |
 | 15 | Force begin only when catching moving content. Navigation arbitration is left to the recognizer system. |
-| 16 | The list grants no simultaneous recognition and adds no failure dependencies. A host must choose any navigation-specific stopping-tap policy. |
+| 16 | The custom pan recognizes simultaneously with its keyboard interaction broker. It adds no navigation failure dependencies; hosts choose navigation-specific stopping-tap policy. |
 | 17 | Indirect zero-movement updates do not move the drag baseline. Gesture end or cancellation still uses the normal release path. |
 | 18 | Programmatic offset writes halt the old motion. During a drag they begin a new baseline at the current recognizer translation. |
 | 19 | Edge changes at rest schedule bounce after the current pass, avoiding an intermediate-layout bounce. |
@@ -221,12 +243,30 @@ records 60 samples of flight state, loaded indices and finite row geometry.
 Adding `-listStall YES` blocks main for 250 ms during that flight. Supply a unique
 `-listProbeRunID` and check the exported value to reject a previous launch's data.
 
-The mutation, resize and multiline composer changes passed 205 Linux tests and
-285 simulator tests, plus seven interaction tests using actual input gestures.
-The 34 list integration tests passed separately with Address Sanitizer and
+The keyboard and node-ownership changes passed 205 Linux tests and 295 simulator
+tests, plus nine interaction tests using actual input gestures. The 44 list
+integration and ownership tests passed separately with Address Sanitizer and
 Thread Sanitizer. The interaction checks include native coast after release,
 one drag across all Compare panes, the main blocker, keyboard actions and the
 composer's growth, height cap, button positions and shrink after Send.
+
+The keyboard probe samples presentation layers during first show, hide, repeated
+show and an interactive dismissal in all three engines. Its maximum resting-row
+gap from the composer was below 0.001 point; the composer-to-guide gap was below
+0.001 point. Dismissal moved the keyboard through 252 points with 55 tracked
+samples, no cancelled list pans, no individual row position animations and no
+full collection passes during keyboard motion. Inset-update p99 was 0.505 ms for
+UIKit, 0.473 ms for stepped and 0.506 ms for keyframe. A drag ending above the
+keyboard kept it open and retained momentum; a completed dismissal suppressed
+that release, and the next ordinary release retained momentum. These numbers
+describe the simulator scenario, not device keyboard costs.
+
+Both rapid carousel return and delete/reinsert of the same node row trapped
+before the ownership repair. The regression tests now pass, including under
+both sanitizers. Fresh row instances also become ready when their height was
+cached by a prior instance. Separate tests cover transient nil measurement
+recovery, preservation of a pending scroll's transition, and pinned viewport
+changes without row reapplication.
 
 A focused simulator fling started with loaded index 38 and injected a 252.1 ms
 main-thread block. The flight remained active at the next sample, continued from
@@ -243,7 +283,7 @@ bundle identifier so independent test runners retain their own identities.
 
 | Area | Implemented | Deferred or not yet validated |
 |---|---|---|
-| Keyboard | The composer follows the keyboard layout guide. The inverted list receives the occlusion as its top inset, follows the keyboard transition, and suppresses inset compensation and release momentum during drag dismissal. Scripted actions export separate timings and public signpost intervals. | Continuous interactive dismissal. Device cold entry and UIKit keyboard/input work exceed 16.7 ms; measured limits are described below. |
+| Keyboard | The composer follows the keyboard layout guide. The fixed inverted list receives the notified occlusion as its top inset and follows the keyboard spring. Interactive guide updates disable anchor compensation; only a gesture that dismisses the keyboard suppresses its release. Presentation-layer interaction checks cover all three engines. | The configuration matrix and current physical-device interaction remain to be measured. Earlier device cold entry and UIKit keyboard/input costs exceed 16.7 ms; measured limits are described below. |
 | Accessibility | Hosted nodes apply accessibility properties; text nodes publish labels and static-text traits. Viewport-sized scroll actions follow screen direction, including inverted lists. Logical row focus survives virtualization and returns to a recreated descendant when available. | Physical VoiceOver interaction coverage, including custom accessibility-element containers. |
 | Node row revisions | Ready content remains visible until the newest replacement applies its visible commit; superseded candidates are discarded. | Node-internal property and text animations. Custom row hosts receive the pass transition; the default bridge animates its outer row geometry. |
 | Trackpad | Continuous indirect pan input has its own drag baseline and rubber-band coefficient. The physics model supports indirect replay. | Physical trackpad parity, indirect recording fixtures and discrete wheel input. The committed public gesture fixtures use direct touch. |

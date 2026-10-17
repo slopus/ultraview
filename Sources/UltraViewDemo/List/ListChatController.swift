@@ -10,20 +10,23 @@ final class ListChatController: UIViewController, UITextViewDelegate {
     private let composerBar = UIStackView()
     private let placeholder = UILabel()
     private var composerHeight: NSLayoutConstraint?
+    private var keyboardProbe: ListKeyboardGeometryProbe?
+    private var keyboardTransition: ListTransition?
+    private var keyboardHeight = 0.0
+    private var gestureHadKeyboard = false, gestureDismissedKeyboard = false, gestureAtNewest = false
+    private var needsNewestSnap = false
     private var rows: [DemoListRow] = []
     private var nextID = 100
     private var streaming: Task<Void, Never>?
     private let monitor = ListFrameMonitor(name: "chat")
-    private var dragging = false
-    private var dismissingKeyboardOnDrag = false
     private var composerInset = 0.0
-    private var keyboardTransition: ListTransition?
     private var hostProbe: Bool { UserDefaults.standard.bool(forKey: "listHostProbe") }
     init(mode: ScrollEngineMode) { list = UltraListView(engineMode: mode); super.init(nibName: nil, bundle: nil) }
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
     override func viewDidLoad() {
-        super.viewDidLoad(); view.backgroundColor = .systemGroupedBackground
+        super.viewDidLoad(); view.backgroundColor = .systemGroupedBackground; view.clipsToBounds = true
         list.contentView.transform = .init(scaleX: 1, y: -1)
+        list.keyboardDismissMode = .interactive
         list.accessibilityIdentifier = "chatList"
         rows = (0..<60).map { index -> DemoListRow in
             let title = index % 2 == 0 ? "You" : "Assistant"
@@ -61,15 +64,32 @@ final class ListChatController: UIViewController, UITextViewDelegate {
             composerBar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12), composerBar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12), composerBar.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor, constant: -8), height,
             composer.heightAnchor.constraint(equalTo: composerBar.heightAnchor), composer.widthAnchor.constraint(greaterThanOrEqualToConstant: 60),
         ])
-        list.applyChanges(items: rows)
+        let initialIndex = UserDefaults.standard.integer(forKey: "listInitialRow")
+        list.applyChanges(items: rows, scrollTo: initialIndex > 0 ? .init(index: initialIndex) : nil)
         list.willBeginDragging = { [weak self] in
             guard let self else { return }
-            dragging = true; dismissingKeyboardOnDrag = composer.isFirstResponder
-            if dismissingKeyboardOnDrag { composer.resignFirstResponder() }
+            gestureHadKeyboard = composer.isFirstResponder; gestureDismissedKeyboard = false
+            gestureAtNewest = list.settledFrame(at: 0).map { abs($0.minY - list.viewportInsets.top) <= 10 } ?? false
         }
-        list.didEndDragging = { [weak self] in self?.dragging = false; self?.dismissingKeyboardOnDrag = false }
-        list.shouldStopScrolling = { [weak self] _ in self?.dismissingKeyboardOnDrag == true }
+        list.shouldStopScrolling = { [weak self] _ in self?.shouldStopForKeyboard() ?? false }
+        list.didEndDragging = { [weak self] in
+            guard let self else { return }
+            needsNewestSnap = gestureDismissedKeyboard && gestureAtNewest
+        }
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardWillChange(_:)), name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(keyboardDidHide), name: UIResponder.keyboardDidHideNotification, object: nil)
+        if UserDefaults.standard.bool(forKey: "listKeyboardGeometryProbe") {
+            keyboardProbe = ListKeyboardGeometryProbe(owner: view, composer: composerBar, list: list)
+            keyboardProbe?.start()
+            let dismiss = UIButton(type: .system)
+            dismiss.setTitle("Hide", for: .normal)
+            dismiss.accessibilityIdentifier = "dismissKeyboard"
+            dismiss.addAction(UIAction { [weak self] _ in self?.composer.resignFirstResponder() }, for: .touchUpInside)
+            dismiss.setContentHuggingPriority(.required, for: .horizontal)
+            dismiss.setContentCompressionResistancePriority(.required, for: .horizontal)
+            dismiss.heightAnchor.constraint(equalToConstant: 44).isActive = true
+            composerBar.addArrangedSubview(dismiss)
+        }
         monitor.start()
         if UserDefaults.standard.bool(forKey: "listProbe") {
             Task { [weak self] in
@@ -103,12 +123,48 @@ final class ListChatController: UIViewController, UITextViewDelegate {
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         updateComposerHeight()
-        let inset = max(0, view.bounds.maxY - composerBar.frame.minY + 8)
+        // The guide can lay out its destination before our keyboard notification.
+        // Only tracking reads it directly; notifications own animated targets.
+        let inset = list.isTracking
+            ? max(0, view.bounds.maxY - composerBar.frame.minY)
+            : max(keyboardHeight, view.safeAreaInsets.bottom) + composerBar.bounds.height + 8
+        applyComposerInset(inset, transition: list.isTracking ? .none : keyboardTransition ?? .none)
+    }
+    private func applyComposerInset(_ inset: Double, transition: ListTransition) {
         guard abs(inset - composerInset) > 0.5 else { return }
         composerInset = inset
-        let transition = dragging ? ListTransition.immediate : keyboardTransition ?? .immediate
-        keyboardTransition = nil
-        list.applyChanges(newInsets: .init(top: inset), compensatesInsetChange: !dragging, transition: transition)
+        let start = CACurrentMediaTime()
+        list.applyChanges(newInsets: .init(top: inset), compensatesInsetChange: !list.isTracking, transition: transition)
+        keyboardProbe?.recordInsetUpdate(milliseconds: (CACurrentMediaTime() - start) * 1000)
+    }
+    private func shouldStopForKeyboard() -> Bool {
+        let hidden = view.keyboardLayoutGuide.layoutFrame.minY >= view.bounds.maxY - 1
+        let stopped = gestureHadKeyboard && (gestureDismissedKeyboard || !composer.isFirstResponder || hidden)
+        if stopped { gestureDismissedKeyboard = true; keyboardProbe?.recordStoppedRelease() }
+        return stopped
+    }
+    @objc private func keyboardDidHide() {
+        guard needsNewestSnap else { return }
+        needsNewestSnap = false; list.scrollTo(.init(index: 0), transition: .none)
+    }
+    @objc private func keyboardWillChange(_ notification: Notification) {
+        guard view.window != nil, let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
+        let local = view.convert(frame, from: nil)
+        let overlap = max(0, view.bounds.maxY - local.minY)
+        keyboardHeight = max(overlap, view.safeAreaInsets.bottom)
+        if list.isTracking {
+            if gestureHadKeyboard, overlap == 0, !composer.isFirstResponder { gestureDismissedKeyboard = true }
+            keyboardTransition = ListTransition.none
+            return
+        }
+        let duration = (notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double) ?? 0
+        let raw = (notification.userInfo?[UIResponder.keyboardAnimationCurveUserInfoKey] as? UInt) ?? 7
+        let transition: ListTransition = duration > 0 ? .keyboard(duration) : .none
+        keyboardTransition = transition
+        UIView.animate(withDuration: duration, delay: 0, options: [.init(rawValue: raw << 16), .beginFromCurrentState, .allowUserInteraction]) {
+            self.view.layoutIfNeeded()
+            self.applyComposerInset(self.keyboardHeight + self.composerBar.bounds.height + 8, transition: transition)
+        }
     }
     func textViewDidChange(_ textView: UITextView) { updateComposerHeight(animated: true) }
     private func updateComposerHeight(animated: Bool = false) {
@@ -126,18 +182,6 @@ final class ListChatController: UIViewController, UITextViewDelegate {
             keyboardTransition = .easeInOut(0.18)
             UIView.animate(withDuration: 0.18, delay: 0, options: [.beginFromCurrentState, .allowUserInteraction]) { self.view.layoutIfNeeded() }
         } else { view.setNeedsLayout() }
-    }
-    @objc private func keyboardWillChange(_ notification: Notification) {
-        guard view.window != nil, let duration = notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double else { return }
-        let raw = (notification.userInfo?[UIResponder.keyboardAnimationCurveUserInfoKey] as? Int) ?? 0
-        let curve: ListCurve
-        switch raw {
-        case 1: curve = .easeIn
-        case 2: curve = .bezier(0, 0, 0.58, 1)
-        case 3: curve = .linear
-        default: curve = .easeInOut
-        }
-        keyboardTransition = .init(duration: duration, curve: curve)
     }
     private func headers(group: Int, sender: String) -> [String: any ListAttachment] {
         ["date": ChatHeader(group: group, title: group < 0 ? "Now" : "Today", isSender: false), "sender": ChatHeader(group: group, title: sender, isSender: true)]
@@ -167,7 +211,7 @@ final class ListChatController: UIViewController, UITextViewDelegate {
         let rects = list.loadedAttachmentViews.map { $0.convert($0.bounds, to: list) }
         monitor.recordState(name, values: ["inset": composerInset, "pinHeld": list.holdsPinnedRow, "pinStrict": list.isStrictlyPinnedToBottomEdge, "attachmentCount": rects.count, "attachmentsFinite": rects.allSatisfy { $0.minY.isFinite && $0.maxY.isFinite }])
     }
-    override func viewDidDisappear(_ animated: Bool) { super.viewDidDisappear(animated); streaming?.cancel(); monitor.finish() }
+    override func viewDidDisappear(_ animated: Bool) { super.viewDidDisappear(animated); streaming?.cancel(); monitor.finish(); keyboardProbe?.stop() }
     @objc private func sendMessage() {
         nextID += 1
         let body = monitor.measureAction("send-read-composer") { let text = composer.text ?? ""; return text.isEmpty ? "A new message" : text }

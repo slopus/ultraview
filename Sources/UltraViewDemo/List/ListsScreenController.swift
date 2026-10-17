@@ -14,7 +14,8 @@ final class ListsScreenController: UIViewController {
         tabs.accessibilityIdentifier = "listScreens"; engines.accessibilityIdentifier = "listEngines"
         let screen = UserDefaults.standard.string(forKey: "listScreen") ?? "feed"
         tabs.selectedSegmentIndex = ["chat", "feed", "compare", "record"].firstIndex(of: screen) ?? 1
-        engines.selectedSegmentIndex = 2
+        let initialEngine = UserDefaults.standard.string(forKey: "listEngine") ?? "keyframe"
+        engines.selectedSegmentIndex = ScrollEngineMode.allCases.firstIndex(where: { $0.rawValue == initialEngine }) ?? 2
         tabs.addTarget(self, action: #selector(showScreen), for: .valueChanged)
         engines.addTarget(self, action: #selector(showScreen), for: .valueChanged)
         blocker.accessibilityIdentifier = "listMainBlocker"; blocker.selectedSegmentIndex = 0

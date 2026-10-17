@@ -149,7 +149,7 @@ final class AnimationController {
             spring.initialVelocity = 0; spring.duration = logical
             spring.speed = Float(1 / track.transition.durationFactor)
             animation = spring
-        } else if curve == .smoothDeceleration || (curve == .spring && (logical == 0.5 || abs(logical - 0.3832) <= 1e-4)) {
+        } else if curve == .keyboardSpring || curve == .smoothDeceleration || (curve == .spring && (logical == 0.5 || abs(logical - 0.3832) <= 1e-4)) {
             let spring = CASpringAnimation(keyPath: property.keyPath)
             spring.mass = 1
             if curve == .smoothDeceleration {
@@ -157,6 +157,7 @@ final class AnimationController {
                 spring.stiffness = omega * omega; spring.damping = 2 * omega; spring.duration = 1.6
             } else { spring.stiffness = 555.027; spring.damping = 47.118; spring.duration = logical }
             spring.initialVelocity = 0; spring.speed = Float(spring.duration / max(1e-9, track.transition.duration))
+            if curve == .keyboardSpring { spring.timingFunction = CAMediaTimingFunction(name: .linear); spring.allowsOverdamping = false }
             animation = spring
         } else {
             animation = CABasicAnimation(keyPath: property.keyPath)
@@ -168,7 +169,7 @@ final class AnimationController {
             case .uiKitScroll: animation.timingFunction = CAMediaTimingFunction(controlPoints: 0.3643, 0, 0.6357, 1)
             case .spring: animation.timingFunction = CAMediaTimingFunction(controlPoints: 0.380, 0.700, 0.125, 1)
             case .bezier(let a, let b, let c, let d): animation.timingFunction = CAMediaTimingFunction(controlPoints: Float(a), Float(b), Float(c), Float(d))
-            case .smoothDeceleration, .dampedSpring: break
+            case .smoothDeceleration, .dampedSpring, .keyboardSpring: break
             }
         }
         animation.fromValue = track.from; animation.toValue = track.to
