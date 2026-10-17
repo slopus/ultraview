@@ -320,7 +320,11 @@ private struct Tree {
     }
 
     @Test func customDrawingsAreDrawnAndRedrawnWhenReplaced() throws {
-        struct Stripes: Drawing {}
+        struct Stripes: Drawing {
+            #if canImport(UIKit)
+            func draw(in context: CGContext, bounds: CGRect) {}
+            #endif
+        }
         let node = box { $0.height = 10 }
         node.drawing = Stripes()
         let harness = Harness(root: box(children: [node]))
@@ -616,11 +620,5 @@ private struct Tree {
         #expect(taken?.entry(for: node)?.props?.opacity == 0.3)
         #expect(mailbox.take() == nil)
         #expect(mailbox.post(commit(4, [])))
-    }
-}
-
-extension Commit: Equatable {
-    public static func == (lhs: Commit, rhs: Commit) -> Bool {
-        lhs.generation == rhs.generation
     }
 }
