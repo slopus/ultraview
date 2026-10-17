@@ -314,7 +314,14 @@ public final class UltraListView: UltraScrollView {
             }
         }
         guard !items.isEmpty, viewport.contentWidth > 0, viewport.height > 0 else {
-            pendingTarget = items.isEmpty ? nil : target
+            recordPendingTarget(items.isEmpty ? nil : target, distance: additionalScrollDistance)
+            // A newer target replaces the retry too, or a flush would revive the old one.
+            if items.isEmpty { pendingScroll = nil }
+            else if let scrollTo {
+                pendingScroll = { [weak self] in
+                    self?.applyChanges(scrollTo: scrollTo, additionalScrollDistance: additionalScrollDistance, anchorMode: anchorMode, compensatesInsetChange: compensatesInsetChange, absorbsEdgeChangeIntoOverscroll: absorbsEdgeChangeIntoOverscroll, animatesInsertions: animatesInsertions, transition: transition)
+                }
+            }
             clearPendingDisplayViews()
             engine.halt()
             for (identity, view) in views { view.visibleRectUpdated(nil); view.removeFromSuperview(); animations.unbind(.row(identity), removeModel: true) }
@@ -376,7 +383,7 @@ public final class UltraListView: UltraScrollView {
             return fixed + (compensatesInsetChange ? viewport.insets.top - oldViewport.insets.top + updatedSlack - oldSlack : 0) + additionalScrollDistance
         }
         guard !newWindow.rows.isEmpty else {
-            pendingTarget = target
+            recordPendingTarget(target, distance: additionalScrollDistance)
             if let scrollTo {
                 pendingScroll = { [weak self] in
                     self?.applyChanges(scrollTo: scrollTo, additionalScrollDistance: additionalScrollDistance, anchorMode: anchorMode, compensatesInsetChange: compensatesInsetChange, absorbsEdgeChangeIntoOverscroll: absorbsEdgeChangeIntoOverscroll, animatesInsertions: animatesInsertions, transition: transition)
@@ -418,7 +425,7 @@ public final class UltraListView: UltraScrollView {
             if newWindow.range.lowerBound > 0, newBase + newWindow.minY - destination > viewport.insets.top + 0.5 { missing.append(newWindow.range.lowerBound - 1) }
             if newWindow.range.upperBound < items.count, newBase + newWindow.maxY - destination < viewport.height - viewport.insets.bottom - 0.5 { missing.append(newWindow.range.upperBound) }
             if !missing.isEmpty || required.contains(where: { measuredViews[items[$0.index].identity]?.isDisplayReady == false }) {
-                pendingTarget = target
+                recordPendingTarget(target, distance: additionalScrollDistance)
                 pendingScroll = { [weak self] in
                     self?.applyChanges(scrollTo: target, additionalScrollDistance: additionalScrollDistance, anchorMode: anchorMode, compensatesInsetChange: compensatesInsetChange, absorbsEdgeChangeIntoOverscroll: absorbsEdgeChangeIntoOverscroll, animatesInsertions: animatesInsertions, transition: transition)
                 }
@@ -544,6 +551,13 @@ public final class UltraListView: UltraScrollView {
         sweepPreparations(force: newItems != nil || sizeChanged)
         renderAttachments()
         clearPendingDisplayViews(keeping: Set(views.values.map(ObjectIdentifier.init)))
+    }
+
+    /// A pass that resumes the target without its call (a layout, say) still
+    /// places it where the call asked.
+    private func recordPendingTarget(_ target: ListScrollTarget?, distance: Double) {
+        guard let target, distance != 0 else { pendingTarget = target; return }
+        pendingTarget = .init(index: target.index, forward: target.forward) { target.resolve($0, $1) + distance }
     }
 
     private func clearPendingDisplayViews(keeping retained: Set<ObjectIdentifier> = []) {

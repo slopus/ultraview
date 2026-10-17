@@ -601,42 +601,56 @@ timing through a later move pass requires; the Swift does not do this yet
   the move's one track, while the height keeps its timing, overlaps the rows
   by 12.5 points at 1 s.
 
-## Pending scroll targets and readiness holds at `060cb79`
+## Pending scroll targets and readiness holds
 
 `Proofs/UltraProofs/List/Readiness.lean` models how `applyChanges` keeps a
 scroll target it cannot apply yet, including the readiness hold `75fe3c8`
-added for immediate distant jumps.
+added for immediate distant jumps. The rows pin `6d94fd0` plus the commit
+that adds the zero-viewport fix below.
 
 | Model (`Proofs/UltraProofs/List/Readiness.lean`) | Swift |
 | --- | --- |
 | `S.pending`, `S.retry`, `S.gen` | `pendingTarget`, the target `pendingScroll` re-requests, `pendingDisplayGeneration` (UltraListView.swift:69-74) |
 | `pick` | `scrollTo ?? pendingTarget` (:308) |
-| `Out.apply` | the pass: `pendingTarget = nil; pendingScroll = nil` (:394), and `clearPendingDisplayViews` at its end (:546, :549) |
-| `Out.hold` | the distant-jump readiness branch (:415-445): records the target and the closure, starts a generation, installs observers |
-| `Out.empty` | the empty-window guard (:378-392): records the target, and the closure for its own `scrollTo` |
-| `Out.zero` | the zero-viewport guard (:316-337): `pendingTarget = items.isEmpty ? nil : target` and `clearPendingDisplayViews()`, leaving `pendingScroll` |
-| `Ev.observe` | a readiness observer: `pendingDisplayGeneration == generation` and every awaited height and view ready, then `pendingScroll` (:438-441) |
-| `Ev.flush` | the dirty flush: `pendingScroll` if set, else a pass without a target (:744-745) |
+| `Out.apply` | the pass: `pendingTarget = nil; pendingScroll = nil` (:401), and `clearPendingDisplayViews` at its end (:553, :563) |
+| `Out.hold` | the distant-jump readiness branch (:422-453): records the target and the closure, starts a generation, installs observers |
+| `Out.empty` | the empty-window guard (:385-400): records the target, and the closure for its own `scrollTo` |
+| `Out.zero` (`fix = true`) | the zero-viewport guard with items (:316-344): records the target, the closure for its own `scrollTo`, and `clearPendingDisplayViews()` (:325) |
+| `Ev.observe` | a readiness observer: `pendingDisplayGeneration == generation` and every awaited height and view ready, then `pendingScroll` (:445-448) |
+| `Ev.flush` | the dirty flush: `pendingScroll` if set, else a pass without a target (:758-759) |
 
-- `applies_latest`, `run_applies_latest`: with the zero-viewport guard
-  recording `pendingScroll` for its own `scrollTo` (`fix`), every target that
-  applies, after any sequence of calls, flushes and observers, is the most
-  recently requested one. A hold changes nothing shown, so the old window
-  stays until then.
+- `applies_latest`, `run_applies_latest`: every target that applies, after
+  any sequence of calls, flushes and observers, is the most recently
+  requested one. A hold changes nothing shown, so the old window stays until
+  then.
 - `stale_noop`, `later_gen_lt`: an observer from an earlier hold does nothing
   after any later call that applies, holds or meets a zero viewport.
   `resume_applies`: the current hold's observer applies its target when its
   check passes.
 
-**Gap at `060cb79`.** `zero_reverts`: the zero-viewport guard replaces
-`pendingTarget` but keeps an older `pendingScroll`. A held jump to row 50,
-a layout to zero width, a jump to row 80, then a dirty flush (a measurement
-finishing) runs the row-50 closure, which records row 50 again; when the
-width returns row 50 applies, not row 80. `zero_fixed`: recording the
-closure in that guard as the empty-window guard does applies row 80.
+**Gap at `060cb79`, fixed.** `zero_reverts` (`fix = false`): the
+zero-viewport guard replaced `pendingTarget` but kept an older
+`pendingScroll`. A held jump to row 50, a layout to zero width, a jump to
+row 80, then a dirty flush (a measurement finishing) ran the row-50 closure,
+which recorded row 50 again; when the width returned row 50 applied, not row
+80. The simulator reproduced it in all three engines. The guard now records
+the closure for its own `scrollTo` (and clears it with the items), which is
+`zero_fixed` and `applies_latest`.
+`ListPendingTargetTests.theNewestTargetAppliesAfterAZeroWidthLayout` covers
+the sequence in every engine, and checks that the first hold's late
+readiness callbacks do not bring row 50 back.
+
+The same test found that a pending target resumed by a pass without its
+call (here the layout when the width returns) lost the call's
+`additionalScrollDistance`. `recordPendingTarget` (:558) now folds the
+distance into the recorded target's `resolve`, so the layout and the
+closure place it alike. The model's targets are row indices and do not
+carry options. A pass that resumes a pending target uses its own
+transition and flags; the closure keeps the original call's.
 
 Not covered: which way a call ends (the destination check, the measurement
-and display readiness themselves), staged view reuse, mutations with new
+and display readiness themselves), the empty-items case of the zero guard
+(both cleared, nothing can apply), staged view reuse, mutations with new
 items (the preparation queue), and the `passing` deferral.
 
 ## Theorems

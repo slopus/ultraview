@@ -23,14 +23,15 @@ or a content change (`markDirty`). Which way a call ends is an input; so is
 each observer's check.
 
 * `applies_latest`, `run_applies_latest`: with the zero-viewport guard
-  recording the closure as the other branches do (`fix`), every target that
+  recording the closure for its own `scrollTo` as the other branches do
+  (`fix`, the Swift since the commit after `6d94fd0`), every target that
   applies is the most recently requested one, after any sequence of calls,
   flushes and observers.
-* `zero_reverts` (a gap in the Swift at `060cb79`): the zero-viewport guard
-  updates `pendingTarget` but not `pendingScroll`. A jump to row 50 holds,
-  the width goes to zero, row 80 is requested, and a dirty flush runs the
-  old closure: row 50 becomes the pending target again and applies when the
-  width returns. `zero_fixed`: with the fix, row 80 applies.
+* `zero_reverts` (the gap at `060cb79`, `fix = false`): the zero-viewport
+  guard updated `pendingTarget` but not `pendingScroll`. A jump to row 50
+  holds, the width goes to zero, row 80 is requested, and a dirty flush runs
+  the old closure: row 50 becomes the pending target again and applies when
+  the width returns. `zero_fixed`: with the fix, row 80 applies.
 * `stale_noop`, `gen_le_run`, `later_gen_lt`: an observer from an earlier
   hold sees a newer generation after any later call that applies, holds or
   meets a zero viewport, and does nothing.
@@ -199,7 +200,7 @@ target); row 80 is requested; a dirty flush; the width returns. -/
 def zeroScenario : List Ev :=
   [.call (some 50) .hold, .call none .zero, .call (some 80) .zero, .flush .zero, .call none .apply]
 
-/-- **The zero-viewport guard brings back an older target (Swift at
+/-- **The zero-viewport guard brought back an older target (Swift at
 `060cb79`).** Row 80 is the newest request, but row 50 applies. -/
 theorem zero_reverts :
     (run false S.empty zeroScenario).shown = [50] ∧
