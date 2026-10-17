@@ -17,11 +17,16 @@ final class AnimationController {
     var durationScale: Double = 1
     private var layers: [AnimationOwner: CALayer] = [:]
     private var snapshots: [AnimationOwner: Double] = [:]
+    private var baseSnapshots: [AnimationOwner: Double] = [:]
+    private var heightSnapshots: [String: Double] = [:]
+    private var snapshotTime: Double?
     private var emitted: [ListAnimationModel.Key: UInt64] = [:]
     private var origins: [ListAnimationModel.Key: (generation: UInt64, time: Double)] = [:]
     private var completions: [ListAnimationModel.Key: (UInt64, () -> Void)] = [:]
     private var mirrors: [CALayer] = []
-    private var passGeneration: UInt64 = 0
+    private var changedPositionLayers: Set<AnimationOwner> = []
+    private var layoutTrack: AnimationTrack?
+    private var layoutOrigin: Double?
     weak var referenceLayer: CALayer?
     var now: Double { referenceLayer?.convertTime(CACurrentMediaTime(), from: nil) ?? CACurrentMediaTime() }
     func bind(_ owner: AnimationOwner, layer: CALayer) {
@@ -29,28 +34,128 @@ final class AnimationController {
         if layers[owner] != nil { unbind(owner) }
         for (other, bound) in layers where bound === layer { unbind(other, removeModel: other != owner) }
         layers[owner] = layer
-        for property in AnimatedProperty.allCases {
-            if let track = model.tracks[.init(owner, property)] {
-                let key = ListAnimationModel.Key(owner, property)
-                let remembered = origins[key].flatMap { $0.generation == track.generation ? $0.time : nil }
-                install(owner, property, track: track, explicitOrigin: remembered ?? track.startTime)
-            }
+        for (key, track) in model.tracks where key.owner == owner {
+            let remembered = origins[key].flatMap { $0.generation == track.generation ? $0.time : nil }
+            install(key, track: track, explicitOrigin: remembered ?? track.startTime)
         }
     }
     func mirrorViewport(on layer: CALayer) { mirrors.append(layer) }
     func owner(boundTo layer: CALayer) -> AnimationOwner? { layers.first { $0.value === layer }?.key }
     func capturePositions() {
-        snapshots.removeAll(keepingCapacity: true); passGeneration = model.generation
+        snapshots.removeAll(keepingCapacity: true); baseSnapshots.removeAll(keepingCapacity: true)
+        heightSnapshots.removeAll(keepingCapacity: true)
+        changedPositionLayers.removeAll(keepingCapacity: true)
+        let capturedTime = now
         for (owner, layer) in layers {
-            guard case .row = owner, let presentation = layer.presentation() else { continue }
-            snapshots[owner] = presentation.position.y - layer.position.y
+            guard case .row(let identity) = owner else { continue }
+            if let presentation = layer.presentation() {
+                snapshots[owner] = presentation.position.y - layer.position.y
+                heightSnapshots[identity] = presentation.bounds.height
+            } else {
+                heightSnapshots[identity] = model.tracks[.init(owner, .height)] == nil
+                    ? layer.bounds.height : baseValue(owner, .height, at: capturedTime)
+            }
+        }
+        snapshotTime = capturedTime
+        for owner in layers.keys {
+            guard case .row = owner, snapshots[owner] == nil else { continue }
+            snapshots[owner] = value(owner, .positionY, at: capturedTime)
+        }
+        for (owner, value) in snapshots {
+            baseSnapshots[owner] = value - positionLayerValue(owner, at: capturedTime)
         }
     }
-    func clearPositions() { snapshots.removeAll(keepingCapacity: true) }
-    func value(_ owner: AnimationOwner, _ property: AnimatedProperty, at time: Double) -> Double { model.value(owner, property, at: time) }
+    func clearPositions() {
+        snapshots.removeAll(keepingCapacity: true); baseSnapshots.removeAll(keepingCapacity: true)
+        heightSnapshots.removeAll(keepingCapacity: true); snapshotTime = nil
+        changedPositionLayers.removeAll(keepingCapacity: true)
+    }
+    func value(_ owner: AnimationOwner, _ property: AnimatedProperty, at time: Double) -> Double {
+        baseValue(owner, property, at: time) + (property == .positionY ? positionLayerValue(owner, at: time) : 0)
+    }
+    func baseValue(_ owner: AnimationOwner, _ property: AnimatedProperty, at time: Double) -> Double {
+        let key = ListAnimationModel.Key(owner, property)
+        return model.tracks[key].map { trackValue(key, track: $0, at: time) } ?? model.baseValue(owner, property, at: time)
+    }
+    func positionLayersChanged(_ owner: AnimationOwner) -> Bool { changedPositionLayers.contains(owner) }
+    func positionLayerValue(_ owner: AnimationOwner, at time: Double) -> Double {
+        model.tracks.reduce(0) { value, entry in
+            guard entry.key.owner == owner, let source = entry.key.positionSource else { return value }
+            return value + (capturedHeightContribution(source, track: entry.value) ?? trackValue(entry.key, track: entry.value, at: snapshotTime ?? time))
+        }
+    }
+    func positionLayerValue(_ layer: PositionLayer, at time: Double) -> Double {
+        capturedHeightContribution(layer.source, track: layer.track) ?? layer.value(at: snapshotTime ?? time)
+    }
+    private func capturedHeightContribution(_ source: ListAnimationModel.PositionSource, track: AnimationTrack) -> Double? {
+        guard case .height(let identity) = source, let height = heightSnapshots[identity],
+              let size = model.tracks[.init(.row(identity), .height)] else { return nil }
+        let difference = size.from - size.to
+        guard abs(difference) > 1e-6 else { return 0 }
+        // Both resumes must read the same presented frame. Wall time can be
+        // ahead of that frame while the renderer is preparing the next commit.
+        return (height - size.to) * track.from / difference
+    }
+    struct HeightMotion {
+        var identity: String
+        var track: AnimationTrack
+        var origin: Double?
+    }
+    struct PositionLayer {
+        var source: ListAnimationModel.PositionSource
+        var track: AnimationTrack
+        var origin: Double?
+        func value(at time: Double) -> Double {
+            origin.map { track.value(at: track.startTime + time - $0) } ?? track.from
+        }
+    }
+    func layoutPosition(at time: Double) -> PositionLayer? {
+        guard let track = layoutTrack else { return nil }
+        if let (key, installed) = model.tracks.first(where: {
+            $0.key.positionSource == .layout && $0.value.startTime == track.startTime
+        }), let origin = animationOrigin(key, generation: installed.generation) { layoutOrigin = origin }
+        guard time < (layoutOrigin ?? track.startTime) + track.transition.duration else {
+            layoutTrack = nil; layoutOrigin = nil; return nil
+        }
+        return .init(source: .layout, track: track, origin: layoutOrigin)
+    }
+    func layoutPosition(from value: Double, at time: Double, transition: ListTransition) -> PositionLayer? {
+        let current = layoutPosition(at: time)
+        if abs(value - (current?.value(at: snapshotTime ?? time) ?? 0)) <= 1e-6 { return current }
+        guard !transition.isImmediate, abs(value) > 1e-6 else { layoutTrack = nil; layoutOrigin = nil; return nil }
+        let track = AnimationTrack(generation: 0, from: value, to: 0, startTime: time,
+                                   transition: transition.scaled(by: durationScale))
+        layoutTrack = track; layoutOrigin = nil
+        return .init(source: .layout, track: track, origin: nil)
+    }
+    func heightMotions(at time: Double) -> [HeightMotion] {
+        model.tracks.compactMap { key, track in
+            guard key.property == .height, case .row(let identity) = key.owner else { return nil }
+            let origin = animationOrigin(key, generation: track.generation)
+            guard time < (origin ?? track.startTime) + track.transition.duration else { return nil }
+            return .init(identity: identity, track: track, origin: origin)
+        }
+    }
+    func setPositionLayers(_ owner: AnimationOwner, _ desired: [PositionLayer]) {
+        let retained = Set(desired.map(\.source))
+        for key in model.removePositionLayers(owner, except: retained) {
+            clear(key); origins.removeValue(forKey: key); changedPositionLayers.insert(owner)
+        }
+        for layer in desired {
+            let key = ListAnimationModel.Key(owner, source: layer.source)
+            let previous = model.tracks[key]
+            let track = model.setPositionLayer(owner, source: layer.source, track: layer.track)
+            if track.generation != previous?.generation {
+                changedPositionLayers.insert(owner)
+                install(key, track: track, explicitOrigin: layer.origin)
+            }
+        }
+    }
     func seed(_ owner: AnimationOwner, width: Double, height: Double, opacity: Double = 1) {
         for (property, value) in [(AnimatedProperty.width, width), (.height, height), (.opacity, opacity)] {
+            if let track = model.tracks[.init(owner, property)], abs(track.to - value) <= 1e-6 { continue }
             model.replace(owner, property, from: value, to: value, at: 0, transition: .immediate)
+            clear(owner, property); origins.removeValue(forKey: .init(owner, property))
         }
     }
     @discardableResult
@@ -58,11 +163,25 @@ final class AnimationController {
         let key = ListAnimationModel.Key(owner, property)
         let prior = model.tracks[key]
         let resolvedCompletion = completion ?? completions[key]?.1
-        let track = model.transition(owner, property, old: old, new: new, resume: resumeValue(owner, property), at: time, transition: transition.scaled(by: durationScale), restarts: restarts)
+        let resume = resumeValue(owner, property)
+        if property == .positionY, let resume, let captured = baseSnapshots[owner],
+           abs(old + resume - new - captured) <= 1e-6 {
+            // A height follower can change settled positions without changing
+            // the row's own displacement. Its existing clock still applies.
+            if let prior, let resolvedCompletion { completions[key] = (prior.generation, resolvedCompletion) }
+            else if prior == nil { resolvedCompletion?() }
+            return prior?.generation
+        }
+        let track = model.transition(owner, property, old: old, new: new, resume: resume, at: time, transition: transition.scaled(by: durationScale), restarts: restarts)
+        if property == .height, transition.isImmediate, case .row(let identity) = owner,
+           let prior, let track, prior.startTime == track.startTime, prior.transition == track.transition,
+           let height = heightSnapshots[identity] {
+            heightSnapshots[identity] = height + track.to - prior.to
+        }
         if let track {
             if track.generation != prior?.generation {
                 // A track moved by an immediate change keeps its timing, so it keeps the running animation's begin.
-                let running = layers[owner]?.animation(forKey: "ultraview.list.\(property.rawValue)")?.beginTime
+                let running = animationOrigin(key, generation: prior?.generation)
                 let keepsTiming = prior.map { $0.startTime == track.startTime && $0.transition == track.transition } ?? false
                 install(owner, property, track: track, explicitOrigin: keepsTiming ? running.flatMap { $0 != 0 ? $0 : nil } : nil)
             }
@@ -81,18 +200,9 @@ final class AnimationController {
         } else { clear(owner, property); completions.removeValue(forKey: key); resolvedCompletion?() }
         return track?.generation
     }
-    /// Kept geometry follows this pass. Viewport motion remains common to every
-    /// row, and opacity retains its deadline so ongoing mutations cannot keep
-    /// departing views alive indefinitely.
-    func retime(at time: Double, transition: ListTransition) {
-        let restarted = model.retime(since: passGeneration, at: time, transition: transition.scaled(by: durationScale), resume: { [self] in resumeValue($0.owner, $0.property) }, including: { [self] in $0.owner != .viewport && $0.property != .opacity && layers[$0.owner] != nil })
-        for (key, track) in restarted {
-            install(key.owner, key.property, track: track)
-            if let entry = completions[key] { completions[key] = (track.generation, entry.1) }
-        }
-    }
     private func resumeValue(_ owner: AnimationOwner, _ property: AnimatedProperty) -> Double? {
-        if property == .positionY { return snapshots[owner] }
+        if property == .positionY { return snapshots[owner].map { $0 - positionLayerValue(owner, at: now) } }
+        if property == .height, case .row(let identity) = owner, let height = heightSnapshots[identity] { return height }
         guard !property.additive, let layer = layers[owner]?.presentation() else { return nil }
         switch property {
         case .height: return layer.bounds.height
@@ -102,44 +212,64 @@ final class AnimationController {
         }
     }
     func unbind(_ owner: AnimationOwner, removeModel: Bool = false) {
-        for property in AnimatedProperty.allCases {
-            let key = ListAnimationModel.Key(owner, property)
-            if let animation = layers[owner]?.animation(forKey: "ultraview.list.\(property.rawValue)"), animation.beginTime != 0, let track = model.tracks[key] {
-                origins[key] = (track.generation, animation.beginTime)
+        let keys = Set(model.tracks.keys.filter { $0.owner == owner }).union(emitted.keys.filter { $0.owner == owner })
+        for key in keys {
+            if let track = model.tracks[key], let origin = animationOrigin(key, generation: track.generation) {
+                origins[key] = (track.generation, origin)
             }
-            clear(owner, property)
-            if removeModel { completions.removeValue(forKey: .init(owner, property)) }
+            clear(key)
+            if removeModel { completions.removeValue(forKey: key); origins.removeValue(forKey: key) }
         }
         layers.removeValue(forKey: owner)
         if removeModel { model.remove(owner) }
         else if !model.hasTracks(owner) { model.remove(owner) }
         else {
-            let deadline = model.tracks.filter { $0.key.owner == owner }.map { $0.value.deadline }.max() ?? now
+            let deadline = model.tracks.filter { $0.key.owner == owner }.map { key, track in
+                (animationOrigin(key, generation: track.generation) ?? track.startTime) + track.transition.duration
+            }.max() ?? now
             DispatchQueue.main.asyncAfter(deadline: .now() + max(0, deadline - now)) { [weak self] in
                 guard let self, layers[owner] == nil else { return }
-                for (key, generation) in model.completed(at: now) where key.owner == owner { model.finish(key, generation: generation) }
+                for (key, track) in model.tracks where key.owner == owner {
+                    let end = (animationOrigin(key, generation: track.generation) ?? track.startTime) + track.transition.duration
+                    if now >= end { model.finish(key, generation: track.generation); origins.removeValue(forKey: key) }
+                }
                 if !model.hasTracks(owner) { model.remove(owner) }
             }
         }
     }
     func reset() {
         for owner in Array(layers.keys) { unbind(owner, removeModel: true) }
-        model = .init(); completions.removeAll(); snapshots.removeAll(); origins.removeAll()
+        model = .init(); completions.removeAll(); clearPositions()
+        origins.removeAll(); changedPositionLayers.removeAll()
+        layoutTrack = nil; layoutOrigin = nil
+    }
+    func retentionDeadline(_ owner: AnimationOwner) -> Double {
+        model.tracks.filter { $0.key.owner == owner }.map { key, track in
+            (animationOrigin(key, generation: track.generation) ?? track.startTime) + track.transition.duration
+        }.max() ?? now
     }
     private func clear(_ owner: AnimationOwner, _ property: AnimatedProperty) {
-        layers[owner]?.removeAnimation(forKey: "ultraview.list.\(property.rawValue)")
-        if owner == .viewport { for mirror in mirrors { mirror.removeAnimation(forKey: "ultraview.list.\(property.rawValue)") } }
-        emitted.removeValue(forKey: .init(owner, property))
+        clear(.init(owner, property))
+    }
+    private func clear(_ key: ListAnimationModel.Key) {
+        layers[key.owner]?.removeAnimation(forKey: key.animationKey)
+        if key.owner == .viewport { for mirror in mirrors { mirror.removeAnimation(forKey: key.animationKey) } }
+        emitted.removeValue(forKey: key)
     }
     private func install(_ owner: AnimationOwner, _ property: AnimatedProperty, track: AnimationTrack, explicitOrigin: Double? = nil) {
-        guard let layer = layers[owner] else { return }
-        let key = ListAnimationModel.Key(owner, property)
+        install(.init(owner, property), track: track, explicitOrigin: explicitOrigin)
+    }
+    private func install(_ key: ListAnimationModel.Key, track: AnimationTrack, explicitOrigin: Double? = nil) {
+        guard let layer = layers[key.owner] else { return }
         emitted[key] = track.generation
-        let animation = Self.compile(property, track: track)
-        if let explicitOrigin { animation.beginTime = explicitOrigin }
+        let animation = Self.compile(key.property, track: track)
+        if let explicitOrigin {
+            animation.beginTime = layer.convertTime(explicitOrigin, from: referenceLayer)
+            origins[key] = (track.generation, explicitOrigin)
+        } else { origins.removeValue(forKey: key) }
         animation.delegate = AnimationCompletion { [weak self] in self?.finalize(key, generation: track.generation) }
-        layer.add(animation, forKey: "ultraview.list.\(property.rawValue)")
-        if owner == .viewport { for mirror in mirrors { mirror.add(animation, forKey: "ultraview.list.\(property.rawValue)") } }
+        layer.add(animation, forKey: key.animationKey)
+        if key.owner == .viewport { for mirror in mirrors { mirror.add(animation, forKey: key.animationKey) } }
         if abs(track.to - track.from) <= 1e-6 || referenceLayer?.presentation() == nil {
             let delay = max(0, track.deadline - now)
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.finalize(key, generation: track.generation) }
@@ -147,13 +277,27 @@ final class AnimationController {
     }
     private func finalize(_ key: ListAnimationModel.Key, generation: UInt64) {
         guard let track = model.tracks[key], track.generation == generation else { return }
-        if now + 1e-6 < track.deadline {
-            DispatchQueue.main.asyncAfter(deadline: .now() + track.deadline - now) { [weak self] in self?.finalize(key, generation: generation) }
+        let deadline = (animationOrigin(key, generation: generation) ?? track.startTime) + track.transition.duration
+        if now + 1e-6 < deadline {
+            DispatchQueue.main.asyncAfter(deadline: .now() + deadline - now) { [weak self] in self?.finalize(key, generation: generation) }
             return
         }
         guard model.finish(key, generation: generation) else { return }
-        clear(key.owner, key.property)
+        clear(key); origins.removeValue(forKey: key)
         if let entry = completions[key], entry.0 == generation { completions.removeValue(forKey: key); entry.1() }
+    }
+    private func animationOrigin(_ key: ListAnimationModel.Key, generation: UInt64?) -> Double? {
+        if let layer = layers[key.owner], let animation = layer.animation(forKey: key.animationKey), animation.beginTime != 0 {
+            return referenceLayer?.convertTime(animation.beginTime, from: layer) ?? layer.convertTime(animation.beginTime, to: nil)
+        }
+        return origins[key].flatMap { $0.generation == generation ? $0.time : nil }
+    }
+    private func trackValue(_ key: ListAnimationModel.Key, track: AnimationTrack, at time: Double) -> Double {
+        if let origin = animationOrigin(key, generation: track.generation) {
+            return track.value(at: track.startTime + time - origin)
+        }
+        if layers[key.owner]?.animation(forKey: key.animationKey) != nil { return track.from }
+        return track.value(at: time)
     }
     static func compile(_ property: AnimatedProperty, track: AnimationTrack) -> CABasicAnimation {
         let logical = track.transition.duration / track.transition.durationFactor

@@ -47,6 +47,8 @@ public final class UltraListView: UltraScrollView {
     private let animations = AnimationController()
     private var views: [String: ListRowView] = [:]
     private var carried: [String: (view: ListRowView, index: Int)] = [:]
+    private var carryGenerations: [String: UInt64] = [:]
+    private var nextCarryGeneration: UInt64 = 0
     private var viewport = ListViewport(width: 0, height: 0)
     private var measurementEnvironment = RenderEnvironment()
     private var measurementEnvironmentKey: UInt64 = 0
@@ -329,7 +331,7 @@ public final class UltraListView: UltraScrollView {
             for (id, view) in attachmentViews { view.removeFromSuperview(); animations.unbind(.attachment(id), removeModel: true) }
             attachmentViews.removeAll(); attachmentMaps.removeAll(); attachmentFlightSignatures.removeAll()
             for (id, carry) in carried { carry.view.removeFromSuperview(); animations.unbind(.row(id), removeModel: true) }
-            carried.removeAll()
+            carried.removeAll(); carryGenerations.removeAll()
             for id in ghostWrappers.keys { animations.unbind(.block(id), removeModel: true) }
             for owners in ghostExitOwners.values { for owner in owners { animations.unbind(owner, removeModel: true) } }
             for view in ghostWrappers.values { view.removeFromSuperview() }
@@ -451,7 +453,11 @@ public final class UltraListView: UltraScrollView {
                 return
             }
         }
-        let oldSnapshot = Dictionary(uniqueKeysWithValues: oldWindow.rows.map { (oldItems[$0.index].identity, $0) })
+        var oldSnapshot = Dictionary(uniqueKeysWithValues: oldWindow.rows.map { (oldItems[$0.index].identity, $0) })
+        for (id, carry) in carried where oldSnapshot[id] == nil {
+            guard let index = oldLookup[id] else { continue }
+            oldSnapshot[id] = .init(index: index, y: carry.view.frame.minY - oldBase, height: carry.view.bounds.height)
+        }
         let outgoing = oldWindow.rows.filter { !nextIDs.contains(oldItems[$0.index].identity) }
         if transition.isImmediate, target != nil || fullReplace {
             for view in carousel.subviews {
@@ -483,6 +489,7 @@ public final class UltraListView: UltraScrollView {
             let id = items[row.index].identity
             guard let view = views[id] else { continue }
             carried.removeValue(forKey: id)
+            carryGenerations.removeValue(forKey: id)
             if view.superview !== container { container.addSubview(view) }
             view.place(in: .init(x: viewport.insets.left, y: row.y - settledWindow.minY, width: viewport.contentWidth, height: row.height))
             view.layer.opacity = 1
@@ -519,40 +526,127 @@ public final class UltraListView: UltraScrollView {
             return .init(identity: id, oldIndex: oldIndex, newIndex: row.index, y: newBase + row.y, height: row.height, outgoing: false, moved: diff.moves.contains { $0.new == row.index })
         }
         let incomingPlans = CrossingPlanner.infer(incomingEndpoints, samples: samples, safeRange: (engine.offset - preloadMargin)...(engine.offset + viewport.height + preloadMargin), anchorY: crossingAnchor)
+        let preservesMoveClock = !mutatesRows && diff.moves.isEmpty && !displacing && !isCarousel
+        let referenceID = reference.map { oldItems[$0.index].identity }
+        let oldReferenceLayers = referenceID.map { animations.positionLayerValue(.row($0), at: time) } ?? 0
+        func rowPositions(_ row: WindowRow, old: WindowRow, view: ListRowView?) -> (old: Double, new: Double) {
+            let oldY = (target != nil || displaces) ? oldBase + old.y + coordinateMap : oldBase + old.y - oldOffset
+            let newY = (target != nil || displaces) ? newBase + row.y : newBase + row.y - engine.offset
+            let oldPlacement = view?.placementOffset(size: .init(width: oldViewport.contentWidth, height: old.height)) ?? .zero
+            let newPlacement = view?.placementOffset(size: .init(width: viewport.contentWidth, height: row.height)) ?? .zero
+            return (oldY + oldPlacement.y, newY + newPlacement.y)
+        }
+        // Establish every size clock before deriving the rows that follow it.
+        for row in settledWindow.rows {
+            let id = items[row.index].identity, owner = AnimationOwner.row(id)
+            guard let old = oldSnapshot[id] else { continue }
+            let oldPlacement = views[id]?.placementOffset(size: .init(width: oldViewport.contentWidth, height: old.height)) ?? .zero
+            let newPlacement = views[id]?.placementOffset(size: .init(width: viewport.contentWidth, height: row.height)) ?? .zero
+            animations.transition(owner, .positionX, old: oldViewport.insets.left + oldPlacement.x, new: viewport.insets.left + newPlacement.x, at: time, transition: transition)
+            animations.transition(owner, .width, old: oldViewport.contentWidth, new: viewport.contentWidth, at: time, transition: transition)
+            animations.transition(owner, .height, old: old.height, new: row.height, at: time, transition: transition)
+        }
+        let heightMotions = animations.heightMotions(at: time)
+        let sizeGeometry = SizePositionGeometry(anchor: anchor,
+            anchorsTop: newWindow.range.lowerBound == 0 && newWindow.range.upperBound == items.count
+                && newWindow.height <= viewport.visibleHeight && pinnedIndex == nil,
+            pinsAnchorBottom: holdsPinnedRow && target == nil && anchor == pinnedIndex,
+            visibleHeight: viewport.visibleHeight)
+        func positionLayers(index: Int, view: ListRowView) -> [AnimationController.PositionLayer] {
+            let own = view.placementOffset(size: .init(width: viewport.contentWidth, height: 1)).y
+                - view.placementOffset(size: .init(width: viewport.contentWidth, height: 0)).y
+            return heightMotions.compactMap { motion in
+                guard let sourceIndex = newLookup[motion.identity] else { return nil }
+                let coefficient = sizeGeometry.coefficient(source: sourceIndex, row: index,
+                    from: motion.track.from, to: motion.track.to, ownPlacement: own)
+                guard abs(coefficient) > 1e-6 else { return nil }
+                return .init(source: .height(motion.identity), track: motion.track.residual(multipliedBy: coefficient), origin: motion.origin)
+            }
+        }
+        var followers: [String: [AnimationController.PositionLayer]] = [:]
+        for row in settledWindow.rows {
+            let id = items[row.index].identity
+            if let view = views[id] { followers[id] = positionLayers(index: row.index, view: view) }
+        }
+        for (id, carry) in carried {
+            if let index = newLookup[id] { followers[id] = positionLayers(index: index, view: carry.view) }
+        }
+        var layout = animations.layoutPosition(at: time)
+        if preservesMoveClock, !transition.isImmediate, let id = referenceID,
+           let old = oldSnapshot[id], let row = settledWindow.rows.first(where: { items[$0.index].identity == id }) {
+            let positions = rowPositions(row, old: old, view: views[id])
+            let heightOffset = followers[id, default: []].reduce(0) { $0 + animations.positionLayerValue($1, at: time) }
+            layout = animations.layoutPosition(from: positions.old - positions.new + oldReferenceLayers - heightOffset,
+                                               at: time, transition: transition)
+        }
+        for (id, layers) in followers {
+            animations.setPositionLayers(.row(id), layers + (layout.map { [$0] } ?? []))
+        }
         for (id, next) in plans {
             guard let carry = carried[id] else { continue }
             let oldY = carry.view.frame.minY
             // Translate without asking UIKit to infer bounds from a transformed frame.
             carry.view.layer.position.y += next - oldY
-            animations.transition(.row(id), .positionY, old: oldY, new: next, at: time, transition: transition, restarts: displacing) { [weak self, weak view = carry.view] in
-                guard let self, let view, carried[id]?.view === view, views[id] == nil else { return }
-                carried.removeValue(forKey: id); view.removeFromSuperview(); animations.unbind(.row(id))
-            }
+            if preservesMoveClock { continue }
+            animations.transition(.row(id), .positionY, old: oldY, new: next, at: time, transition: transition,
+                                  restarts: displacing || animations.positionLayersChanged(.row(id)))
+            retainCarry(id, view: carry.view, transition: transition)
         }
         for row in settledWindow.rows {
             let id = items[row.index].identity, owner = AnimationOwner.row(id)
             if let old = oldSnapshot[id] {
-                let oldY = (target != nil || displaces) ? oldBase + old.y + coordinateMap : oldBase + old.y - oldOffset
-                let newY = (target != nil || displaces) ? newBase + row.y : newBase + row.y - engine.offset
-                let oldPlacement = views[id]?.placementOffset(size: .init(width: oldViewport.contentWidth, height: old.height)) ?? .zero
-                let newPlacement = views[id]?.placementOffset(size: .init(width: viewport.contentWidth, height: row.height)) ?? .zero
-                animations.transition(owner, .positionY, old: oldY + oldPlacement.y, new: newY + newPlacement.y, at: time, transition: transition)
-                animations.transition(owner, .positionX, old: oldViewport.insets.left + oldPlacement.x, new: viewport.insets.left + newPlacement.x, at: time, transition: transition)
-                animations.transition(owner, .width, old: oldViewport.contentWidth, new: viewport.contentWidth, at: time, transition: transition)
-                animations.transition(owner, .height, old: old.height, new: row.height, at: time, transition: transition)
+                if !preservesMoveClock {
+                    let positions = rowPositions(row, old: old, view: views[id])
+                    animations.transition(owner, .positionY, old: positions.old, new: positions.new, at: time, transition: transition,
+                                          restarts: animations.positionLayersChanged(owner))
+                }
             } else if oldLookup[id] == nil, animatesInsertions, !(isCarousel && destinationNew) {
                 animations.replace(owner, .opacity, from: 0, to: 1, at: time, transition: transition)
             } else if !isCarousel, oldLookup[id] != nil, !transition.isImmediate, mutatesRows {
                 let newY = newBase + row.y
                 let inferred = incomingPlans[id] ?? (row.index < anchor ? engine.offset - preloadMargin - row.height : engine.offset + viewport.height + preloadMargin)
-                animations.replace(owner, .positionY, from: inferred - newY, to: 0, at: time, transition: transition)
+                animations.replace(owner, .positionY, from: inferred - newY - animations.positionLayerValue(owner, at: time), to: 0, at: time, transition: transition)
             }
         }
-        animations.retime(at: time, transition: transition)
         CATransaction.commit()
         sweepPreparations(force: newItems != nil || sizeChanged)
         renderAttachments()
         clearPendingDisplayViews(keeping: Set(views.values.map(ObjectIdentifier.init)))
+    }
+
+    private func retainCarry(_ identity: String, view: ListRowView, transition: ListTransition) {
+        nextCarryGeneration &+= 1
+        let generation = nextCarryGeneration
+        carryGenerations[identity] = generation
+        if transition.isImmediate {
+            finishCarry(identity, view: view, generation: generation, deadline: animations.now)
+            return
+        }
+        // Read the running clocks after the transaction receives its begin
+        // time. Carry lifetime does not require replacing a position track.
+        DispatchQueue.main.async { [weak self, weak view] in
+            guard let self, let view, carryGenerations[identity] == generation else { return }
+            let deadline = max(animations.now + transition.duration * animations.durationScale,
+                               animations.retentionDeadline(.row(identity)))
+            finishCarry(identity, view: view, generation: generation, deadline: deadline)
+        }
+    }
+
+    private func finishCarry(_ identity: String, view: ListRowView, generation: UInt64, deadline: Double) {
+        guard carryGenerations[identity] == generation else { return }
+        guard carried[identity]?.view === view, views[identity] == nil else {
+            carryGenerations.removeValue(forKey: identity); return
+        }
+        let remaining = deadline - animations.now
+        if remaining > 1e-6 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + remaining) { [weak self, weak view] in
+                guard let self, let view else { return }
+                finishCarry(identity, view: view, generation: generation, deadline: deadline)
+            }
+        } else {
+            carryGenerations.removeValue(forKey: identity); carried.removeValue(forKey: identity)
+            view.removeFromSuperview(); animations.unbind(.row(identity))
+        }
     }
 
     /// A pass that resumes the target without its call (a layout, say) still
@@ -663,6 +757,7 @@ public final class UltraListView: UltraScrollView {
                 let id = items[row.index].identity
                 guard let view = views[id] else { continue }
                 carried.removeValue(forKey: id)
+                carryGenerations.removeValue(forKey: id)
                 if view.superview !== container { container.addSubview(view) }
                 view.place(in: .init(x: viewport.insets.left, y: row.y - settledWindow.minY, width: viewport.contentWidth, height: row.height))
                 view.onContentDidChange = { [weak self] animated in self?.markDirty(id, animated: animated) }

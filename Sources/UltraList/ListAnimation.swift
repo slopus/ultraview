@@ -135,22 +135,63 @@ public struct AnimationTrack: Sendable, Equatable {
         let progress = transition.curve.value(at: (time - startTime) / transition.duration, duration: transition.duration / transition.durationFactor)
         return from + (to - from) * progress
     }
+    func residual(multipliedBy coefficient: Double) -> Self {
+        .init(generation: generation, from: (from - to) * coefficient, to: 0,
+              startTime: startTime, transition: transition)
+    }
 }
 
 /// Each property is replaced independently; completion always compares generations.
 public struct ListAnimationModel: Sendable {
+    enum PositionSource: Sendable, Hashable {
+        case height(String), layout
+    }
     public struct Key: Sendable, Hashable {
         public var owner: AnimationOwner
         public var property: AnimatedProperty
+        var positionSource: PositionSource?
         public init(_ owner: AnimationOwner, _ property: AnimatedProperty) { self.owner = owner; self.property = property }
+        init(_ owner: AnimationOwner, source: PositionSource) {
+            self.owner = owner; property = .positionY; positionSource = source
+        }
+        var animationKey: String {
+            switch positionSource {
+            case .height(let identity): "ultraview.list.sizePosition.\(identity)"
+            case .layout: "ultraview.list.sizeLayout"
+            case nil: "ultraview.list.\(property.rawValue)"
+            }
+        }
     }
     public private(set) var tracks: [Key: AnimationTrack] = [:]
     private var stored: [Key: Double] = [:]
     public private(set) var generation: UInt64 = 0
     public init() {}
     public func value(_ owner: AnimationOwner, _ property: AnimatedProperty, at time: Double) -> Double {
+        baseValue(owner, property, at: time) + (property == .positionY ? positionLayerValue(owner, at: time) : 0)
+    }
+    func baseValue(_ owner: AnimationOwner, _ property: AnimatedProperty, at time: Double) -> Double {
         let key = Key(owner, property)
         return tracks[key]?.value(at: time) ?? stored[key] ?? (property == .opacity ? 1 : 0)
+    }
+    func positionLayerValue(_ owner: AnimationOwner, at time: Double) -> Double {
+        tracks.reduce(0) { value, entry in
+            value + (entry.key.owner == owner && entry.key.positionSource != nil ? entry.value.value(at: time) : 0)
+        }
+    }
+    @discardableResult
+    mutating func setPositionLayer(_ owner: AnimationOwner, source: PositionSource, track template: AnimationTrack) -> AnimationTrack {
+        let key = Key(owner, source: source)
+        if let current = tracks[key], current.from == template.from, current.to == template.to,
+           current.startTime == template.startTime, current.transition == template.transition { return current }
+        generation += 1
+        var track = template; track.generation = generation
+        tracks[key] = track
+        return track
+    }
+    mutating func removePositionLayers(_ owner: AnimationOwner, except sources: Set<PositionSource>) -> [Key] {
+        let keys = tracks.keys.filter { $0.owner == owner && $0.positionSource.map { !sources.contains($0) } == true }
+        for key in keys { tracks.removeValue(forKey: key) }
+        return keys
     }
     @discardableResult
     public mutating func replace(_ owner: AnimationOwner, _ property: AnimatedProperty, from: Double, to: Double, at time: Double, transition: ListTransition) -> AnimationTrack? {
@@ -177,7 +218,7 @@ public struct ListAnimationModel: Sendable {
                 tracks[key] = moved; return moved
             }
         }
-        let current = resume ?? value(owner, property, at: time)
+        let current = resume ?? baseValue(owner, property, at: time)
         return replace(owner, property, from: property.additive ? old + current - new : (stored[Key(owner, property)] == nil ? old : current), to: property.additive ? 0 : new, at: time, transition: transition)
     }
     /// Once a pass has started a track (one newer than generation `pass`), restarts every older track still in flight
@@ -188,7 +229,7 @@ public struct ListAnimationModel: Sendable {
         guard !transition.isImmediate, tracks.values.contains(where: { $0.generation > pass }) else { return [] }
         var restarted: [(Key, AnimationTrack)] = []
         for (key, track) in tracks.sorted(by: { $0.value.generation < $1.value.generation })
-        where track.generation <= pass && time < track.deadline && include(key) {
+        where key.positionSource == nil && track.generation <= pass && time < track.deadline && include(key) {
             let current = resume(key) ?? track.value(at: time)
             if let next = replace(key.owner, key.property, from: current, to: track.to, at: time, transition: transition) { restarted.append((key, next)) }
         }

@@ -597,11 +597,32 @@ ticks is the physics' own, and the `maximumAdditionalRows: 64` budget, which
 `rebalanceIn_keeps` does not need (it bounds new rows, never removes loaded
 ones).
 
-## Independent size and position motion (for the list's next change)
+## Independent size and position motion after `55e05d9`
 
 `Proofs/UltraProofs/List/Layers.lean` states what keeping a size motion's
-timing through a later move pass requires; the Swift does not do this yet
-(at `8d425b6` retiming puts both on the pass's timing, `fixed_pass_sync`).
+timing through a later move pass requires. The follow-up after `55e05d9`
+replaces the controller's whole-pass retiming with independent size followers.
+The older `fixed_pass_sync` model describes the earlier retiming policy.
+`ListAnimationModel.retime` remains as a legacy helper for ordinary property
+keys; it excludes the internal follower keys. The controller no longer calls it.
+
+| Model | Swift |
+| --- | --- |
+| one term per timing in `superpose` | `ListAnimationModel.Key.positionSource`, `setPositionLayer`, and the sum in `value` (ListAnimation.swift:146-195) |
+| the height and follower group in `layered_touches` | `AnimationTrack.residual(multipliedBy:)` copies the size track's start and transition, with its residual scaled by the position coefficient (ListAnimation.swift:138) |
+| the follower's independent timing | `AnimationController.heightMotions`, `setPositionLayers`, and full-key `install` copy the source's actual layer origin; completion compares that key's generation (AnimationController.swift:131, :139, :262, :278) |
+| each group's start/end relation in `superpose` | `SizePositionGeometry.coefficient`: preceding heights, the anchor's common translation, and the row's own placement offset; `applyChanges` establishes all heights before followers (SizePositionGeometry.swift:8, UltraListView.swift:539-583) |
+| the move group in `layered_touches` | `preservesMoveClock` leaves an own move running during a size-only pass. Structural passes resume from the captured position minus the new followers; an unchanged effective own displacement retains its clock too (UltraListView.swift:529, :590, :598; AnimationController.swift:44, :162) |
+
+Position and size resumes use the same captured presentation frame. A size
+follower's captured contribution is its source's presented height residual
+times its coefficient; other common terms use the capture's time. Before a
+view has a presentation layer, capture uses its existing model tracks and
+bounds, so a new size follower is still removed from the own-move resume. Carry
+retention uses a separate generation and deadline (`retainCarry`, `finishCarry`,
+UltraListView.swift:617, :635), so holding an outgoing row does not require
+restarting its position clock. These controller and UIKit choices are tested,
+not established by `superpose`.
 
 - `superpose`: terms of a linear relation split into groups, each on one
   timing and each keeping its share at start and end, keep the relation at
@@ -640,6 +661,17 @@ timing through a later move pass requires; the Swift does not do this yet
   most `(half - lo)(hi - half) / (hi - lo)`, at the kink: 25 points for 50 →
   150 in a 200-point viewport. Rows still touch; this is the path the
   window takes, not a gap.
+
+`LayeredAnimationTests` checks superposition with two size curves, move retargeting,
+unchanged generations and stale completions on Linux. `SizePositionGeometryTests`
+checks anchor and pin coefficients and adjacent-row relations. The simulator
+matrix covers Resize→Move, Move→Resize, same-row resize retargeting, Insert→Resize,
+the growing row itself moving, two independent sizes, a resize below the
+moved range, and Insert→(Move + Resize) where unrelated rows must retain the
+insertion's clock, interrupted at 0, 0.25, 0.5 and 0.75 seconds.
+The proofs assume that each group's endpoint relation holds; they do not prove
+the Swift's choice of anchor, pinned-boundary secant, remaining common layout
+offset, UIKit playback or generation callbacks.
 
 ## Pending scroll targets and readiness holds
 

@@ -70,6 +70,9 @@ can apply; a newer complete collection supersedes a pending one. The list-level
 `defaultTransition` starts at `.easeInOut(0.3)`. Per-update transitions override
 it, including `.none`, `.init(duration:curve:)` and `.spring(_:damping:)`.
 Position, size and opacity compile to `CABasicAnimation` or `CASpringAnimation`.
+Each row's height keeps its own clock. Other rows follow that height through
+separate additive position tracks, while insertions and moves keep their own
+position tracks. A later Send or move preserves an unchanged height transition.
 Display callbacks do not step row mutation geometry. Rows exposed by an inset
 change enter at their final frames and share the viewport's keyboard transition.
 
