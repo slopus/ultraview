@@ -995,9 +995,17 @@ assumes that is the value at `t0`. Not covered:
   animates over the pass's remaining duration while the row's height is
   still. `join_jump`: at the join the content shows `s + (T - s) p`, a jump
   of `(T - s) p` from the snapshot `s`; `join_exact`: a start of
-  `(s - T p) / (1 - p)` would show `s` there (it can lie outside `[s, T]`
-  as `p` nears 1). Only the late path (pre-render timeout, a row not live)
-  takes this branch;
+  `(s - T p) / (1 - p)` would show `s` there. Only the late path (pre-render
+  timeout, a row not live) takes this branch. On the planned fix:
+  `joinStart_beyond` and `joinStart_inside_iff` show that start always lies
+  beyond `s`, away from `T`, and inside `[s, T]` only when `p = 0` or
+  `s = T`; so clamping it to `[s, T]` always gives `s`
+  (`clamped_is_snapshot`) and the same jump as today (`clamped_jump`).
+  Unclamped, it shows the row's remaining progress rescaled
+  (`join_remap`), which stays within `[s, T]` from the join on for any
+  curve that moves forward without overshooting (`join_within`); a spring's
+  overshoot past its end is magnified by `1 / (1 - p)` (`clamp_sample`: 25
+  points past at `p = 0.9` where the row is 2.5 past);
 - in `shift`, a child whose parent is unmatched: positions carry only
   within a matched parent (NodeTransitionAnimator.swift:347-352), so its
   position lands at the new value while the row still moves, outside

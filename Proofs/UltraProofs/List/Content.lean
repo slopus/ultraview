@@ -32,7 +32,14 @@ retimings.
   row's change.
 * `join_jump`, `join_exact`: content joining a running animation at
   progress `p` from its snapshot jumps by `(T - s) p`; starting from
-  `(s - T p) / (1 - p)` it is continuous.
+  `(s - T p) / (1 - p)` it is continuous. `joinStart_beyond`,
+  `joinStart_inside_iff`, `clamped_is_snapshot`, `clamped_jump`: that start
+  always lies beyond `s`, away from `T`, and inside `[s, T]` only when
+  `p = 0` or `s = T`, so clamping it to `[s, T]` gives `s` and the full
+  jump.
+  `join_remap`, `join_within`: unclamped, it shows the remaining progress
+  rescaled, within `[s, T]` for a forward, non-overshooting curve; an
+  overshoot is magnified by `1 / (1 - p)` (`clamp_sample`).
 * `alone_drifts`: retiming the row alone (an inner animation left on the
   old timing) changes the difference mid-flight.
 -/
@@ -201,6 +208,129 @@ theorem join_exact (C : Curves) (tr : Track) (s time : Rat) (hp : tr.progress C 
   have hne : 1 - p ≠ 0 := by grind
   have e : (s - tr.dst * p) / (1 - p) * (1 - p) = s - tr.dst * p := Rat.div_mul_cancel hne
   grind
+
+/-! ### Clamping the corrected start
+
+The corrected start `(s - T p) / (1 - p)` always lies on the far side of `s`
+from `T`, so clamping it to the range between `s` and `T` always gives `s`:
+the clamp is the snapshot start, with the full jump. What the corrected
+start shows from the join on is `s + (T - s) (P - p) / (1 - p)` at progress
+`P`: the row's remaining progress rescaled, within `[s, T]` for a curve that
+moves forward without overshooting; an overshoot past the end is magnified
+by `1 / (1 - p)`. -/
+
+def joinStart (s T p : Rat) : Rat := (s - T * p) / (1 - p)
+
+def clampTo (lo hi x : Rat) : Rat := max lo (min hi x)
+
+/-- **The corrected start lies beyond the snapshot**, away from the target. -/
+theorem joinStart_beyond {s T p : Rat} (hp0 : 0 ≤ p) (hp1 : p < 1) :
+    (s ≤ T → joinStart s T p ≤ s) ∧ (T ≤ s → s ≤ joinStart s T p) := by
+  have hq : 0 < 1 - p := by grind
+  have e : joinStart s T p * (1 - p) = s - T * p := Rat.div_mul_cancel (by grind)
+  have tp : ∀ {a b : Rat}, a ≤ b → a * p ≤ b * p := fun h => by
+    have := Rat.mul_le_mul_of_nonneg_left h hp0; grind
+  refine ⟨fun h => ?_, fun h => ?_⟩
+  · refine Rat.not_lt.mp fun hlt => ?_
+    have := Rat.mul_lt_mul_of_pos_right hlt hq
+    have := tp h; grind
+  · refine Rat.not_lt.mp fun hlt => ?_
+    have := Rat.mul_lt_mul_of_pos_right hlt hq
+    have := tp h; grind
+
+/-- **The corrected start is inside `[s, T]` only when there is nothing to
+correct**: at the start of the animation (`p = 0`) or with nothing to move
+(`s = T`). So a clamp that keeps it whenever it is inside never keeps it
+otherwise. -/
+theorem joinStart_inside_iff {s T p : Rat} (hp0 : 0 ≤ p) (hp1 : p < 1) :
+    (min s T ≤ joinStart s T p ∧ joinStart s T p ≤ max s T) ↔ (p = 0 ∨ s = T) := by
+  have hq : 0 < 1 - p := by grind
+  have e : joinStart s T p * (1 - p) = s - T * p := Rat.div_mul_cancel (by grind)
+  obtain ⟨h1, h2⟩ := joinStart_beyond (s := s) (T := T) hp0 hp1
+  constructor
+  · intro ⟨lo, hi⟩
+    have hs : joinStart s T p = s := by
+      simp only [Rat.min_def, Rat.max_def] at lo hi
+      by_cases h : s ≤ T
+      · have := h1 h; simp only [h, ite_true] at lo; grind
+      · have := h2 (by grind); simp only [h, ite_false] at hi; grind
+    rw [hs] at e
+    have : p * (T - s) = 0 := by grind
+    rcases Rat.mul_eq_zero.mp this with h | h
+    · exact Or.inl h
+    · exact Or.inr (by grind)
+  · intro h
+    have hs : joinStart s T p = s := by
+      rcases h with rfl | rfl
+      · simp only [joinStart]; grind
+      · have := Rat.div_mul_cancel (a := s - s * p) (show 1 - p ≠ 0 by grind)
+        simp only [joinStart]
+        have e2 : s - s * p = s * (1 - p) := by grind
+        rw [e2, Rat.mul_div_cancel (show 1 - p ≠ 0 by grind)] at *
+    rw [hs]; simp only [Rat.min_def, Rat.max_def]; constructor <;> split <;> grind
+
+/-- **Clamped, the corrected start is the snapshot**: for any progress short
+of 1 at the join. -/
+theorem clamped_is_snapshot {s T p : Rat} (hp0 : 0 ≤ p) (hp1 : p < 1) :
+    clampTo (min s T) (max s T) (joinStart s T p) = s := by
+  obtain ⟨h1, h2⟩ := joinStart_beyond (s := s) (T := T) hp0 hp1
+  simp only [clampTo, Rat.min_def, Rat.max_def]
+  by_cases h : s ≤ T
+  · have := h1 h; repeat (first | split | grind)
+  · have := h2 (by grind); repeat (first | split | grind)
+
+/-- **So the clamped join jumps by the whole `(T - s) p`**, as the snapshot
+start does. -/
+theorem clamped_jump (C : Curves) (tr : Track) (s time : Rat) (hp0 : 0 ≤ tr.progress C time)
+    (hp1 : tr.progress C time < 1) :
+    ({ tr with src := clampTo (min s tr.dst) (max s tr.dst) (joinStart s tr.dst (tr.progress C time)) } :
+      Track).value C time - s = (tr.dst - s) * tr.progress C time := by
+  rw [clamped_is_snapshot hp0 hp1]; exact join_jump C tr s time
+
+/-- **The corrected start shows the remaining progress rescaled**: at any
+time it is `s + (T - s) (P - p) / (1 - p)`, with `p` the progress at the join
+and `P` the progress then. -/
+theorem join_remap (C : Curves) (tr : Track) (s join time : Rat) (hp : tr.progress C join ≠ 1) :
+    ({ tr with src := joinStart s tr.dst (tr.progress C join) } : Track).value C time =
+      s + (tr.dst - s) * (tr.progress C time - tr.progress C join) / (1 - tr.progress C join) := by
+  have hq : ({ tr with src := joinStart s tr.dst (tr.progress C join) } : Track).progress C time =
+      tr.progress C time := progress_timing C rfl rfl time
+  unfold Track.value; rw [hq]; simp only [joinStart]
+  have : 1 - tr.progress C join ≠ 0 := by grind
+  grind
+
+/-- **From the join on, it stays between the snapshot and the target** while
+the progress moves forward and doesn't overshoot. -/
+theorem join_within {s T p P : Rat} (hp1 : p < 1) (hpP : p ≤ P) (hP1 : P ≤ 1) :
+    min s T ≤ s + (T - s) * (P - p) / (1 - p) ∧ s + (T - s) * (P - p) / (1 - p) ≤ max s T := by
+  have hq : 0 < 1 - p := by grind
+  generalize hr : (P - p) / (1 - p) = r
+  have e : r * (1 - p) = P - p := by rw [← hr]; exact Rat.div_mul_cancel (by grind)
+  have r0 : 0 ≤ r := Rat.not_lt.mp fun h => by
+    have := Rat.mul_lt_mul_of_pos_right h hq; grind
+  have r1 : r ≤ 1 := Rat.not_lt.mp fun h => by
+    have := Rat.mul_lt_mul_of_pos_right h hq; grind
+  have hm : (T - s) * (P - p) / (1 - p) = (T - s) * r := by rw [← hr]; grind
+  rw [hm]
+  simp only [Rat.min_def, Rat.max_def]
+  by_cases h : s ≤ T
+  · have a := Rat.mul_le_mul_of_nonneg_left r0 (show 0 ≤ T - s by grind)
+    have b := Rat.mul_le_mul_of_nonneg_left r1 (show 0 ≤ T - s by grind)
+    constructor <;> split <;> grind
+  · have a := Rat.mul_le_mul_of_nonneg_left r0 (show 0 ≤ s - T by grind)
+    have b := Rat.mul_le_mul_of_nonneg_left r1 (show 0 ≤ s - T by grind)
+    constructor <;> split <;> grind
+
+/-- The sample: a bubble's bottom 90 → 140 joining at progress 0.5 corrects
+to a start of 40, outside `[90, 140]`; clamped it is 90 and shows 115 at the
+join. Joining at 0.9 under a spring 5% past its end, the corrected start
+shows 165, 25 past the target, where the row (100 → 150) is 2.5 past. -/
+theorem clamp_sample :
+    joinStart 90 140 (1 / 2) = 40 ∧ clampTo 90 140 (joinStart 90 140 (1 / 2)) = 90 ∧
+      (90 : Rat) + (140 - 90) * (21 / 20 - 9 / 10) / (1 - 9 / 10) = 165 ∧
+      (100 : Rat) + (150 - 100) * (21 / 20) = 305 / 2 := by
+  refine ⟨by unfold joinStart; decide +kernel, by unfold clampTo joinStart; decide +kernel,
+    by decide +kernel, by decide +kernel⟩
 
 /-- The sample: a row 100 → 150 over a second, a bubble 10 above its edge.
 At 0.5 s an immediate pass grows the row's destination to 170. Moving both

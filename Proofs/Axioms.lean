@@ -233,6 +233,13 @@ open UltraProofs
 #print axioms ListContent.join_jump
 #print axioms ListContent.join_exact
 #print axioms ListContent.shift_sample
+#print axioms ListContent.joinStart_beyond
+#print axioms ListContent.joinStart_inside_iff
+#print axioms ListContent.clamped_is_snapshot
+#print axioms ListContent.clamped_jump
+#print axioms ListContent.join_remap
+#print axioms ListContent.join_within
+#print axioms ListContent.clamp_sample
 #print axioms ListLayers.follower_exact
 #print axioms ListLayers.prefix_seam
 #print axioms ListLayers.prefix_anchor
