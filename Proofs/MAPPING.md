@@ -693,6 +693,48 @@ change; they hold for the Swift once its writes realize those tops
 (carousel strips, departure blocks) are exact either way.
 The setter hypothesis is the observed behavior, not documented API.
 
+## Swipe actions at `76eab99`
+
+`Proofs/UltraProofs/List/Swipe.lean` models the pure decisions in
+SwipeReveal.swift, which last changed at `76eab99`, and how the controller
+(UIKit/SwipeActions.swift at `0e5c7b6`) drives the registry. Distances are
+rationals.
+
+| Model (`Proofs/UltraProofs/List/Swipe.lean`) | Swift |
+| --- | --- |
+| `Axis`, `dominant`, `decide` | `GestureAxis`, `AxisLock.decide(dx:dy:slop:)` (SwipeReveal.swift:15-18) |
+| `step` with `Op.update`, `Op.force` | `AxisLock.update` (:20-23), `force` (:25-30) |
+| `release`, `projection` | `SwipeRelease.decide` (:104-108), `projection` (:101) |
+| `threshold_above_half` | `SwipeRevealLayout.fullSwipeThreshold` (:54-58) |
+| `begin`, `settle`, `remove` | `SwipeRegistry` (:196-209) |
+| `C`, `cstep` | the controller's `registry`, the rows with a reveal, and the rows animating closed: `begin` settles the returned row closed (SwipeActions.swift:104, :483); `settle` (:208-228); a closing animation's `finish`; `remove` in `release`, `settle` and `reconcile` (:193, :209, :387-403) |
+
+- `lock_keeps`, `lock_run_keeps`: once decided, every later `update` and
+  `force` returns the same axis, for any translation. `run_none_iff`: from
+  no axis, `update` returns nil exactly while every sample stays within the
+  slop disc. `run_first`: the first sample past the slop decides, by its
+  dominant axis; `dominant_tie`: a tie goes vertical. `decide_symm_x`,
+  `decide_symm_y`: mirroring either component keeps the decision.
+- `release_monotone`: more reveal and more opening velocity never give a
+  lower outcome; it holds for any threshold, without the threshold being
+  past half the open width. `release_full_iff`: a full swipe exactly when a
+  threshold is present and reached. `release_open_at_rest`: at zero
+  velocity a row opens exactly from half the open width up to the
+  threshold. `threshold_above_half`: the layout's threshold
+  `max(openWidth + 48, rowWidth * 0.55)` is past half the open width.
+- `begin_active`, `begin_closes`, `settle_keeps_open`, `settle_keeps_other`,
+  `remove_keeps_other`: the registry's contract.
+- `inv_run`, `one_open`: every row with a nonzero reveal is the active row
+  or one animating closed, after any sequence of begins, settles, finished
+  closings and removals in which the caller closes what `begin` returns and
+  settles open only the active row (`RunOk`); so at most one row is revealed
+  and not closing.
+
+`RunOk` is the controller's: `release` settles the pan's candidate, which
+its `.began` made active, and a removal in between makes `release` return
+early. Gesture delivery, the reveal's rubber band and spring
+(`displayed`, `SwipeMotion`) and the buttons' spans are outside the model.
+
 ## Theorems
 
 **Correctness**
