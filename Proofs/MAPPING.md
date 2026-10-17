@@ -434,6 +434,87 @@ purge on the same serial queue), and the retention policy
 (`retainsPreparation`: ±80 rows, the pinned row, the pending target), which
 decides only when a sweep runs.
 
+## Momentum and the keyboard at `0e5c7b6`
+
+`Proofs/UltraProofs/List/Momentum.lean` models how a release, the physics
+engine's flight and keyboard (inset) changes interleave, with the chat
+screen's `followsComposer` policy that decides compensation. Events come in
+any order.
+
+| Model (`Proofs/UltraProofs/List/Momentum.lean`) | Swift |
+| --- | --- |
+| `Flight`, `.offset`, `.velocity`, `.shiftBy` | `ScrollFlight` (ScrollCore.swift:60-70); `FlightState.shift(by:edges:)` (:89) moves only `coordinateShift` |
+| `Baker` (structure fields: the first sample is the axis' offset and velocity) | `ScrollTrajectory(baking:)` with `FlightState(core:time:)` (ScrollCore.swift:79) |
+| `St.now` | `engine.sync()` (ScrollEngine.swift:144): the flight's offset now |
+| `Ev.touch` | `pan.touchDown` (ScrollEngine.swift:113) catching the flight, and `didTouchDown` clearing `holdsPinnedRow` (UltraListView.swift:144) |
+| `Ev.dragBegin` | `handleDragBegin` (UltraListView.swift:196) and the chat's `willBeginDragging` (ListChatController.swift:82-87) |
+| `Ev.drag` | a drag sample, and the chat's `onUserScrollDelta` (ListChatController.swift:88-93) |
+| `Ev.release` | `panned`/`receive` `.ended` (ScrollEngine.swift:285, :308): `endDrag` hands the release decision's velocity to `axis.release`, then `startMotion` bakes; the chat's `didEndDragging` (ListChatController.swift:94-97) |
+| `Ev.keyboard`, `keyboardFollows`, `kbShift` | `keyboardWillChange` (ListChatController.swift:172-193) and `applyComposerInset`'s `compensatesInsetChange: !isTracking && followsComposer` (:161), into `updateViewportInsets` (UltraListView.swift:558-594): the held-pin boundary, else `cheapFixed`, else 0, then `engine.shift(by:)` (:590) |
+| `Ev.rebake` | the tick's `rebake` (ScrollEngine.swift:253), re-baked from the axis reseeded by `beginTick` |
+| `Ev.land`, `Ev.pinTarget` | the flight completing; `applyChanges(scrollTo:)` to the pinned row setting `holdsPinnedRow` (UltraListView.swift:307) |
+
+- `release_hands_velocity`, `keyboard_keeps_velocity`, `run_keeps_velocity`:
+  the flight starts with the release decision's velocity, and any number of
+  keyboard changes translate it without changing its velocity at any time.
+  The keyboard path calls `engine.shift(by:)` only, never `setOffset` or
+  `halt`. `rebake_continuous`: re-baking keeps the offset and the velocity at
+  the splice. `edges_keep_finiteness`: an inset change keeps which edges are
+  finite, so `setEdges` never takes its edge-discovery rebake for one.
+- `no_write_unless_following`, `tracking_never_writes`: a keyboard change
+  writes neither the offset nor the flight unless the pinned row is held or
+  the chat compensates, and never while the finger is down.
+- `follows_rides_edge`: compensated content at or past the top edge `l`
+  ends exactly as far from the new edge `l - mv` as it was from `l`. With
+  `ListPass.lockstep_iff`, the viewport track then keeps it at a fixed
+  distance from the composer at every frame when the list and the composer
+  share the keyboard's timing.
+- `run_unpinned`: after a touch, only a scroll target to the pinned row sets
+  `holdsPinnedRow`, so the held-pin branch never re-pins content the user
+  moved. `dragged_off_never_moved`: once the finger is up, with no held pin
+  and the chat not following, no keyboard change moves the content, as long
+  as it reads off the edge whenever the keyboard grows.
+
+The release decision itself (`ReleaseDecision.release`: velocity estimate,
+the 250 pt/s threshold, the multiplier streak) is an input. The client hook
+`shouldStopScrolling` (UltraScrollView.swift:24) zeroes a release when it
+returns true; the chat screen does not set it, and the model assumes it is
+unset. Not covered: the trajectory physics (deceleration, bounce, the
+rubber band), the edge-reach `rebakePending` test (a rebake may come at any
+tick in the model), braking on a touch, the UIKit engine's native
+deceleration (`PlatformEngine.shift` moves `bounds` without
+`setContentOffset` for the same reason, which is the system's to keep), and
+the overscroll an uncompensated change leaves for the engine to return
+(`Insets.uncompensated_keeps_offset`).
+
+## Engine callbacks during a pass at `0e5c7b6`
+
+`Proofs/UltraProofs/List/Reentry.lean` models the guard `0592bc8` added to
+`onFlightChanged` (UltraListView.swift:140).
+
+| Model (`Proofs/UltraProofs/List/Reentry.lean`) | Swift |
+| --- | --- |
+| `L.items`, `L.reads` | `items` and the indices `renderAttachments` reads through `settledWindow` and `runs` |
+| `Micro.swap` | `items = incoming` (UltraListView.swift:292) |
+| `Micro.rebuild` | the window and runs rebuilt for the new items (the empty branch's `runs.removeAll()` at :336, `resolveAttachments`) |
+| `Micro.callback`, `guarded` | `onFlightChanged` from `halt`, `shift` or `setEdges` inside a pass: `guard !passing else { deferredAttachmentRender = true; return }` |
+| `pass` | `passing = true` (:251) to the `defer` that clears it and renders if deferred (:256-260) |
+| `unguarded` | the callback before `0592bc8`, rendering at once |
+
+- `guarded_pass_renders`: whatever the order of swaps, rebuilds and
+  callbacks, a guarded pass renders only after it ends, on its final state,
+  exactly when some callback ran: no callback observes a half-applied list,
+  and none is lost. `guarded_consistent`: every such render reads indices
+  inside the items when the pass ends rebuilt.
+- `unguarded_reads_outside`: the chaos crash. Emptying a 5-item list whose
+  window reads row 3, the empty branch halts the engine after the swap, and
+  the unguarded callback renders row 3 of no items.
+
+Not covered: the renders a pass makes itself (`handleScroll` and
+`updateViewportInsets` call `renderAttachments` after their rebuilds), the
+`handleScroll` the callback also starts (guarded by the same `passing`
+check), and the content of a render.
+
 ## Theorems
 
 **Correctness**
@@ -502,6 +583,13 @@ decides only when a sweep runs.
   `purge_never_frees_hosted`, `sweep_never_drops_hosted`: a prepared root has
   at most one live host at every step, a new host never meets an attached
   renderer, and neither cleanup touches a hosted root.
+- `ListMomentum.run_keeps_velocity`, `no_write_unless_following`,
+  `follows_rides_edge`, `dragged_off_never_moved`: keyboard changes never
+  alter a flight's velocity, write the offset only for content the chat
+  follows (which keeps its distance to the edge) or a held pinned row, and
+  never move content the user dragged off the edge.
+- `ListReentry.guarded_pass_renders`: no engine callback renders a
+  half-applied list, and a deferred render runs once the pass ends.
 
 **Optimality**
 

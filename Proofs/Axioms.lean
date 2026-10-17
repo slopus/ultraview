@@ -143,3 +143,16 @@ open UltraProofs
 #print axioms ListHosts.purge_never_frees_hosted
 #print axioms ListHosts.sweep_never_drops_hosted
 #print axioms ListHosts.one_host_always
+#print axioms ListMomentum.release_hands_velocity
+#print axioms ListMomentum.keyboard_keeps_velocity
+#print axioms ListMomentum.run_keeps_velocity
+#print axioms ListMomentum.rebake_continuous
+#print axioms ListMomentum.edges_keep_finiteness
+#print axioms ListMomentum.no_write_unless_following
+#print axioms ListMomentum.tracking_never_writes
+#print axioms ListMomentum.follows_rides_edge
+#print axioms ListMomentum.run_unpinned
+#print axioms ListMomentum.dragged_off_never_moved
+#print axioms ListReentry.guarded_pass_renders
+#print axioms ListReentry.guarded_consistent
+#print axioms ListReentry.unguarded_reads_outside
