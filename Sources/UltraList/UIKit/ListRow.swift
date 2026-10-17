@@ -31,6 +31,8 @@ public extension ListRow {
 open class ListRowView: UIView {
     public var onContentDidChange: ((Bool) -> Void)?
     public var onDisplayReady: (() -> Void)?
+    var readinessObserver: (() -> Void)?
+    func reportDisplayReady() { readinessObserver?(); onDisplayReady?() }
     open var isDisplayReady: Bool { true }
     public override init(frame: CGRect) { super.init(frame: frame); layer.anchorPoint = .zero }
     public convenience init() { self.init(frame: .zero) }

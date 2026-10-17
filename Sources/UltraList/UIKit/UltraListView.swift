@@ -75,9 +75,11 @@ public final class UltraListView: UltraScrollView {
     private var passOldIdentities: [String] = []
     private var passDiff = ItemDiff(old: [String](), new: [])
     private var pinnedIndex: Int?
+    let accessibilityCoordinator = ListAccessibility()
 
     public override init(engineMode: ScrollEngineMode = .keyframe) {
         super.init(engineMode: engineMode)
+        accessibilityCoordinator.list = self
         insertSubview(carousel, belowSubview: contentView)
         for view in [container, crossings, exits, attachmentsHost] { contentView.addSubview(view) }
         animations.referenceLayer = container.layer
@@ -100,6 +102,23 @@ public final class UltraListView: UltraScrollView {
         }
     }
     public override func updateEdges() {}
+    public override func accessibilityScroll(_ direction: UIAccessibilityScrollDirection) -> Bool {
+        let advance: Double
+        switch direction {
+        case .down, .next: advance = 1
+        case .up, .previous: advance = -1
+        default: return false
+        }
+        let page = viewport.visibleHeight
+        guard page > 0, !settledWindow.rows.isEmpty else { return false }
+        let sign = contentView.transform.d < 0 ? -1.0 : 1.0
+        let offset = declaredEdges.clamped(engine.offset + advance * sign * page)
+        guard abs(offset - engine.offset) > 0.5 else { return false }
+        engine.halt(); engine.setOffset(offset); handleScroll(offset)
+        accessibilityCoordinator.notify(.pageScrolled, nil)
+        return true
+    }
+    func index(forRowIdentity identity: String) -> Int? { identityIndices[identity] }
     public override func handleDragBegin() { holdsPinnedRow = false; super.handleDragBegin() }
     public func loadedItemView(at index: Int) -> ListRowView? {
         guard items.indices.contains(index) else { return nil }; return views[items[index].identity]
@@ -395,6 +414,7 @@ public final class UltraListView: UltraScrollView {
                 view.place(in: .init(x: viewport.insets.left, y: row.y - settledWindow.minY, width: viewport.contentWidth, height: row.height))
                 view.onContentDidChange = { [weak self] animated in self?.markDirty(id, animated: animated) }
                 animations.bind(.row(id), layer: view.layer)
+                view.readinessObserver = { [weak self] in self?.accessibilityCoordinator.reconcile() }
                 if !previous.range.contains(row.index) { animations.seed(.row(id), width: viewport.contentWidth, height: row.height) }
             }
             declaredEdges = settledWindow.edges(origin: origin, count: items.count, viewport: viewport, pinnedIndex: pinnedIndex)
@@ -435,9 +455,11 @@ public final class UltraListView: UltraScrollView {
         let viewportRect = CGRect(x: 0, y: 0, width: viewport.width, height: viewport.height)
         for row in settledWindow.rows {
             guard items.indices.contains(row.index), let view = views[items[row.index].identity], let rect = settledFrame(at: row.index) else { continue }
+            view.readinessObserver = { [weak self] in self?.accessibilityCoordinator.reconcile() }
             let intersection = viewportRect.intersection(rect)
             view.visibleRectUpdated(intersection.isNull || intersection.isEmpty ? nil : intersection.offsetBy(dx: -rect.minX, dy: -rect.minY))
         }
+        accessibilityCoordinator.reconcile()
         let settled = declaredEdges.clamped(engine.offset), top = origin - settled, bottom = top + settledWindow.height
         let newTop = !settledWindow.rows.isEmpty && settledWindow.range.lowerBound == 0 && top >= loadedEdgeMargin - 1e-6
         let newBottom = !settledWindow.rows.isEmpty && settledWindow.range.upperBound == items.count && bottom <= viewport.height - loadedEdgeMargin + 1e-6

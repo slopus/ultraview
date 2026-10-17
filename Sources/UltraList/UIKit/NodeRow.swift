@@ -57,24 +57,35 @@ public final class NodeRow: ListRow {
 @MainActor
 private final class NodeRowView: ListRowView {
     var row: NodeRow
-    private var host: NodeHostView?
-    override var isDisplayReady: Bool { host?.hasContent == true }
+    private var displayedHost: NodeHostView?
+    private var pendingHost: NodeHostView?
+    override var isDisplayReady: Bool { displayedHost != nil }
     init(row: NodeRow) { self.row = row; super.init(frame: .zero) }
     override func applyMeasurement(width: Double, height: Double, environment: RenderEnvironment) {
         guard let root = row.preparedNode(width: width, environment: environment) else { return }
-        if host?.rootNode !== root {
-            host?.removeFromSuperview()
+        if pendingHost?.rootNode !== root && displayedHost?.rootNode !== root {
+            pendingHost?.removeFromSuperview()
             let host = NodeHostView(rootNode: root)
-            var reported = false
             host.onCommit = { [weak self, weak host] in
-                guard host?.hasContent == true, !reported else { return }
-                reported = true; self?.onDisplayReady?()
+                guard let self, let host, pendingHost === host, host.hasContent else { return }
+                displayedHost?.removeFromSuperview()
+                displayedHost = host; pendingHost = nil
+                host.isHidden = false
+                reportDisplayReady()
             }
-            addSubview(host); self.host = host
+            host.isHidden = true
+            addSubview(host); pendingHost = host
             configureNodeRowHost(host, size: .init(width: width, height: height))
+        } else if displayedHost?.rootNode === root {
+            pendingHost?.removeFromSuperview(); pendingHost = nil
         }
-        host?.frame = .init(x: 0, y: 0, width: width, height: height)
+        for host in [displayedHost, pendingHost].compactMap({ $0 }) {
+            host.frame = .init(x: 0, y: 0, width: width, height: height)
+        }
     }
-    override func layoutSubviews() { super.layoutSubviews(); host?.frame = bounds }
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        displayedHost?.frame = bounds; pendingHost?.frame = bounds
+    }
 }
 #endif

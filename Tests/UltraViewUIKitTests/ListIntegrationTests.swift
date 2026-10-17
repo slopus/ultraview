@@ -15,7 +15,10 @@ private struct FixedRow: ListRow {
     var pinsToBottomEdge = false
     var inverted = false
     var onApply: (() -> Void)?
-    func makeView() -> ListRowView { FixedRowView() }
+    func makeView() -> ListRowView {
+        let view = FixedRowView(); view.isAccessibilityElement = true; view.accessibilityLabel = identity
+        return view
+    }
     func apply(to view: ListRowView, transition: ListTransition) {
         (view as? FixedRowView)?.height = height
         view.transform = inverted ? .init(scaleX: 1, y: -1) : .identity
@@ -161,6 +164,93 @@ private actor MeasurementGate: NodeRowMeasuring {
         #expect(list.settledFrame(at: 0)!.height == 120)
         #expect(list.presentedFrame(at: 0)!.height < 52)
         #expect(abs(list.presentedFrame(at: 1)!.minY - list.presentedFrame(at: 0)!.maxY) < 1)
+    }
+    @Test func revisedNodeRowsKeepReadyContentUntilTheNewestCommit() async throws {
+        func row(_ revision: UInt64) -> NodeRow {
+            NodeRow(identity: "stream", revision: revision) {
+                var style = Style(); style.height = 60; style.backgroundColor = .white
+                return UltraNode(style: style, children: [UltraTextNode("Revision \(revision)")])
+            }
+        }
+        let environment = RenderEnvironment(), original = row(0)
+        _ = await original.measure(width: 320, environment: environment)
+        let view = original.makeView()
+        view.frame = .init(x: 0, y: 0, width: 320, height: 60)
+        let window = makeWindow(); window.addSubview(view); window.isHidden = false
+        defer { window.isHidden = true }
+        view.applyMeasurement(width: 320, height: 60, environment: environment)
+        for _ in 0..<100 {
+            if view.isDisplayReady { break }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        let shown = try #require(view.subviews.first as? NodeHostView)
+        #expect(view.isDisplayReady && !shown.isHidden)
+        let replacement = row(1), newest = row(2)
+        _ = await replacement.measure(width: 320, environment: environment)
+        _ = await newest.measure(width: 320, environment: environment)
+        replacement.apply(to: view, transition: .easeInOut(0.3))
+        view.applyMeasurement(width: 320, height: 60, environment: environment)
+        let superseded = try #require(view.subviews.last as? NodeHostView)
+        #expect(shown.superview === view && !shown.isHidden)
+        #expect(superseded !== shown && superseded.isHidden)
+        newest.apply(to: view, transition: .easeInOut(0.3))
+        view.applyMeasurement(width: 320, height: 60, environment: environment)
+        let candidate = try #require(view.subviews.last as? NodeHostView)
+        #expect(superseded.superview == nil)
+        #expect(shown.superview === view && !shown.isHidden && view.isDisplayReady)
+        for _ in 0..<100 {
+            if shown.superview == nil { break }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(shown.superview == nil)
+        #expect(view.subviews.count == 1 && candidate.superview === view)
+        #expect(!candidate.isHidden && candidate.hasContent)
+    }
+    @Test(arguments: ScrollEngineMode.allCases) func accessibilityPagesUseTheVisibleHeightAndClamp(mode: ScrollEngineMode) throws {
+        let list = list(mode, count: 100)
+        list.applyChanges(newInsets: .init(top: 20, bottom: 30))
+        let before = try #require(list.settledFrame(at: 10)).minY
+        #expect(!list.accessibilityScroll(.previous))
+        #expect(!list.accessibilityScroll(.left))
+        #expect(list.accessibilityScroll(.next))
+        #expect(abs(before - (try #require(list.settledFrame(at: 10))).minY - 350) < 0.01)
+        #expect(list.accessibilityScroll(.previous))
+        #expect(abs((try #require(list.settledFrame(at: 0))).minY - 20) < 0.01)
+        #expect(!list.accessibilityScroll(.up))
+        list.scrollTo(.init(index: 99), transition: .immediate)
+        #expect(!list.accessibilityScroll(.down))
+    }
+    @Test func invertedAccessibilityDirectionsFollowTheScreen() throws {
+        let list = list(count: 100)
+        list.contentView.transform = .init(scaleX: 1, y: -1)
+        #expect(!list.accessibilityScroll(.down))
+        let before = try #require(list.settledFrame(at: 10)).minY
+        #expect(list.accessibilityScroll(.up))
+        #expect(abs(before - (try #require(list.settledFrame(at: 10))).minY - 400) < 0.01)
+        #expect(list.accessibilityScroll(.next))
+        #expect(abs((try #require(list.settledFrame(at: 0))).minY) < 0.01)
+    }
+    @Test func accessibilityFocusReturnsToTheRecreatedRow() throws {
+        let list = list(count: 100)
+        let first = try #require(list.loadedItemView(at: 0))
+        var requested: [UIView] = []
+        list.accessibilityCoordinator.notify = { kind, target in
+            if kind == .layoutChanged, let view = target as? UIView { requested.append(view) }
+        }
+        list.accessibilityCoordinator.recordFocus(first)
+        #expect(list.accessibilityScroll(.next))
+        let fallback = try #require(requested.last)
+        #expect(fallback !== first)
+        list.accessibilityCoordinator.recordFocus(fallback)
+        #expect(list.accessibilityCoordinator.preferredIdentity == "0")
+        #expect(list.accessibilityScroll(.previous))
+        let recreated = try #require(list.loadedItemView(at: 0))
+        #expect(recreated !== first)
+        #expect(requested.last === recreated)
+        list.accessibilityCoordinator.recordFocus(recreated)
+        list.applyChanges(items: Array(list.items.dropFirst()))
+        #expect(list.accessibilityCoordinator.preferredIdentity != "0")
+        #expect(requested.last !== recreated)
     }
     @Test func targetResolverUsesMeasuredHeightOnce() {
         let list = list(); var calls = 0

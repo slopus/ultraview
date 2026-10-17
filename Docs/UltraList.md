@@ -30,6 +30,10 @@ host at a time.
 
 The host prepares its measured size before display and never waits for drawing.
 `ListRowView.isDisplayReady` and `onDisplayReady` report the first ready commit.
+During a revision, the ready host remains visible until its replacement applies
+the current-size visible commit. A newer revision discards a pending replacement.
+Outer row geometry animates with the pass; `NodeRow` does not animate node-internal
+property or text changes. Custom row hosts receive the transition through `apply`.
 
 The preload window defaults to 160 points beyond the viewport. The list requests
 up to 80 nearby asynchronous measurements, with the predicted direction first.
@@ -194,7 +198,8 @@ bundle identifier so independent test runners retain their own identities.
 | Area | Implemented | Deferred or not yet validated |
 |---|---|---|
 | Keyboard | Chat composer follows the keyboard layout guide; beginning a drag dismisses it. Scripted show, fill, send and dismiss actions export separate timings and public signpost intervals. | Continuous interactive dismissal and host-specific inset animation policy. Device cold-entry and keyboard turns currently exceed 16.7 ms; attribution and final measurement remain pending. |
-| Accessibility | Hosted nodes apply their accessibility properties; text nodes publish text labels and static-text traits. Demo rows expose stable identifiers and labels. | List-specific accessibility scroll actions, focus restoration across virtualization, and physical VoiceOver interaction coverage. |
+| Accessibility | Hosted nodes apply accessibility properties; text nodes publish labels and static-text traits. Viewport-sized scroll actions follow screen direction, including inverted lists. Logical row focus survives virtualization and returns to a recreated descendant when available. | Physical VoiceOver interaction coverage, including custom accessibility-element containers. |
+| Node row revisions | Ready content remains visible until the newest replacement applies its visible commit; superseded candidates are discarded. | Node-internal property and text animations. Custom row hosts receive the pass transition; the default bridge animates its outer row geometry. |
 | Trackpad | Continuous indirect pan input has its own drag baseline and rubber-band coefficient. The physics model supports indirect replay. | Physical trackpad parity, indirect recording fixtures and discrete wheel input. The committed public gesture fixtures use direct touch. |
 | Paging | Hosts can supply measured row targets and append new data through `applyChanges`. | Built-in page snapping and network loading policy. |
 | Attachments | Run serial continuity, top/bottom floating maps, reserved space, member trimming, one-level partner yielding, ownership, stick distance, flight keyframes and departure behavior have math and simulator coverage. The feed demonstrates reserving section headers. | A physical-device scenario combining partner yielding, pinning, keyboard movement and navigation. Render-server depth and commit-delay sweeps remain empirical work. |
