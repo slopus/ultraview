@@ -31,6 +31,8 @@ public protocol ListRow {
     func isEqual(to other: any ListRow) -> Bool
     func measure(width: Double, environment: RenderEnvironment) async -> Double?
     func prepare(width: Double, environment: RenderEnvironment) async -> ListPreparation?
+    var leadingSwipeActions: [ListSwipeAction] { get }
+    var trailingSwipeActions: [ListSwipeAction] { get }
 }
 public extension ListRow {
     var revision: UInt64 { 0 }
@@ -44,6 +46,8 @@ public extension ListRow {
     func prepare(width: Double, environment: RenderEnvironment) async -> ListPreparation? {
         await measure(width: width, environment: environment).map { ListPreparation(height: $0) }
     }
+    var leadingSwipeActions: [ListSwipeAction] { [] }
+    var trailingSwipeActions: [ListSwipeAction] { [] }
 }
 
 @MainActor

@@ -122,10 +122,12 @@ public final class UltraListView: UltraScrollView {
     private var passDiff = ItemDiff(old: [String](), new: [])
     private var pinnedIndex: Int?
     let accessibilityCoordinator = ListAccessibility()
+    public let swipeActions = ListSwipeController()
 
     public override init(engineMode: ScrollEngineMode = .keyframe) {
         super.init(engineMode: engineMode)
         accessibilityCoordinator.list = self
+        swipeActions.attach(to: self)
         insertSubview(carousel, belowSubview: contentView)
         for view in [container, crossings, exits, attachmentsHost] { contentView.addSubview(view) }
         animations.referenceLayer = container.layer
@@ -172,7 +174,9 @@ public final class UltraListView: UltraScrollView {
         }
     }
     public override func updateEdges() {}
+    var horizontalAccessibilityScroll: ((UIAccessibilityScrollDirection) -> UIAccessibilityScrollDirection?)?
     public override func accessibilityScroll(_ direction: UIAccessibilityScrollDirection) -> Bool {
+        guard let direction = horizontalAccessibilityScroll.map({ $0(direction) }) ?? direction else { return false }
         let advance: Double
         switch direction {
         case .down, .next: advance = 1
@@ -864,6 +868,7 @@ public final class UltraListView: UltraScrollView {
             view.visibleRectUpdated(intersection.isNull || intersection.isEmpty ? nil : intersection.offsetBy(dx: -rect.minX, dy: -rect.minY))
         }
         accessibilityCoordinator.reconcile()
+        swipeActions.reconcile()
         let settled = declaredEdges.clamped(engine.offset), top = origin - settled, bottom = top + settledWindow.height
         let newTop = !settledWindow.rows.isEmpty && settledWindow.range.lowerBound == 0 && top >= loadedEdgeMargin - 1e-6
         let newBottom = !settledWindow.rows.isEmpty && settledWindow.range.upperBound == items.count && bottom <= viewport.height - loadedEdgeMargin + 1e-6
