@@ -907,19 +907,24 @@ inserted row, the nearest row on the anchor's side) is the list's choice and
 not modeled; the theorems hold for every choice. Member fades finishing is a
 hypothesis (`finished`).
 
-## Rubber banding and re-anchored drags at `2b33902`
+## Rubber banding and re-anchored drags at `1768f72`
 
 `Proofs/UltraProofs/List/Rubber.lean` models the rubber band and its
-inverse (ScrollMath.swift, unchanged since `b82d7b9`), the drag that uses
-them, and the re-anchor the list runs when a pass changes the edges during a
-drag. Swipe reveals use the same pair (SwipeReveal.swift at `76eab99`).
+inverse (ScrollMath.swift), the drag that uses them, and the re-anchor the
+list runs when a pass changes the edges during a drag and the axis runs
+when a drag begins. `1768f72` adds the adapted drag range the `adapt`
+theorems describe. Swipe reveals use the same pair (SwipeReveal.swift at
+`76eab99`). ScrollMath.swift lines are at `1768f72`.
 
 | Model (`Proofs/UltraProofs/List/Rubber.lean`) | Swift |
 | --- | --- |
 | `band`, `rubber` | `ScrollMath.rubberBand` (ScrollMath.swift:25-31); `0 < r` stands for `range > ulpOfOne` |
 | `unband`, `unrubber` (`cap` is `1 - 1e-6`) | `ScrollMath.inverseRubberBand` (:32-38) |
-| `Drag`, `drag` | `ScrollAxis`'s `anchor`, `proposed`, `offset` and `drag(translation:)` (:58-70) |
-| `reanchor` | `ScrollAxis.reanchorDrag()` (:79-83), called by `UltraListView.applyChanges` after `setEdges` and `shift(by:)` when `absorbsEdgeChangeIntoOverscroll` (UltraListView.swift:495-497) |
+| `Drag`, `drag` | `ScrollAxis`'s `anchor`, `proposed`, `offset` (:55, :58-59) and `drag(translation:)` (:72-75), banded with `dragRange` |
+| the range `drag` and `reanchor` share; `adapt` | `dragRange = max(range, expandedDragRange ?? range)` (:60-61); `reanchorDrag` sets `expandedDragRange = max(dragRange, 2 · distance)` when `distance > dragRange · (1 - 1e-6)` (:87-92) |
+| `reanchor` | `ScrollAxis.reanchorDrag()` (:85-95), with `dragRange` after the expansion; called by `UltraListView.applyChanges` after `setEdges` and `shift(by:)` when `absorbsEdgeChangeIntoOverscroll` (UltraListView.swift:504) |
+| `begin_catches`'s drag `⟨o, o, o⟩` at translation 0 | `beginDrag()` (:68-71): resets the range, puts anchor and proposed at the shown offset, then `reanchorDrag()` |
+| the range reset between drags | `resetDragRange()` (:96) from `beginDrag`, `release` (:77) and `ScrollCore.touchDown` (ScrollCore.swift:20) |
 | `rubber_unrubber` with the swipe's edges | `SwipeRevealLayout.displayed` / `proposed` (SwipeReveal.swift:62-71), and the replayed drag's inferred anchor (GestureRecording.swift:41) |
 
 - `band_bounds`, `band_mono`: the shown overscroll is in `[0, range)` and
@@ -933,46 +938,45 @@ drag. Swipe reveals use the same pair (SwipeReveal.swift at `76eab99`).
   next finger movement continues from there. `reanchor_idle`: with
   unchanged edges a re-anchor is a no-op, so passes that re-anchor during a
   drag never drift it.
-- `reanchor_capped`, `capped_jump`: when the shifted offset is farther than
-  `range * cap` past the new edge (an edge change larger than the viewport
-  under the finger), the next drag sample jumps to `range * cap` past it:
-  with a 400-point viewport and an offset 500 past the edge, by just over
-  100 points.
+- `reanchor_capped`, `capped_jump`: with a fixed range, when the shifted
+  offset is farther than `range * cap` past the new edge, the next drag
+  sample jumps to `range * cap` past it: with a 400-point viewport and an
+  offset 500 past the edge, by just over 100 points. This was the Swift
+  before `1768f72`.
+- `adapt_covers`, `adapt_no_jump`: with the range adapted as `reanchorDrag`
+  does, the cap always holds and nothing jumps, whatever the overscroll;
+  `adapt_example`: 500 points past the edge in a 400-point viewport bands
+  with 1000 and stays at 500. `adapt_idle`: within the cap the range is
+  unchanged, so ordinary drags band as before. `adapt_ge`: the range never
+  shrinks within a drag, and `drag` uses the same `dragRange`, so
+  `reanchor_idle` holds with it. `adapt_depth`: the band's slope there is a
+  quarter of its slope at the edge, so the content keeps following the
+  finger.
+- `begin_catches`: a drag that begins on overscrolled content shows the
+  caught offset at once, however far past the edge; it is `adapt_no_jump`
+  at translation 0. `begin_unanchored_jumps`: without the re-anchor
+  `beginDrag` now runs, the first sample would show less overscroll than
+  was caught (for coefficients at most 1; the Swift's are 0.55 and 0.715).
 
-- `adapt`, `adapt_covers`, `adapt_no_jump` (for the list's next change): if
-  the re-anchor raises the drag's range to `max(range, 2x)` when the shown
-  overscroll `x` is past `range * cap`, the cap always holds and nothing
-  jumps, whatever `x`; `adapt_example`: 500 points past the edge in a
-  400-point viewport bands with 1000 and stays at 500. `adapt_idle`: within
-  the cap the range is unchanged. The theorems need `drag` and `reanchor`
-  to use the same range, so the raised range must stay for the rest of
-  that drag (`reanchor_idle` with it) and reset when a drag begins.
-  `adapt_depth`: there the band's slope is a quarter of its slope at the
-  edge, so the content keeps following the finger.
-- `begin_catches` (also for that change): a drag that begins on
-  overscrolled content (anchor and proposed at the shown offset,
-  translation 0) and re-anchors with the adapted range shows the caught
-  offset at once; it is `adapt_no_jump` at translation 0.
-  `begin_unanchored_jumps`: without the re-anchor the first sample shows
-  less overscroll than was caught (for coefficients at most 1).
-
-The shift before the re-anchor (`ScrollAxis.shift(by:)`, :78) moves offset,
+The shift before the re-anchor (`ScrollAxis.shift(by:)`, :84) moves offset,
 anchor and proposed together, so the model's `Drag` is the state after it.
 Gesture delivery (that the next sample repeats the current translation when
-the finger has not moved) is outside the model.
+the finger has not moved) is outside the model. The replay's inferred anchor
+uses the base range; recorded drags never re-anchor, so their range is the
+base one.
 
-## Deceleration frame by frame at `a75c785`
+## Deceleration frame by frame at `1768f72`
 
 `Proofs/UltraProofs/List/Decel.lean` models the coast and spring branches
-of `ScrollAxis.step(milliseconds:)` (ScrollMath.swift, unchanged since
-`b82d7b9`), apart from the step that crosses an edge.
+of `ScrollAxis.step(milliseconds:)` (ScrollMath.swift; `step` is unchanged
+since `b82d7b9`), apart from the step that crosses an edge.
 
 | Model (`Proofs/UltraProofs/List/Decel.lean`) | Swift |
 | --- | --- |
-| `coast` | the inside branch of `step` when the destination stays inside (ScrollMath.swift:94-97): `offset + v·rate·(1 - decay)/(1 - rate)·multiplier`, `velocity *= decay` |
-| `spring` | `spring(milliseconds:)` (:114-118) |
+| `coast` | the inside branch of `step` when the destination stays inside (ScrollMath.swift:107-111): `offset + v·rate·(1 - decay)/(1 - rate)·multiplier`, `velocity *= decay` |
+| `spring` | `spring(milliseconds:)` (:127-131) |
 | `Decay` (structure fields: `pow` of a sum is the product) | `pow(rate, dt)` and `pow(0.99, dt)` for `dt ≥ 0` |
-| `coasts`, `springs` over frame lengths | the stepped engine's display-link steps (UIKit/ScrollEngine.swift:270, at least 1/120 s), and the `1/120` s steps of `ScrollTrajectory(baking:)` (ScrollTrajectory.swift:16-27) that the keyframe engine plays and the stepped engine predicts coverage from (ScrollEngine.swift:231, :235) |
+| `coasts`, `springs` over frame lengths | the stepped engine's display-link steps (UIKit/ScrollEngine.swift:288, at least 1/120 s), and the `1/120` s steps of `ScrollTrajectory(baking:)` (ScrollTrajectory.swift:16-27) that the keyframe engine plays and the stepped engine predicts coverage from (ScrollEngine.swift:249, :253) |
 
 - `coast_frames`, `spring_frames`, `engines_agree`, `springs_agree`: steps
   compose, so frames of any lengths with the same total time give the same
@@ -987,9 +991,10 @@ of `ScrollAxis.step(milliseconds:)` (ScrollMath.swift, unchanged since
   between two baked vertices lies between them.
 
 Not covered: the step that reaches an edge interpolates its coast time
-linearly in the offset (:99-104), so where it switches to the spring depends
+linearly in the offset (:112-118), so where it switches to the spring depends
 on the frame lengths; and the settling frame (`|v| < 0.01`, then a snap of
-at most half a point, :108-109) depends on them too.
+at most half a point, :121-122) depends on them too. The engine's
+settlement scheduling (`settleIfNeeded`, added in `1768f72`) is not modeled.
 
 ## Theorems
 
@@ -1075,8 +1080,9 @@ at most half a point, :108-109) depends on them too.
   its boundary only across half the viewport, and by a stated bound.
 - `ListDecel.engines_agree`, `springs_agree`: deceleration and bounce do not
   depend on the frame rate between edge crossings.
-- `ListRubber.reanchor_no_jump`, `reanchor_idle`: an edge change during a
-  drag moves nothing under the finger, and re-anchoring never drifts it.
+- `ListRubber.adapt_no_jump`, `begin_catches`, `reanchor_idle`: an edge
+  change during a drag, or catching overscrolled content, moves nothing
+  under the finger, and re-anchoring never drifts it.
 - `ListDepartures.inv_run`, `no_cycle`, `weld_block`, `collect_empties`:
   departure blocks never ride in a cycle or ride a missing block, land on
   what they ride, and are all collected once their rows have faded.
