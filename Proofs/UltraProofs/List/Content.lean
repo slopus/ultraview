@@ -19,6 +19,9 @@ retimings.
 * `retime_keeps`, `retimes_keep`: restarting both tracks from their
   presented values toward their targets on a new timing, any number of
   times, keeps the difference at every time.
+* `retime_unstarted`, `retime_same`: an animation added in the same
+  transaction restarts from its start value, and one already on the new
+  timing is unchanged, so the Swift's two special cases are this `retime`.
 * `alone_drifts`: retiming the row alone (an inner animation left on the
   old timing) changes the difference mid-flight.
 -/
@@ -47,6 +50,22 @@ new start and transition: the row view's interception of a new height
 animation. -/
 def retime (C : Curves) (t0 s : Rat) (τ : Transition) (tr : Track) : Track :=
   { tr with src := tr.value C t0, start := s, transition := τ }
+
+/-- **An animation not yet started restarts from where it starts**: the
+Swift's `from = fromValue` for an animation added in the current transaction
+(`beginTime == 0`), which begins at the same instant as the new timing. -/
+theorem retime_unstarted (C : Curves) {tr : Track} {t0 : Rat} (h0 : tr.start = t0)
+    (hd : 0 < tr.transition.duration) (s : Rat) (τ : Transition) :
+    retime C t0 s τ tr = { tr with start := s, transition := τ } := by
+  simp only [retime]; rw [← h0, value_start C tr hd]
+
+/-- **An animation already on the new timing is left as it is**: retiming it
+changes nothing, so the Swift's skipping it (`isTiming(of:)`) is the same
+step. -/
+theorem retime_same (C : Curves) {tr : Track} {t0 : Rat} {τ : Transition} (h0 : tr.start = t0)
+    (hτ : tr.transition = τ) (hd : 0 < tr.transition.duration) : retime C t0 t0 τ tr = tr := by
+  rw [retime_unstarted C h0 hd]
+  cases tr; simp only at h0 hτ; subst h0; subst hτ; rfl
 
 /-- Both tracks on one timing, a fixed distance apart at start and end. -/
 def Keeps (a b : Track) (d : Rat) : Prop := Shared a b ∧ a.src - b.src = d ∧ a.dst - b.dst = d

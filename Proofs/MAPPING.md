@@ -422,51 +422,69 @@ every frame iff their own deltas agree, so the inserted-block animation's
 screen made before `b5667e5`) opens a gap of `h * (1 - p)`. The chat screen
 now inserts with the pass alone (ListChatController.swift:243).
 
-## Node row hosts at `0592bc8`
+## Node row hosts at `44f8a0c`
 
 `Proofs/UltraProofs/List/Hosts.lean` models how node rows hand a prepared
-root between row views (NodeRow.swift), and the two cleanups that must not
-touch a hosted root: the renderer's queued purge and the list's preparation
-sweep.
+root between row views (NodeRow.swift), the host a preparation draws ahead
+(`staged`), and the two cleanups that must not touch a hosted root: the
+renderer's queued purge and the list's preparation sweep. (First mapped at
+`0592bc8`, before `staged`.)
 
-| Model (`Proofs/UltraProofs/List/Hosts.lean`) | Swift |
+| Model (`Proofs/UltraProofs/List/Hosts.lean`) | Swift at `44f8a0c` |
 | --- | --- |
-| `S.displayed`, `S.pending` | `NodeRowView.displayedHost`, `pendingHost` (NodeRow.swift:92-93) |
-| `S.hostOf`, `S.weak` | `PreparedNodeContent.host` (weak) and `hasLiveHost` (NodeRow.swift:23-25) |
+| `S.displayed`, `S.pending` | `NodeRowView.displayedHost`, `pendingHost` (NodeRow.swift:118-119) |
+| `S.hostOf`, `S.weak` | `PreparedNodeContent.host` (weak) and `hasLiveHost` (NodeRow.swift:23, :27) |
 | `S.owner` | `PreparedNodeContent.owner` (weak, NodeRow.swift:24) |
+| `S.staged`, `S.Staged` | `PreparedNodeContent.staged` (strong, NodeRow.swift:26) |
 | `S.renderer` | the root's `state.renderer` (Renderer.swift:92-96) |
-| `S.start` | `NodeRowView.start` with `checkout(owner:)` (NodeRow.swift:143, :27), under `accept`'s and the queued candidate's guard: nothing pending, a different root shown (:140, :183-188) |
-| `S.release` | `NodeRowView.release(_:)` (NodeRow.swift:105): the old owner lets the host go and keeps a snapshot |
-| `S.reveal` | `showPreparedHost(_:)` (NodeRow.swift:114): the pending host replaces the shown one |
+| `S.stage` | `NodeRow.prepare` (NodeRow.swift:85-103): for an animated row whose appearance is still to show, or whose identity is live (:95), a `NodeHostView` for the root the same call made (:98-99), so the root has no renderer |
+| `S.start` | `NodeRowView.start` with `checkout(owner:)` (NodeRow.swift:210, :29-40): the live host, else `staged`, else a new `NodeHostView` (:35), and `staged = nil` (:37). Under `accept`'s and the queued candidate's guard: nothing pending, a different root shown (:247-256, :205-207) |
+| `S.release` | `NodeRowView.release(_:)` (NodeRow.swift:146): the old owner lets the host go and keeps a snapshot |
+| `S.reveal` | `showPreparedHost(_:)` (NodeRow.swift:157): the pending host replaces the shown one |
 | `S.free` | a row view deallocated: its hosts go, weak `owner`s read `nil` |
-| `S.collect` | `NodeHostView.deinit` (NodeHostView.swift:103) calling `Renderer.detach()` (Renderer.swift:101), which clears the renderer if it is still this host's |
+| `S.drop` | the last reference to a preparation goes after the store drops it with `hasLiveHost` false (UltraListView.swift:888, :951 in `sweepPreparations` :945), taking `staged` with it |
+| `S.collect` | `NodeHostView.deinit` (NodeHostView.swift:109-110) calling `Renderer.detach()` (Renderer.swift:101), which clears the renderer if it is still this host's |
 | `purge_unhosted`'s hypothesis | the purge's check on the layout queue, `renderer == nil` (Renderer.swift:108) |
-| `sweep_never_drops_hosted`'s hypothesis | `hasLiveHost` false in `sweepPreparations` and after a measurement (UltraListView.swift:723, :786) |
+| `sweep_never_drops_hosted`'s hypothesis | `hasLiveHost` false at UltraListView.swift:888 and :951 |
 
-- `inv_run`, `one_host_always`: after every sequence of checkouts, reveals
-  and view deallocations, a root has at most one live host (`one_host`), kept
-  by one view (`one_slot`).
-- `start_reuses`, `start_creates`: a checkout takes the live host from the
-  view that had it and makes a host only when none is alive.
-  `checkout_never_trips`: a host is made only for a root with no renderer, so
-  the precondition at Renderer.swift:94 holds. `hosted_has_renderer`: a
-  checkout that ignored the live host would trip it.
-- `purge_never_frees_hosted`, `sweep_never_drops_hosted`: a purge whose check
-  finds no renderer, and a sweep that finds `hasLiveHost` false, act on a
-  root no live host renders.
+- `inv_run`, `one_host_always`: after every sequence of stagings,
+  checkouts, reveals, view deallocations and drops, a root has at most one
+  live host, staged or kept (`one_host`), and a kept host is kept by one
+  view (`one_slot`). `staged_unkept`, `staged_unkept_always`: a staged host
+  exists only while no view keeps a host of its root, so `staged` is set
+  only while `host` reads `nil`.
+- `start_reuses`, `start_uses_staged`, `start_creates`: a checkout takes the
+  live host from the view that had it, else the staged host (no new
+  renderer, `next` unchanged), and makes a host only when there is neither.
+  `checkout_never_trips`: a host is made only for a root with no renderer,
+  so the precondition at Renderer.swift:94 holds; `stage` makes one only for
+  a fresh root. `hosted_has_renderer`: a checkout that ignored the live or
+  staged host would trip it.
+- `purge_never_frees_hosted`: a purge whose check finds no renderer acts on
+  a root with no live host, staged or kept. `sweep_never_drops_hosted`: a
+  sweep that finds `hasLiveHost` false drops a root no view keeps (a staged
+  host can go with it, by design). `drop_detaches`: a dropped preparation's
+  staged host goes and detaches the root's renderer, so its bitmaps can be
+  purged.
 
 The model reads a host as alive exactly while a row view's `displayedHost` or
-`pendingHost` keeps it (the superview goes with the slot, and the commit and
-reveal closures capture it weakly), and deallocation as happening in the
-turn that lets it go. Not covered: the snapshot's content, the reveal's
-deadline and `hasContent` wait (any order of reveals is allowed), the legacy
-`NodeRow.prepared` cache's eviction, the window of the purge between its
-check and its last write (a host attaching then runs its first pass after the
-purge on the same serial queue), and the retention policy
+`pendingHost`, or the preparation's `staged`, keeps it (the superview goes
+with the slot, and the commit and reveal closures capture it weakly), and
+deallocation as happening in the turn that lets it go. `drop` is the
+preparation's last reference going: a `Candidate` a view still queues
+(`pendingCandidate`, `queuedCandidate`) keeps the preparation, and its staged
+host, alive past the sweep, which the model reads as the drop happening
+later. While `prepare` awaits `prepareContent`, the task also holds the
+staged host; the preparation isn't visible to anything else until it
+returns, so `stage` is one step. Not covered: the snapshot's content, the
+reveal's deadline and `hasContent` wait (any order of reveals is allowed),
+the legacy `NodeRow.prepared` cache's eviction, the window of the purge
+between its check and its last write (a host attaching then runs its first
+pass after the purge on the same serial queue), and the retention policy
 (`retainsPreparation`: ±80 rows, the pinned row, the pending target), which
 decides only when a sweep runs.
 
-## Node transitions at the commit that adds this section
+## Node transitions at `44f8a0c`
 
 Node rows can now animate their content (`NodeRow.animatesContent`). This
 section records how that touches the mapped Swift; nothing here is a new
@@ -487,14 +505,15 @@ machine-checked result.
   so `staged` is set only while `host` is `nil`, and a root still has at
   most one host. Until the checkout, the staged host is owned by the
   prepared content, not by a row view, so a sweep that drops the content
-  frees it. The model doesn't cover the staged state.
+  frees it. `Hosts.lean` now models this state (`S.stage`, `S.drop`; see
+  "Node row hosts at `44f8a0c`").
 - The animations themselves (`NodeTransitionAnimator`, `NodeRowMotion`)
   run after a commit applies, as Core Animation, and are outside the
   model. The invariant they keep (inner frames use the row height
   animation's begin time, duration and curve, so a node sized with the row
   keeps its edges on the row's edges in every frame) is checked in the
-  simulator by `NodeTransitionTests`; `Content.lean` (below) proves the
-  timing argument for its model, which is not yet mapped to this Swift.
+  simulator by `NodeTransitionTests`; `Content.lean` proves the timing
+  argument, mapped in "Content inside an animating row at `44f8a0c`".
 
 ## Momentum and the keyboard at `b896af1`
 
@@ -879,20 +898,60 @@ At `a489e36` the controller refuses a touch while the list moves
 collapse; neither touches the registry, so the rows above still hold.
 `ListRubber.rubber_unrubber` covers `displayed` and `proposed`.
 
-## Content inside an animating row (for the node-row transitions change)
+## Content inside an animating row at `44f8a0c`
 
-`Proofs/UltraProofs/List/Content.lean` states what the coming node-row
-content transitions rely on: inner node frames on the row's own height
-timing, with running inner animations moved onto each new row timing from
-their presented values. It is not yet mapped to Swift.
+`Proofs/UltraProofs/List/Content.lean` proves that inner node frames on the
+row's own height timing, with running inner animations moved onto each new
+row timing from their presented values, keep a constant inset from the
+row's edge at every frame. A `Track` is one scalar of a frame (a
+`CABasicAnimation` interpolates a `CGRect` or `CGPoint` value componentwise
+with one progress); an edge in row coordinates is a sum of such scalars on
+one timing, which is again a track on it.
+
+| Model (`Proofs/UltraProofs/List/Content.lean`) | Swift at `44f8a0c` |
+| --- | --- |
+| a `Track`'s `start`, `transition` | a `CABasicAnimation`'s begin time, duration, speed and curve or spring, held by `NodeAnimationTiming` (NodeTransitionAnimator.swift:11) and copied by `animation(_:from:to:)` (:75) |
+| `Shared` | `NodeAnimationTiming.isTiming(of:)` (NodeTransitionAnimator.swift:52): same begin (within 1e-6), duration, speed, offset, and curve or spring |
+| a new timing at `t0` | `NodeRowLayer.add` (NodeRowTransition.swift:21-31) reporting the list's height or width animation to `NodeRowMotion.rowDidAnimate` (:138-149), which takes its timing only when `beginTime == 0` (added in this transaction, so it begins at the commit) |
+| `retime`, `retimes` | `NodeTransitionAnimator.retime(root:_:)` (NodeTransitionAnimator.swift:315-334), called through `retimeTransitions` from `rowDidAnimate` (NodeRowTransition.swift:144-148): every transition animation under the root not on the timing restarts toward its `toValue` |
+| `retime`'s `tr.value C t0` | the start value: the presentation layer's value (:323-324); `retime_unstarted`: an animation with `beginTime == 0` has not started and restarts from `fromValue` (:321-322) |
+| `retime_same` | the `!timing.isTiming(of: running)` skip (:319) |
+| the row's track restarted from its presented value | `ListAnimationModel.transition`/`retime` (ListAnimation.swift:222, :234) with the height resumed from the row's presentation captured at the pass's start (`capturePositions`, AnimationController.swift:44-57, `resumeValue` :204-205) |
+| a track that continues unchanged | `value(...)`'s carrier copy (NodeTransitionAnimator.swift:378-392): a new tree's layer takes the old layer's running animation when it ends at the same value |
 
 - `edge_lerp`, `edge_constant`: on one timing, a child edge minus the row
   edge is `(1 - p) * d0 + p * d1`; equal end differences make it constant.
 - `retime_keeps`, `retimes_keep`: restarting both from their presented
   values toward their targets on a new timing, any number of times, keeps a
-  constant inset at every frame.
+  constant inset at every frame. `retime_unstarted` and `retime_same` show
+  the Swift's two special cases are that same step.
 - `alone_drifts`: retiming the row alone, with a 10-point inset bubble left
   on its timing, overlaps the row's edge by 2.5 points at 1 s.
+
+Both start values are read from the same rendered frame: the inner one from
+its presentation layer in `retime`, the row's from the presentation captured
+at the pass's start, in the same main-thread turn. Where a layer has no
+presentation yet, `retime` uses the value its carrier showed when the
+animation was copied (`shownKey`, :325-327), else `fromValue`; the model
+assumes that is the value at `t0`. Not covered:
+
+- content that arrives after its pass (`replacementTiming`,
+  NodeRowTransition.swift:153-171) joins the running height animation at its
+  phase, from the old tree's snapshot: `edge_lerp` holds (one progress), but
+  its start inset is the snapshot's, not the row's at the animation's begin,
+  so `edge_constant` does not apply; with no running height animation it
+  animates over the pass's remaining duration while the row's height is
+  still;
+- a re-installed row animation with an explicit begin (`beginTime != 0`),
+  which `rowDidAnimate` ignores, including an immediate change to an
+  in-flight height (ListAnimation.swift:212-219) that shifts the row's ends
+  by the change and keeps its timing: inner animations keep their ends, so
+  the inset moves by that change until a pass lays the content out again;
+- a height and a width animation on different timings: each `rowDidAnimate`
+  moves all content onto its own, so the last one added wins and the other
+  axis is off its row's timing;
+- springs and curves past their duration: `Track.progress` is 1 from the
+  deadline on, the model's reading of `CASpringAnimation.duration`.
 
 ## Departure blocks at `460d78f`
 
@@ -1143,9 +1202,10 @@ the keyboard's timing) cover it.
   `busy_producer`: prepared mutations apply in order, each once, the newest
   eventually, and a busy producer never starves the one in progress.
 - `ListHosts.one_host_always`, `checkout_never_trips`,
-  `purge_never_frees_hosted`, `sweep_never_drops_hosted`: a prepared root has
-  at most one live host at every step, a new host never meets an attached
-  renderer, and neither cleanup touches a hosted root.
+  `purge_never_frees_hosted`, `sweep_never_drops_hosted`,
+  `staged_unkept_always`: a prepared root has at most one live host, staged
+  or kept, at every step, a new host never meets an attached renderer, and
+  neither cleanup touches a root a view keeps.
 - `ListMomentum.run_keeps_velocity`, `follows_moves_by_inset`,
   `run_follows`, `dismissed_never_moved`: keyboard changes never alter a
   flight's velocity; programmatic inset changes move the content with the
@@ -1171,8 +1231,9 @@ the keyboard's timing) cover it.
 - `ListDepartures.inv_run`, `no_cycle`, `weld_block`, `collect_empties`:
   departure blocks never ride in a cycle or ride a missing block, land on
   what they ride, and are all collected once their rows have faded.
-- `ListContent.retimes_keep`: inner content retimed with its row keeps a
-  constant inset through any number of retimings.
+- `ListContent.retimes_keep`, `retime_same`, `retime_unstarted`: inner
+  content retimed with its row keeps a constant inset through any number of
+  retimings, and the Swift's skipped and unstarted cases are that retiming.
 
 **Optimality**
 

@@ -143,6 +143,12 @@ open UltraProofs
 #print axioms ListHosts.purge_never_frees_hosted
 #print axioms ListHosts.sweep_never_drops_hosted
 #print axioms ListHosts.one_host_always
+#print axioms ListHosts.staged_unkept
+#print axioms ListHosts.stage_inv
+#print axioms ListHosts.drop_inv
+#print axioms ListHosts.start_uses_staged
+#print axioms ListHosts.drop_detaches
+#print axioms ListHosts.staged_unkept_always
 #print axioms ListMomentum.release_hands_velocity
 #print axioms ListMomentum.keyboard_keeps_velocity
 #print axioms ListMomentum.run_keeps_velocity
@@ -211,6 +217,8 @@ open UltraProofs
 #print axioms ListContent.edge_constant
 #print axioms ListContent.retime_keeps
 #print axioms ListContent.retimes_keep
+#print axioms ListContent.retime_unstarted
+#print axioms ListContent.retime_same
 #print axioms ListContent.alone_drifts
 #print axioms ListLayers.follower_exact
 #print axioms ListLayers.prefix_seam
