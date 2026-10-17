@@ -311,6 +311,53 @@ motion. Full passes also retain outgoing shared rows
 during viewport displacement. Simulator regressions check both paths, pin
 slack, compensated edge clamping and uncompensated offset preservation.
 
+`sum_covers` is the bound `handleScroll` computes at `b5667e5`
+(UltraListView.swift:551-557): `AnimationTrack.adding(to:)` adds the viewport
+track's `valueBounds` to the engine's flight range (or to the current offset
+when nothing is in flight), the sum of the two ranges. `hull_misses`: their
+hull is not enough, since a 100-point flight under a 252-point viewport delta
+shows offset 352.
+
+## Preparation queue and sent rows at `b5667e5`
+
+`Proofs/UltraProofs/List/Preparation.lean` models `PreparationQueue`
+(PreparationQueue.swift) and how `UltraListView` drives it.
+
+| Model (`Proofs/UltraProofs/List/Preparation.lean`) | Swift |
+| --- | --- |
+| `Entry`, `Q` | `PreparationQueue.Entry`, `inFlight`, `latest`, `generation` (PreparationQueue.swift:4-12) |
+| `Q.submit` | `submit(_:waiting:merge:)` (PreparationQueue.swift:17); `applyChanges` submits with no waiting keys (UltraListView.swift:235) |
+| `Q.replaceWaiting` | `replaceWaiting(generation:with:)` (:26), called by `drainPreparedMutations` for every queued entry (UltraListView.swift:646-655) |
+| `Q.complete` | `complete(_:)` (:31), from the measurement callback (UltraListView.swift:747) |
+| `Q.takeReady` | `takeReady(merge:)` (:36), the drain's apply (UltraListView.swift:656) |
+| `Q.updateNewest` | `updateNewest(_:)` (:47): a block appended while preparing (UltraListView.swift:821), the target carried to the successor (:659) |
+| `Op.clear` | `removeAll()` (:52), when the items become empty (UltraListView.swift:228) |
+| values as lists, merge as `++` | `mergePreparedMutations` (UltraListView.swift:606): the newest items win, an older target and the blocks carry forward |
+
+- `inv_run`, `applied_increasing`: under any sequence of operations, applied
+  generations strictly increase, so a superseded mutation never applies after
+  a newer one.
+- `conserves`: what has applied, followed by what is queued, is everything
+  submitted since the last `removeAll`, in order: nothing lost or doubled.
+- `newest_applies`, `busy_producer`: once the awaited keys are measured, the
+  newest submission applies; submissions never touch the entry in progress,
+  so a steady stream of mutations cannot starve it. That the measurements
+  finish is a hypothesis (the measurement scheduler's side).
+- `alternating_schedule`, `slot_starves`: with a submission every step whose
+  measurement ends the step after, the queue applies at every step, while a
+  single newest-wins slot never applies.
+
+Not covered: which fields `mergePreparedMutations` keeps,
+`requestedPreparations`' choice of keys, and the reentrancy guards
+(`passing`, `drainingPreparations`).
+
+`Pass.inserted_gap`, `inserted_once` model a sent row: a row inserted during a
+pass whose viewport delta already carries it. It and its neighbour touch at
+every frame iff their own deltas agree, so the inserted-block animation's
+`-h` on top of the pass (the second `animateInsertedBlock` call the chat
+screen made before `b5667e5`) opens a gap of `h * (1 - p)`. The chat screen
+now inserts with the pass alone (ListChatController.swift:243).
+
 ## Theorems
 
 **Correctness**
@@ -367,6 +414,14 @@ slack, compensated edge clamping and uncompensated offset preservation.
   `immediate_same_frame`: an inset change moves the content by the inset
   plus slack change in the same pass. `lockstep_iff`: content keeps its
   distance to an animated input iff their progresses agree.
+  `inserted_once`: a row inserted with the pass touches its neighbour at every
+  frame.
+- `ListInsets.cheap_eq_full`: the inset-only path draws every row where the
+  full pass does. `sum_covers`: covering the sum of the engine's and the
+  viewport track's ranges keeps every row on screen.
+- `ListPreparation.applied_increasing`, `conserves`, `newest_applies`,
+  `busy_producer`: prepared mutations apply in order, each once, the newest
+  eventually, and a busy producer never starves the one in progress.
 
 **Optimality**
 
