@@ -37,6 +37,7 @@ final class AnimationController {
         }
     }
     func mirrorViewport(on layer: CALayer) { mirrors.append(layer) }
+    func owner(boundTo layer: CALayer) -> AnimationOwner? { layers.first { $0.value === layer }?.key }
     func capturePositions() {
         snapshots.removeAll(keepingCapacity: true)
         for (owner, layer) in layers {

@@ -304,6 +304,7 @@ public final class UltraListView: UltraScrollView {
         if !isCarousel && (target != nil || displaces) {
             animations.replace(.viewport, .viewportOffset, from: oldOffset + coordinateMap + oldCorrection - engine.offset, to: 0, at: time, transition: transition)
         }
+        transitionDetachedHorizontalGeometry(at: time, transition: transition)
         resolveAttachments(transition: transition, oldItems: oldItems, oldState: oldAttachmentState, suppressFade: isCarousel && destinationNew)
         updateGhosts(anchorY: newWindow.rows.first(where: { $0.index == anchor }).map { newBase + $0.y }, time: time, transition: transition)
         let samples = shared.compactMap { row -> CrossingPlanner.Sample? in
@@ -316,7 +317,14 @@ public final class UltraListView: UltraScrollView {
             guard let oldIndex = oldIDs.firstIndex(of: id), let newIndex = newLookup[id] else { continue }
             crossingEndpoints.append(.init(identity: id, oldIndex: oldIndex, newIndex: newIndex, y: carry.view.frame.minY, height: carry.view.bounds.height, outgoing: true, moved: diff.moves.contains { $0.old == oldIndex }))
         }
-        let plans = CrossingPlanner.infer(crossingEndpoints, samples: samples, safeRange: (engine.offset - preloadMargin)...(engine.offset + viewport.height + preloadMargin), anchorY: engine.offset + viewport.insets.top)
+        let crossingAnchor = settledWindow.rows.first(where: { $0.index == anchor }).map { newBase + $0.y } ?? engine.offset + viewport.insets.top
+        let plans = CrossingPlanner.infer(crossingEndpoints, samples: samples, safeRange: (engine.offset - preloadMargin)...(engine.offset + viewport.height + preloadMargin), anchorY: crossingAnchor)
+        let incomingEndpoints = settledWindow.rows.compactMap { row -> CrossingPlanner.Endpoint? in
+            let id = items[row.index].identity
+            guard !isCarousel, oldSnapshot[id] == nil, let oldIndex = oldLookup[id] else { return nil }
+            return .init(identity: id, oldIndex: oldIndex, newIndex: row.index, y: newBase + row.y, height: row.height, outgoing: false, moved: diff.moves.contains { $0.new == row.index })
+        }
+        let incomingPlans = CrossingPlanner.infer(incomingEndpoints, samples: samples, safeRange: (engine.offset - preloadMargin)...(engine.offset + viewport.height + preloadMargin), anchorY: crossingAnchor)
         for (id, next) in plans {
             guard let carry = carried[id] else { continue }
             let oldY = carry.view.frame.minY; carry.view.frame.origin.y = next
@@ -340,7 +348,7 @@ public final class UltraListView: UltraScrollView {
                 animations.replace(owner, .opacity, from: 0, to: 1, at: time, transition: transition)
             } else if !isCarousel, oldIDs.contains(id), !transition.isImmediate {
                 let newY = newBase + row.y
-                let inferred = row.index < anchor ? engine.offset - preloadMargin - row.height : engine.offset + viewport.height + preloadMargin
+                let inferred = incomingPlans[id] ?? (row.index < anchor ? engine.offset - preloadMargin - row.height : engine.offset + viewport.height + preloadMargin)
                 animations.replace(owner, .positionY, from: inferred - newY, to: 0, at: time, transition: transition)
             }
         }
@@ -456,6 +464,21 @@ public final class UltraListView: UltraScrollView {
         for parent in [exits, crossings] { for child in parent.subviews { child.frame.origin.y += delta } }
         ghostLedger.shift(by: delta)
     }
+    private func transitionDetachedHorizontalGeometry(at time: Double, transition: ListTransition) {
+        func update(_ parent: UIView) {
+            for child in parent.subviews {
+                if let view = child as? ListRowView, let owner = animations.owner(boundTo: view.layer) {
+                    let oldFrame = view.frame, oldSize = view.bounds.size
+                    let newSize = CGSize(width: viewport.contentWidth, height: oldSize.height)
+                    let oldPlacement = view.placementOffset(size: oldSize), newPlacement = view.placementOffset(size: newSize)
+                    view.place(in: .init(x: viewport.insets.left, y: oldFrame.minY, width: newSize.width, height: newSize.height))
+                    animations.transition(owner, .positionX, old: oldFrame.minX + oldPlacement.x, new: viewport.insets.left + newPlacement.x, at: time, transition: transition)
+                    animations.transition(owner, .width, old: oldSize.width, new: newSize.width, at: time, transition: transition)
+                } else { update(child) }
+            }
+        }
+        update(exits); update(crossings); update(carousel)
+    }
 
     private func makeDepartures(_ rows: [WindowRow], oldItems: [any ListRow], oldViews: [String: ListRowView], oldBase: Double, coordinateShift: Double, time: Double, transition: ListTransition) {
         var groups: [[WindowRow]] = []
@@ -496,7 +519,7 @@ public final class UltraListView: UltraScrollView {
                 animations.unbind(owner, removeModel: true)
                 view.onContentDidChange = nil; wrapper.addSubview(view)
                 view.place(in: .init(x: frozen.minX, y: y, width: width, height: height))
-                view.layer.opacity = Float(opacity)
+                view.layer.opacity = 0
                 serial += 1; let exitID = serial
                 ghostMembers[id] = blockID
                 ghostExitOwners[blockID, default: []].append(.exit(exitID))

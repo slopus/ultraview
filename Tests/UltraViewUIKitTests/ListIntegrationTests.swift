@@ -245,6 +245,32 @@ private actor MeasurementGate: NodeRowMeasuring {
         }
         list.haltScrolling()
     }
+    @Test func incomingUnmatchedSurvivorsKeepTheirSpacing() {
+        let list = list(count: 1000)
+        list.layer.speed = 0; list.layer.timeOffset = 100
+        list.scrollTo(.init(index: 500), transition: .immediate)
+        let next = list.items.filter { !(493...500).contains(Int($0.identity)!) }
+        list.applyChanges(items: next, transition: .easeInOut(1))
+        let incoming = list.loadedIndexRange.filter { index in
+            let identity = Int(next[index].identity)!
+            return identity < 493
+        }
+        #expect(incoming.count >= 2)
+        for (a, b) in zip(incoming, incoming.dropFirst()) {
+            let first = list.presentedFrame(at: a)!, second = list.presentedFrame(at: b)!
+            #expect(abs(first.maxY - second.minY) < 0.001)
+        }
+    }
+    @Test func departingRowsReceiveLaterHorizontalViewportChanges() {
+        let list = list(count: 10)
+        let departed = WeakReference(list.loadedItemView(at: 0))
+        list.applyChanges(items: Array(list.items.dropFirst()), transition: .easeInOut(3))
+        #expect(departed.value != nil)
+        list.applyChanges(newInsets: .init(left: 20, right: 20), transition: .easeInOut(1))
+        #expect(departed.value?.bounds.width == 280)
+        #expect(departed.value?.frame.minX == 20)
+        #expect(departed.value?.layer.animation(forKey: "ultraview.list.width") != nil)
+    }
     @Test func overlayPassesEmptySpaceToRows() {
         let overlay = PassthroughView(frame: .init(x: 0, y: 0, width: 300, height: 400))
         #expect(!overlay.point(inside: .init(x: 100, y: 100), with: nil))
