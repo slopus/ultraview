@@ -50,6 +50,12 @@ final class DemoCarouselView: ListRowView {
     private let state: CarouselState
     private var restored = false
     private var lastTouch = 0.0
+    /// Whether the cards were last reported ready.
+    private var cardsReady = false
+    /// Past this time the row counts as ready even with cards still drawing,
+    /// so a list waiting for it never waits long; 0 until the list first
+    /// sizes it.
+    private var readyDeadline = 0.0
     init(identity: String, mode: ScrollEngineMode, state: CarouselState) {
         horizontal = HorizontalListView(engineMode: mode); self.state = state
         super.init(frame: .zero)
@@ -58,8 +64,45 @@ final class DemoCarouselView: ListRowView {
         addSubview(horizontal)
         horizontal.list.applyChanges(items: state.cards, newInsets: .init(top: 12, left: 8, bottom: 12, right: 8), transition: .none)
         horizontal.list.onScroll = { [weak self] _ in self?.record() }
+        horizontal.list.onVisibleWindowChanged = { [weak self] in self?.watchCards() }
     }
-    override func update(width: Double, transition: ListTransition) -> Double { DemoCarouselRow.height }
+    /// Ready once the cards it shows are drawn: a list that waits for its
+    /// rows before showing them, as a jump does, then shows the carousel
+    /// with its cards.
+    override var isDisplayReady: Bool {
+        // The list's items stay empty until its first cards are measured, so
+        // the cards to show come from the state.
+        let list = horizontal.list
+        if state.cards.isEmpty || readyDeadline > 0 && CACurrentMediaTime() >= readyDeadline { return true }
+        return !list.loadedIndexRange.isEmpty && list.loadedItemViews.allSatisfy(\.isDisplayReady)
+    }
+    override func update(width: Double, transition: ListTransition) -> Double {
+        // The wait starts before the layout below, whose first pass of the
+        // cards already asks whether they're ready.
+        if readyDeadline == 0 {
+            readyDeadline = CACurrentMediaTime() + 0.3
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in self?.cardsChanged() }
+        }
+        // Sized here, before the list places it and outside any window, so
+        // its cards are laid out and drawn ahead.
+        if bounds.size != CGSize(width: width, height: DemoCarouselRow.height) {
+            bounds.size = CGSize(width: width, height: DemoCarouselRow.height)
+            layoutIfNeeded()
+        }
+        return DemoCarouselRow.height
+    }
+    private func watchCards() {
+        for view in horizontal.list.loadedItemViews where view.onDisplayReady == nil {
+            view.onDisplayReady = { [weak self] in self?.cardsChanged() }
+        }
+        cardsChanged()
+    }
+    private func cardsChanged() {
+        let ready = isDisplayReady
+        guard ready != cardsReady else { return }
+        cardsReady = ready
+        if ready { reportDisplayReady() }
+    }
     /// The scrolled distance along the cards, for probes.
     var position: Double {
         let list = horizontal.list

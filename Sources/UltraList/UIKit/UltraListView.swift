@@ -67,7 +67,13 @@ public final class UltraListView: UltraScrollView {
     private var measurementTasks: [MeasurementKey: Task<Void, Never>] = [:]
     private var measurementTickets: [MeasurementKey: UInt64] = [:]
     private var speculativeKeys: Set<MeasurementKey> = []
-    private var speculativeRequests: [(item: any ListRow, key: MeasurementKey, width: Double)] = []
+    private var speculativeRequests: [(item: any ListRow, key: MeasurementKey, width: Double, showsSoon: Bool)] = []
+    /// Preparations started without `ListPreparationHint.showsSoon` whose
+    /// rows the list has since come to show soon: drawn before they're stored.
+    private var soonKeys: Set<MeasurementKey> = []
+    /// Prepared rows ahead of a scroll, drawn ahead on later turns: a scroll
+    /// turn only queues them, so it makes no hosts.
+    private var drawAheadQueue: [MeasurementKey] = []
     private var pendingTarget: ListScrollTarget?
     private var pendingScroll: (@MainActor () -> Void)?
     private var pendingDisplayViews: [MeasurementKey: ListRowView] = [:]
@@ -461,7 +467,7 @@ public final class UltraListView: UltraScrollView {
             ghostWrappers.removeAll(); ghostExitOwners.removeAll(); ghostMembers.removeAll(); ghostLedger = .init(); newGhostRanges.removeAll()
             for view in carousel.subviews { animations.unbind(.carry(UInt64(max(0, view.tag))), removeModel: true); view.removeFromSuperview() }
             preparations.removeAll(); measurements.invalidate(); preparationKeys.removeAll()
-            speculativeRequests.removeAll(); speculativeKeys.removeAll()
+            speculativeRequests.removeAll(); speculativeKeys.removeAll(); soonKeys.removeAll(); drawAheadQueue.removeAll()
             for task in measurementTasks.values { task.cancel() }
             measurementTasks.removeAll(); measurementTickets.removeAll()
             engine.setEdges(.init(minimum: 0, maximum: 0)); engine.setOffset(0)
@@ -1232,7 +1238,10 @@ public final class UltraListView: UltraScrollView {
                 preparationKeys.formUnion(requests.map(\.key))
                 let missing = requests.filter { measurements.height(for: $0.key) == nil && !unavailableMeasurements.contains($0.key) }
                 preparationQueue.replaceWaiting(generation: entry.generation, with: Set(missing.map(\.key)))
-                for request in missing { requestMeasurement(request.item, key: request.key, width: request.width) }
+                // Requests come nearest the anchor first: those the mutation will show.
+                let soon = Set(requests.prefix(rowsShownSoon).map(\.key))
+                for key in soon { showSoon(key) }
+                for request in missing { requestMeasurement(request.item, key: request.key, width: request.width, showsSoon: soon.contains(request.key)) }
             }
             guard let ready = preparationQueue.takeReady(merge: Self.mergePreparedMutations) else { return }
             let mutation = ready.value, currentViewport = mutation.viewportRequest == viewportRequest
@@ -1271,21 +1280,56 @@ public final class UltraListView: UltraScrollView {
         let item = items[index]
         guard item.measuresAsynchronously else { return }
         let width = viewport.contentWidth
-        requestMeasurement(item, key: measurementKey(item, width: width), width: width)
+        // A pass or a scroll needs this row in its window.
+        requestMeasurement(item, key: measurementKey(item, width: width), width: width, showsSoon: true)
+    }
+    /// About how many rows nearest an anchor the next passes place, taken
+    /// alternately on either side of it as the requests are: on each side,
+    /// the viewport and a preload margin beyond it each way, at the loaded
+    /// rows' mean height.
+    private var rowsShownSoon: Int {
+        let mean = settledWindow.rows.isEmpty ? 60 : max(20, settledWindow.height / Double(settledWindow.rows.count))
+        return 2 * Int(((viewport.visibleHeight + 2 * preloadMargin) / mean).rounded(.up)) + 1
+    }
+    /// A row the list will show soon, prepared or being prepared without the
+    /// hint, is drawn ahead now, or before its preparation is stored.
+    private func showSoon(_ key: MeasurementKey) {
+        if let content = preparations[key]?.content { _ = content.drawAhead() }
+        else if measurementTasks[key] != nil { soonKeys.insert(key) }
+    }
+    private func drawAheadLater(_ key: MeasurementKey) {
+        guard !drawAheadQueue.contains(key) else { return }
+        if drawAheadQueue.isEmpty { DispatchQueue.main.async { [weak self] in self?.drainDrawAhead() } }
+        drawAheadQueue.append(key)
+    }
+    /// Draws queued rows ahead for about a millisecond a turn.
+    private func drainDrawAhead() {
+        let started = CACurrentMediaTime()
+        while !drawAheadQueue.isEmpty, CACurrentMediaTime() - started < 0.001 { showSoon(drawAheadQueue.removeFirst()) }
+        if !drawAheadQueue.isEmpty { DispatchQueue.main.async { [weak self] in self?.drainDrawAhead() } }
     }
     private func measurementKey(_ item: any ListRow, width: Double) -> MeasurementKey {
         .init(identity: item.identity, revision: item.revision, width: width, environment: measurementEnvironmentKey &+ item.measurementEnvironment &* 0x9e3779b97f4a7c15)
     }
-    private func requestMeasurement(_ item: any ListRow, key: MeasurementKey, width: Double) {
+    private func requestMeasurement(_ item: any ListRow, key: MeasurementKey, width: Double, showsSoon: Bool = false) {
         let environment = measurementEnvironment
+        if showsSoon { showSoon(key) }
         guard width > 0, !unavailableMeasurements.contains(key), let ticket = measurements.request(key) else { return }
         measurementTickets[key] = ticket
         measurementTasks[key] = Task { [weak self] in
-            let preparation = await item.prepare(width: width, environment: environment)
+            let preparation = await ListPreparationHint.$showsSoon.withValue(showsSoon) {
+                await item.prepare(width: width, environment: environment)
+            }
             guard let self else { return }
+            if measurementTickets[key] == ticket, soonKeys.remove(key) != nil, let drawing = preparation?.content?.drawAhead() {
+                await drawing.value
+            }
+            // A reset or a newer request while it drew leaves this one stale.
             guard measurementTickets[key] == ticket else { return }
             measurementTickets.removeValue(forKey: key)
             measurementTasks.removeValue(forKey: key)
+            // Shown soon again while it drew: what it stores is drawn.
+            soonKeys.remove(key)
             speculativeKeys.remove(key)
             defer { pumpSpeculativePreparations() }
             let result = measurements.store(key, height: preparation?.height ?? .nan, ticket: ticket)
@@ -1334,10 +1378,17 @@ public final class UltraListView: UltraScrollView {
         if engine.coveredOffsets(horizon: 0.3) != nil {
             indices = (0..<64).map { anchor + $0 * (direction < 0 ? -1 : 1) }.filter { items.indices.contains($0) }
         } else { indices = MeasurementCache.priority(count: items.count, anchor: anchor, direction: direction, limit: 64) }
+        // Indices come nearest the anchor first, in the direction of travel.
+        let soon = Set(indices.prefix(rowsShownSoon))
+        // Prepared rows ahead are drawn soon after; those just passed, whose
+        // views went, are drawn again only once the scroll turns toward them.
+        for index in soon where (index - anchor) * direction >= 0 && items[index].measuresAsynchronously {
+            drawAheadLater(measurementKey(items[index], width: viewport.contentWidth))
+        }
         speculativeRequests = indices.compactMap { index in
             let item = items[index], key = measurementKey(item, width: viewport.contentWidth)
             guard item.measuresAsynchronously, measurements.height(for: key) == nil, measurementTasks[key] == nil else { return nil }
-            return (item, key, viewport.contentWidth)
+            return (item, key, viewport.contentWidth, soon.contains(index))
         }
         pumpSpeculativePreparations()
     }
@@ -1346,7 +1397,7 @@ public final class UltraListView: UltraScrollView {
             let request = speculativeRequests.removeFirst()
             guard measurementTasks[request.key] == nil, measurements.height(for: request.key) == nil,
                   !unavailableMeasurements.contains(request.key) else { continue }
-            requestMeasurement(request.item, key: request.key, width: request.width)
+            requestMeasurement(request.item, key: request.key, width: request.width, showsSoon: request.showsSoon)
             if measurementTasks[request.key] != nil { speculativeKeys.insert(request.key) }
         }
     }

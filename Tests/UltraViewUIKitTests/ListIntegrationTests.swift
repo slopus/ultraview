@@ -96,6 +96,8 @@ private actor MeasurementGate: NodeRowMeasuring {
         return .init(width: width, height: 60)
     }
     func open() { opened = true; let pending = waiters; waiters.removeAll(); for waiter in pending { waiter.resume() } }
+    /// Measurements waiting for `open()`.
+    var waiting: Int { waiters.count }
 }
 
 @MainActor
@@ -538,9 +540,14 @@ private actor MeasurementGate: NodeRowMeasuring {
         let list = list(count: 0)
         window.addSubview(list); window.isHidden = false
         defer { window.isHidden = true }
-        var readySignals = 0
+        // A row the list shows as soon as it's prepared is drawn ahead, so it
+        // may be ready when it first loads; otherwise it signals once.
+        var readySignals = 0, readyWhenLoaded = false
         list.onVisibleWindowChanged = { [weak list] in
-            for view in list?.loadedItemViews ?? [] { view.onDisplayReady = { readySignals += 1 } }
+            for view in list?.loadedItemViews ?? [] {
+                if view.onDisplayReady == nil, view.isDisplayReady { readyWhenLoaded = true }
+                view.onDisplayReady = { readySignals += 1 }
+            }
         }
         list.applyChanges(items: [NodeRow(identity: "measured") {
             var style = Style(); style.padding = 8; style.backgroundColor = .white
@@ -551,7 +558,7 @@ private actor MeasurementGate: NodeRowMeasuring {
             try? await Task.sleep(for: .milliseconds(10))
         }
         #expect(list.loadedItemViews.first?.isDisplayReady == true)
-        #expect(readySignals == 1)
+        #expect(readyWhenLoaded ? readySignals == 0 : readySignals == 1, "ready when loaded: \(readyWhenLoaded), signals: \(readySignals)")
         #expect((list.settledFrame(at: 0)?.height ?? 0) > 20)
         #expect((Diagnostics.shared.counts - before).mainThreadWork == 0)
         list.applyChanges(items: [])
@@ -656,6 +663,138 @@ private actor MeasurementGate: NodeRowMeasuring {
         let shown = try #require(atResize)
         #expect(shown.text == "Revision 1" && shown.height == to && shown.drawn && shown.hosts == 1, "\(shown)")
         #expect(old.superview == nil)
+    }
+    /// What a node row view shows at one moment: a visible host whose
+    /// labelled text is drawn.
+    private func showsDrawnContent(_ view: ListRowView) -> Bool {
+        let hosts = view.subviews.compactMap { $0 as? NodeHostView }.filter { !$0.isHidden }
+        return hosts.count == 1 && hosts[0].view(forTransitionKey: "label")?.layer.contents != nil
+    }
+    private func labelledRow(_ identity: String, height: Double = 80, measurer: any NodeRowMeasuring = NodeRowMeasurer()) -> NodeRow {
+        NodeRow(identity: identity, measurer: measurer) {
+            var style = Style(); style.height = .points(height); style.backgroundColor = .white
+            let label = UltraTextNode("Row \(identity)")
+            label.transitionKey = "label"
+            return UltraNode(style: style, children: [label])
+        }
+    }
+    @Test(arguments: [ListTransition.none, .easeInOut(0.3)]) func anInsertedRowShowsDrawnInThePassThatPlacesIt(transition: ListTransition) async throws {
+        let list = list(count: 0)
+        let window = makeWindow(); window.frame = .init(x: 0, y: 0, width: 320, height: 400)
+        window.addSubview(list); window.isHidden = false
+        defer { window.isHidden = true }
+        var rows = (0..<8).map { labelledRow(String($0)) }
+        list.applyChanges(items: rows, transition: .none)
+        for _ in 0..<300 where list.loadedIndexRange.isEmpty || !list.loadedItemViews.allSatisfy(\.isDisplayReady) { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(list.loadedIndexRange.contains(0))
+        try await Task.sleep(for: .milliseconds(50))
+
+        // At the end of the pass that first places the new row, it shows
+        // its content, drawn: never an empty slot between its neighbours.
+        var atInsert: Bool?
+        list.onVisibleWindowChanged = {
+            guard atInsert == nil, list.items.count == 9, let view = list.loadedItemView(at: 1) else { return }
+            atInsert = showsDrawnContent(view)
+        }
+        rows.insert(labelledRow("new", height: 112), at: 1)
+        list.applyChanges(items: rows, transition: transition)
+        for _ in 0..<200 where atInsert == nil { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(try #require(atInsert))
+    }
+    @Test(arguments: [ListTransition.immediate, .smoothDeceleration()]) func rowsAScrollBringsBackShowDrawnInThePassThatPlacesThem(transition: ListTransition) async throws {
+        let list = list(count: 0)
+        let window = makeWindow(); window.frame = .init(x: 0, y: 0, width: 320, height: 400)
+        window.addSubview(list); window.isHidden = false
+        defer { window.isHidden = true }
+        list.applyChanges(items: (0..<1000).map { labelledRow(String($0)) }, transition: .none)
+        for _ in 0..<300 where list.loadedIndexRange.isEmpty || !list.loadedItemViews.allSatisfy(\.isDisplayReady) { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(list.loadedIndexRange.contains(0))
+        list.scrollTo(.init(index: 900), transition: .immediate)
+        for _ in 0..<300 where !(list.loadedIndexRange.contains(900) && list.loadedItemViews.allSatisfy(\.isDisplayReady)) { try await Task.sleep(for: .milliseconds(10)) }
+        try await Task.sleep(for: .milliseconds(1200))
+
+        // At the end of the pass that brings the first rows back, every
+        // one of them on screen shows its content, drawn.
+        var atReturn: [Bool]?
+        list.onVisibleWindowChanged = {
+            guard atReturn == nil, list.loadedIndexRange.contains(0) else { return }
+            atReturn = (0..<4).compactMap { list.loadedItemView(at: $0) }.map { showsDrawnContent($0) }
+        }
+        let away = list.loadedIndexRange
+        list.scrollTo(.init(index: 0), transition: transition)
+        for _ in 0..<300 where atReturn == nil { try await Task.sleep(for: .milliseconds(5)) }
+        let shown = try #require(atReturn, "away \(away), now \(list.loadedIndexRange)")
+        #expect(shown.count == 4 && shown.allSatisfy { $0 }, "\(shown)")
+    }
+    /// Rows the list prepared ahead without the hint, while they were far
+    /// from the screen, are drawn once it will show them soon: a scroll that
+    /// moves farther in a step than the preload margin, so a row comes on
+    /// screen in the step that places it, never shows one blank.
+    @Test func rowsPreparedFarAheadShowDrawnWhenAScrollBringsThemIn() async throws {
+        let list = list(count: 0)
+        let window = makeWindow(); window.frame = .init(x: 0, y: 0, width: 320, height: 400)
+        window.addSubview(list); window.isHidden = false
+        defer { window.isHidden = true }
+        list.applyChanges(items: (0..<1000).map { labelledRow(String($0)) }, transition: .none)
+        for _ in 0..<300 where list.loadedIndexRange.isEmpty || !list.loadedItemViews.allSatisfy(\.isDisplayReady) { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(list.loadedIndexRange.contains(0))
+        // The scroll-ahead prepares the next rows; past the first few
+        // screens, without the hint.
+        try await Task.sleep(for: .milliseconds(800))
+
+        var seen: Set<Int> = [], blank: Set<Int> = []
+        list.onVisibleWindowChanged = {
+            for index in list.loadedIndexRange {
+                guard let frame = list.settledFrame(at: index), frame.maxY > 0, frame.minY < 400,
+                      let view = list.loadedItemView(at: index) else { continue }
+                seen.insert(index)
+                if !showsDrawnContent(view) { blank.insert(index) }
+            }
+        }
+        // Writing the offset runs no pass; the list's scroll handler does.
+        // Each step shows two rows the window hadn't mounted, one more than
+        // an idle turn builds ahead, so one comes only from drawing ahead.
+        for _ in 1...20 {
+            list.setScrollOffset(list.currentScrollOffset + 320)
+            list.handleScroll(list.currentScrollOffset)
+            try await Task.sleep(for: .milliseconds(80))
+        }
+        #expect(seen.filter { $0 >= 30 && $0 < 60 }.count == 30, "seen \(seen.sorted())")
+        #expect(blank.isEmpty, "shown blank: \(blank.sorted())")
+    }
+    /// A row whose preparation started without the hint and is still
+    /// running when a mutation will show it is drawn before the preparation
+    /// is stored, so the mutation places it drawn.
+    @Test func aRowStillPreparingWithoutTheHintShowsDrawnWhenAMutationPlacesIt() async throws {
+        let gate = MeasurementGate()
+        let list = list(count: 0)
+        let window = makeWindow(); window.frame = .init(x: 0, y: 0, width: 320, height: 400)
+        window.addSubview(list); window.isHidden = false
+        defer { window.isHidden = true }
+        let rows = (0..<100).map { index in labelledRow(String(index), measurer: index >= 30 ? gate : NodeRowMeasurer()) }
+        list.applyChanges(items: rows, transition: .none)
+        for _ in 0..<300 where list.loadedIndexRange.isEmpty || !list.loadedItemViews.allSatisfy(\.isDisplayReady) { try await Task.sleep(for: .milliseconds(10)) }
+        // The scroll-ahead reaches row 30 without the hint and waits there.
+        var held = 0
+        for _ in 0..<300 where held == 0 {
+            try await Task.sleep(for: .milliseconds(10))
+            held = await gate.waiting
+        }
+        #expect(held > 0)
+
+        // Without the rows above, the waiting ones are the first shown.
+        var atShow: [Bool]?
+        list.onVisibleWindowChanged = {
+            guard atShow == nil, list.items.first?.identity == "30", !list.loadedIndexRange.isEmpty else { return }
+            atShow = (0..<3).compactMap { list.loadedItemView(at: $0) }.map { showsDrawnContent($0) }
+        }
+        list.applyChanges(items: Array(rows.dropFirst(30)), transition: .none)
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(atShow == nil)
+        await gate.open()
+        for _ in 0..<300 where atShow == nil { try await Task.sleep(for: .milliseconds(5)) }
+        let shown = try #require(atShow)
+        #expect(shown.count == 3 && shown.allSatisfy { $0 }, "\(shown)")
     }
     @Test func nodeRowShrinkKeepsTallReadyContentUntilTheClipFinishes() async throws {
         func row(_ revision: UInt64, height: Double) -> NodeRow {

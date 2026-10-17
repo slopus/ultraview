@@ -6,8 +6,25 @@ import UltraCore
 @MainActor
 public protocol ListPreparedContent: AnyObject, Sendable {
     var hasLiveHost: Bool { get }
+    /// The list will show the row soon, though it was prepared without
+    /// `ListPreparationHint.showsSoon`: content not drawn yet starts drawing.
+    /// Returns what finishes once it is drawn, or `nil` when nothing draws.
+    func drawAhead() -> Task<Void, Never>?
 }
-public extension ListPreparedContent { var hasLiveHost: Bool { false } }
+public extension ListPreparedContent {
+    var hasLiveHost: Bool { false }
+    func drawAhead() -> Task<Void, Never>? { nil }
+}
+
+/// What the list tells a row's `prepare` about the preparation, through
+/// task-local values.
+public enum ListPreparationHint {
+    /// Whether the list will show the row as soon as this preparation is
+    /// ready: an insert, a row a scroll brings near the screen, a row a pass
+    /// needs. A row can draw its content ahead then, so it first appears
+    /// drawn, in the transaction that places it.
+    @TaskLocal public static var showsSoon = false
+}
 
 public struct ListPreparation: Sendable {
     public var height: Double

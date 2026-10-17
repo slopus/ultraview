@@ -723,6 +723,38 @@ jumps retain at most three departing strips. Detached renderers discard bitmaps
 on the layout queue while preserving layout and text caches; a replacement
 host prevents that queued purge from touching its content.
 
+`ListPreparationHint.showsSoon` tells a row that its preparation will be shown
+as soon as it is ready. Node rows then draw ahead before returning their height,
+so the placing pass can show the bitmap immediately. Stored preparations and
+preparations already running without the hint can upgrade through
+`ListPreparedContent.drawAhead()`. Scrolls queue that work for later main-queue
+turns, with about one millisecond spent starting it each turn. The demo carousel
+reports ready after its visible cards draw, with a 0.3-second fallback.
+
+Drawing ahead still has a main-thread cost: the prepared hosts' commits can apply
+together. In a three-round alternating simulator comparison against `5b62b9b`,
+6 of 27 probes exceeded the 2 ms p99 bound, compared with 2 of 27 on the base.
+These are main-thread turn p99 medians in milliseconds:
+
+| Probe | Base | Drawing ahead |
+| --- | ---: | ---: |
+| Delete, platform engine | 1.33 | 1.63 |
+| Delete, stepped | 1.59 | 1.41 |
+| Delete, keyframe | 1.51 | 1.90 |
+| Carousel, platform engine | 1.85 | 2.22 |
+| Carousel, stepped | 1.57 | 1.87 |
+| Carousel, keyframe | 1.54 | 1.77 |
+
+This unfinished performance regression is accepted for integration. The queue's
+one-millisecond starting budget does not bound later commit application. Pacing
+draws to one row in flight remains follow-up work. The comparison against the
+integrated keyboard base is pending.
+
+Two readiness gaps remain: cancelling a measurement leaves its drawing task to
+finish or reach its 0.5-second timeout, although the stale ticket prevents it
+from being stored; and an invalid measurement's retry does not retain the
+show-soon hint, so that retry can still be placed before its bitmap arrives.
+
 The residency regressions use 2,000 rows, fresh model instances, repeated
 immediate and animated jumps, two lists sharing row models, and complete list
 removal. They check retained preparations and live roots rather than claiming

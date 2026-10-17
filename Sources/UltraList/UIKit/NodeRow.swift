@@ -20,12 +20,29 @@ public struct NodeRowMeasurer: NodeRowMeasuring {
 fileprivate final class PreparedNodeContent: ListPreparedContent {
     let root: UltraNode
     let size: CGSize
+    /// The row's width and environment, to draw at.
+    private let width: Double
+    private let environment: RenderEnvironment
     weak var host: NodeHostView?
     weak var owner: NodeRowView?
     /// Drawn ahead, outside a window, until a row view checks it out.
     var staged: NodeHostView?
+    private var drawing: Task<Void, Never>?
     var hasLiveHost: Bool { host != nil }
-    init(root: UltraNode, size: CGSize) { self.root = root; self.size = size }
+    init(root: UltraNode, size: CGSize, width: Double, environment: RenderEnvironment) {
+        self.root = root; self.size = size; self.width = width; self.environment = environment
+    }
+    func drawAhead() -> Task<Void, Never>? {
+        // A row view has it, drawn or drawing in its window.
+        guard host == nil else { return nil }
+        if staged != nil, let drawing { return drawing }
+        let staged = NodeHostView(rootNode: root)
+        self.staged = staged
+        let size = CGSize(width: width, height: size.height), environment = environment
+        let drawing = Task { await staged.prepareContent(size: size, environment: environment) }
+        self.drawing = drawing
+        return drawing
+    }
     func checkout(owner: NodeRowView) -> NodeHostView {
         let result: NodeHostView
         if let host {
@@ -53,8 +70,9 @@ public final class NodeRow: ListRow {
     /// revision's were, on the row's own timing (see `transitionKey`).
     ///
     /// Any node row draws a new revision before its pass applies when the
-    /// identity is on screen, so the new content shows in the transaction
-    /// that gives the row its new size.
+    /// identity is on screen, and its first content when the list will show
+    /// it as soon as it's prepared (`ListPreparationHint.showsSoon`), so the
+    /// content shows in the transaction that places or resizes the row.
     public let animatesContent: Bool
     /// How content animates in the first time this row is shown. A row with
     /// an appearance is drawn before its pass applies.
@@ -93,13 +111,11 @@ public final class NodeRow: ListRow {
             return (root, size)
         }.value
         guard result.1.height.isFinite, result.1.height >= 0 else { return nil }
-        let content = PreparedNodeContent(root: result.0, size: result.1)
-        if animatesContent && appearance != nil && !appearanceShown || NodeRowLiveness.isLive(identity) {
+        let content = PreparedNodeContent(root: result.0, size: result.1, width: width, environment: resolved)
+        if animatesContent && appearance != nil && !appearanceShown || NodeRowLiveness.isLive(identity) || ListPreparationHint.showsSoon {
             // Drawn now, so the pass that shows it can swap in the same
             // transaction as its own geometry and animations.
-            let host = NodeHostView(rootNode: result.0)
-            content.staged = host
-            await host.prepareContent(size: .init(width: width, height: result.1.height), environment: resolved)
+            await content.drawAhead()?.value
         }
         return ListPreparation(height: result.1.height, content: content)
     }

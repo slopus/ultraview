@@ -486,6 +486,61 @@ pass after the purge on the same serial queue), and the retention policy
 (`retainsPreparation`: ±80 rows, the pinned row, the pending target), which
 decides only when a sweep runs.
 
+## Drawing ahead for rows shown soon (integrated after `f5124f8`)
+
+The list tells a row's `prepare`, through the task-local
+`ListPreparationHint.showsSoon`, that it will show the row as soon as the
+preparation is ready, and a node row then stages its host before it
+returns. A preparation started without the hint, or stored before the list
+came to show the row soon, is drawn ahead later through
+`ListPreparedContent.drawAhead()`. Both stage through the same function, so
+`S.stage` now maps to more than one call site; its guard is unchanged.
+
+| Model (`Proofs/UltraProofs/List/Hosts.lean`) | Swift |
+| --- | --- |
+| `S.stage` | `PreparedNodeContent.drawAhead()` (NodeRow.swift:35-45): only while `host` reads `nil` (no view keeps a host of the root, so the root has no renderer: a host's renderer detaches when it deallocates, and `host` is weak), and only when nothing is staged; a `NodeHostView` for the root, kept in `staged`. Called from `NodeRow.prepare` (:105-121) for a live identity, an appearance still to show, or `showsSoon` (:115-118); from `UltraListView.showSoon` (UltraListView.swift:1296-1299) for a stored preparation the list will show soon, called for a mutation's nearest requests (:1243), a request with the hint (:1316) and prepared rows ahead of a scroll, queued by the scroll turn (:1385-1386, `drawAheadLater` :1300-1304) and drawn about a millisecond's worth per later main-queue turn (`drainDrawAhead` :1306-1310); and before a running preparation is stored, when the list came to show it soon meanwhile (:1324-1326), which stores only while its ticket is current (:1328-1335) |
+| `S.start` | `NodeRowView.start` (NodeRow.swift:243) with `checkout(owner:)` (:46-57): the live host, else `staged`, else a new `NodeHostView` (:52), and `staged = nil` (:54). Under `accept`'s and the queued candidate's guard (:280-290, :238-241) |
+| `S.reveal` | `showPreparedHost(_:)` (NodeRow.swift:182), with the pass-end wait (:207-213) and `passDidEnd` (:295-300) |
+| `S.drop`, `sweep_never_drops_hosted` | `hasLiveHost` false at UltraListView.swift:1340 and in `sweepPreparations` (:1404-1415) |
+
+A staging after the preparation is stored is a separate step in the model
+(the model allows `stage` between any others); a `drawAhead` that finds a
+host kept does nothing, so a checkout racing it keeps `staged_unkept`. The
+drawing task holds the staged host until `prepareContent` returns, as
+`prepare` did: while it does, the host is alive and `host` (weak) is not
+`nil` once it is checked out, so no second host is made. Which rows count as
+shown soon (`rowsShownSoon`, about two screens and their preload margins
+around the anchor, alternating sides) and when a stored preparation is drawn
+(only ahead of the scroll's direction, on turns after the scroll's) are
+scheduling, outside the model: a queued key runs `showSoon` like any other
+call, so its guard is the same.
+
+A premount (see "Premounted rows and deferred unmounts") checks out like
+any row: `applyPreparation` takes the live host, else one a `drawAhead`
+staged, else makes one, so a row drawn ahead is premounted without drawing
+again, and `one_host` holds as before. The idle turn is a timer and
+`drainDrawAhead` a main-queue block, so they run in either order; a
+`drawAhead` after the premount finds the host kept and does nothing.
+
+Integration preserves the edge-target and pending-item retention fix from
+`1a4e486`: `atEdge` is now UltraListView.swift:848, `recordPendingTarget`
+is at :856, and the unchanged retention predicate is at :1416-1428. It
+keeps pending-item preparations in addition to the existing band and live
+hosts. The edge regression file is unchanged (SHA-256 `63a61cd7…`), including
+all 12 arriving-edge cases. The keyboard controller, gesture, composer and
+app settings are unchanged from `f5124f8`.
+
+The premount and collapse mappings above retain their historical citations.
+The current `departureEdge` is at UltraListView.swift:258-262. NodeRow.swift
+lines from :106 on at `f478507` move by 16, so `showPreparedHost`'s appearance
+condition the premount section cites (:178-179) is at :194-195. Current SHA-256:
+`UltraListView.swift`
+`7d693ea8717ac587ca58cfc1b0419e4ba8cdfcd9f51f582113033cf5801d4389`,
+`NodeRow.swift`
+`39aab7f88e95818b717c81ac2e507a3c5bcab8ce19d83e1c691076a5675b7767`,
+`ListRow.swift`
+`50806041d14cec55b4c33d52fe18b6ae137f9665e5ba9f3941d07d125558a24f`.
+
 ## Node transitions at `44f8a0c`
 
 Node rows can now animate their content (`NodeRow.animatesContent`). This
