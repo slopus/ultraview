@@ -200,6 +200,9 @@ final class NodeRowMotion {
     /// The timing of animations the pass added in this turn: the row's own,
     /// else the viewport's it moves with, else the pass's transition.
     private func appearanceTiming() -> NodeAnimationTiming? {
+        // The row is revealed by a viewport moving on sampled values, not a
+        // curve this content could follow: it enters at its final state.
+        if let layer = view?.layer, Self.viewportMovesOnSamples(above: layer, since: turnStart) { return nil }
         func fresh(_ animation: CAAnimation?) -> NodeAnimationTiming? {
             guard let animation, animation.beginTime == 0 || animation.beginTime >= turnStart - 0.001 else { return nil }
             return NodeAnimationTiming(matching: animation)
@@ -216,6 +219,24 @@ final class NodeRowMotion {
         }
         guard inPass, let transition, !transition.isImmediate, let view else { return nil }
         return Self.timing(for: transition, in: view)
+    }
+
+    /// Whether a viewport above `layer` moves on sampled values: added since
+    /// `time` (layer time), or with `time` nil, still running at all.
+    static func viewportMovesOnSamples(above layer: CALayer, since time: CFTimeInterval?) -> Bool {
+        var ancestor = layer.superlayer
+        while let current = ancestor {
+            if let viewport = current.animation(forKey: "ultraview.list.viewportOffset"), !(viewport is CABasicAnimation) {
+                if viewport.beginTime == 0 { return true }
+                if let time {
+                    if viewport.beginTime >= time - 0.001 { return true }
+                } else if current.convertTime(CACurrentMediaTime(), from: nil) < viewport.beginTime + viewport.duration / Double(max(viewport.speed, 1e-6)) {
+                    return true
+                }
+            }
+            ancestor = current.superlayer
+        }
+        return false
     }
 
     /// `transition` as the list compiles it for a row in `view`'s list.
@@ -265,6 +286,9 @@ final class NodeRowMotion {
         guard host.superview != nil, let timing = appearanceTiming() else { return }
         switch appearance {
         case .growing(let frames):
+            // Window frames are placed through curves the conversion reads;
+            // a viewport still moving on samples from an earlier pass has none.
+            if let layer = view?.layer, Self.viewportMovesOnSamples(above: layer, since: nil) { return }
             let start = frames().map { (key: $0.key, frame: host.convertFromWindowAtAnimationStart($0.frame, since: turnStartTime)) }
             host.animateTransition(from: NodeTransitionSnapshot(frames: start), timing: timing)
             // The content starts outside the row's slot: let it show there

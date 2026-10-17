@@ -3,6 +3,7 @@ import QuartzCore
 import Testing
 import UIKit
 @testable import UltraCore
+@testable import UltraList
 import UltraView
 
 /// Layout transitions on real views: where their layers go, and what the
@@ -212,6 +213,79 @@ import UltraView
         let back = CABasicAnimation()
         back.timingFunction = CAMediaTimingFunction(controlPoints: 0.3, 1.4, 0.6, 1)
         #expect(try #require(NodeAnimationTiming(matching: back)).staysWithinItsEnds == false)
+    }
+
+    @Test(arguments: [false, true]) func aRowEntersAtItsFinalStateWhenItsViewportMovesOnSamples(sampled: Bool) async throws {
+        let window = makeWindow()
+        window.frame = CGRect(x: 0, y: 0, width: 320, height: 400)
+        let viewport = UIView(frame: window.bounds), row = UIView(frame: CGRect(x: 0, y: 0, width: 320, height: 100))
+        window.addSubview(viewport); viewport.addSubview(row)
+        window.isHidden = false
+        defer { window.isHidden = true }
+        let host = NodeHostView(rootNode: bubble("Hello").root)
+        host.frame = row.bounds
+        row.addSubview(host)
+        await host.settle()
+
+        let motion = NodeRowMotion()
+        motion.view = row
+        motion.passWillApply(.easeInOut(0.4))
+        motion.show(host, replacing: nil, appearance: .appearing([NodeAppearance(key: "bubble")]))
+        // The pass moves the viewport: on a curve, or through sampled values.
+        let moving: CAPropertyAnimation
+        if sampled {
+            let keyframes = CAKeyframeAnimation(keyPath: "bounds.origin.y")
+            keyframes.values = [40, 25, 10, 0]; keyframes.duration = 0.4
+            moving = keyframes
+        } else {
+            let basic = CABasicAnimation(keyPath: "bounds.origin.y")
+            basic.fromValue = 40; basic.toValue = 0; basic.duration = 0.4
+            moving = basic
+        }
+        moving.isAdditive = true
+        viewport.layer.add(moving, forKey: "ultraview.list.viewportOffset")
+        motion.passDidComplete()
+
+        let bubble = try layer(host, "bubble")
+        #expect(host.layer.opacity == 1)
+        if sampled {
+            #expect(bubble.animation(forKey: "ultraview.node.transform") == nil && bubble.animation(forKey: "ultraview.node.opacity") == nil)
+        } else {
+            #expect(bubble.animation(forKey: "ultraview.node.transform")?.duration == 0.4)
+        }
+    }
+
+    @Test func aSentRowLandsWhileAnEarlierSampledViewportMotionRuns() async throws {
+        let window = makeWindow()
+        window.frame = CGRect(x: 0, y: 0, width: 320, height: 400)
+        let viewport = UIView(frame: window.bounds), row = UIView(frame: CGRect(x: 0, y: 300, width: 320, height: 100))
+        window.addSubview(viewport); viewport.addSubview(row)
+        window.isHidden = false
+        defer { window.isHidden = true }
+        // A sampled viewport motion from an earlier pass, still running.
+        let keyframes = CAKeyframeAnimation(keyPath: "bounds.origin.y")
+        keyframes.values = [40, 25, 10, 0]; keyframes.duration = 5; keyframes.isAdditive = true
+        viewport.layer.add(keyframes, forKey: "ultraview.list.viewportOffset")
+        CATransaction.flush()
+        try await Task.sleep(for: .milliseconds(50))
+
+        let host = NodeHostView(rootNode: bubble("Hello").root)
+        host.frame = row.bounds
+        row.addSubview(host)
+        await host.settle()
+        let motion = NodeRowMotion()
+        motion.view = row
+        motion.passWillApply(.easeInOut(0.4))
+        motion.show(host, replacing: nil, appearance: .growing(from: { [(key: "bubble", frame: CGRect(x: 10, y: 360, width: 200, height: 30))] }))
+        // The row's own geometry animates on a curve in this pass.
+        let height = CABasicAnimation(keyPath: "bounds.size.height")
+        height.fromValue = 0; height.toValue = 100; height.duration = 0.4
+        row.layer.add(height, forKey: "ultraview.list.height")
+        motion.passDidComplete()
+
+        let bubble = try layer(host, "bubble")
+        #expect(host.layer.opacity == 1)
+        #expect(bubble.animation(forKey: "ultraview.node.position.y") == nil && bubble.animation(forKey: "ultraview.node.bounds.size.width") == nil)
     }
 }
 #endif
