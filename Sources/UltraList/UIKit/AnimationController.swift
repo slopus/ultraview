@@ -152,7 +152,9 @@ final class AnimationController {
         if let origin = animationOrigin(key, generation: generation) { return origin }
         // An installed animation with a zero beginTime is waiting for its
         // transaction's clock. Followers in that transaction must wait too.
-        if layers[key.owner]?.animation(forKey: key.animationKey) != nil { return nil }
+        if let animation = layers[key.owner]?.animation(forKey: key.animationKey),
+           (animation.value(forKey: "ultraviewGeneration") as? NSNumber)?.uint64Value == generation,
+           animation.beginTime == 0 { return nil }
         return fallback
     }
     func inheritPosition(_ owner: AnimationOwner, from reference: AnimationOwner) {
@@ -170,13 +172,23 @@ final class AnimationController {
     }
     func joinPosition(_ owner: AnimationOwner, shown: Double, target: Double, at time: Double) {
         let key = ListAnimationModel.Key(owner, .positionY)
-        guard let track = model.tracks[key] else { return }
-        let origin = clockOrigin(key, generation: track.generation, fallback: track.startTime)
+        let own = model.tracks[key]
+        var clock = own.map { (key: key, track: $0) }
+        if clock == nil {
+            var deadline = -Double.infinity
+            for (source, track) in model.tracks where source.owner == owner && source.positionSource != nil {
+                let end = (animationOrigin(source, generation: track.generation) ?? track.startTime) + track.transition.duration
+                if end > deadline { deadline = end; clock = (source, track) }
+            }
+        }
+        guard let clock else { return }
+        let track = clock.track
+        let origin = clockOrigin(clock.key, generation: track.generation, fallback: track.startTime)
         let current = origin.map { track.value(at: track.startTime + time - $0) } ?? track.from
         let remaining = abs(track.from - track.to) > 1e-6 ? (current - track.to) / (track.from - track.to) : 0
         let residual = shown - target - positionLayerValue(owner, at: time)
         let from = remaining > 0 ? residual / remaining : 0
-        if remaining >= 0.15, abs(track.from) > 1e-6, abs(from) <= 3 * abs(track.from) {
+        if own != nil, remaining >= 0.15, abs(track.from) > 1e-6, abs(from) <= 3 * abs(track.from) {
             if let joined = model.replace(owner, .positionY, from: from, to: 0,
                                           at: track.startTime, transition: track.transition) {
                 install(owner, .positionY, track: joined, explicitOrigin: origin)
@@ -297,9 +309,14 @@ final class AnimationController {
         layoutTrack = nil; layoutOrigin = nil
     }
     func retentionDeadline(_ owner: AnimationOwner) -> Double {
-        model.tracks.filter { $0.key.owner == owner }.map { key, track in
-            (animationOrigin(key, generation: track.generation) ?? track.startTime) + track.transition.duration
-        }.max() ?? now
+        retentionDeadline(owners: [owner])
+    }
+    func retentionDeadline(owners: Set<AnimationOwner>) -> Double {
+        var deadline = now
+        for (key, track) in model.tracks where owners.contains(key.owner) {
+            deadline = max(deadline, (animationOrigin(key, generation: track.generation) ?? track.startTime) + track.transition.duration)
+        }
+        return deadline
     }
     private func clear(_ owner: AnimationOwner, _ property: AnimatedProperty) {
         clear(.init(owner, property))
@@ -340,7 +357,9 @@ final class AnimationController {
         if let entry = completions[key], entry.0 == generation { completions.removeValue(forKey: key); entry.1() }
     }
     private func animationOrigin(_ key: ListAnimationModel.Key, generation: UInt64?) -> Double? {
-        if let layer = layers[key.owner], let animation = layer.animation(forKey: key.animationKey), animation.beginTime != 0 {
+        if let generation, let layer = layers[key.owner], let animation = layer.animation(forKey: key.animationKey),
+           (animation.value(forKey: "ultraviewGeneration") as? NSNumber)?.uint64Value == generation,
+           animation.beginTime != 0 {
             return referenceLayer?.convertTime(animation.beginTime, from: layer) ?? layer.convertTime(animation.beginTime, to: nil)
         }
         return origins[key].flatMap { $0.generation == generation ? $0.time : nil }

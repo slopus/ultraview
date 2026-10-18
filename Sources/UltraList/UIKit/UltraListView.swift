@@ -661,11 +661,14 @@ public final class UltraListView: UltraScrollView {
             func band(_ row: WindowRow) -> ContinuationField.Band {
                 .init(height: row.height, top: row.reservedTop, bottom: row.reservedBottom)
             }
-            let witness = animations.model.tracks.first { $0.value.startTime == time }
             let participants = Set(views.keys).union(carried.keys)
-            let deadline = participants.reduce(time + transition.duration * animations.durationScale) {
-                max($0, animations.retentionDeadline(.row($1)))
-            }
+            let witness = animations.model.tracks.first { entry in
+                guard entry.value.startTime == time, entry.key.property == .positionY,
+                      entry.key.positionSource == nil, case .row(let id) = entry.key.owner else { return false }
+                return participants.contains(id)
+            } ?? animations.model.tracks.first { $0.value.startTime == time }
+            let deadline = max(time + transition.duration * animations.durationScale,
+                animations.retentionDeadline(owners: Set(participants.map(AnimationOwner.row))))
             let oldBands = Dictionary(uniqueKeysWithValues: oldWindow.rows.map { (oldItems[$0.index].identity, band($0)) })
             let newBands = Dictionary(uniqueKeysWithValues: settledWindow.rows.map { (items[$0.index].identity, band($0)) })
             mountContinuation = .init(oldIDs: oldIDs, oldIndices: oldLookup,
@@ -887,6 +890,7 @@ public final class UltraListView: UltraScrollView {
                              mounting: [WindowRow]? = nil) {
         resolveMountContinuation(at: time)
         let heightMotions = animations.heightMotions(at: time), layout = animations.layoutPosition(at: time)
+        guard mountContinuation != nil || !heightMotions.isEmpty || layout != nil || !carriedPositions.isEmpty else { return }
         let geometry = mountSizeGeometry
         func placement(_ view: ListRowView?) -> Double {
             guard let view else { return 0 }

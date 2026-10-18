@@ -772,9 +772,9 @@ repeated index differences across move boundaries, reserves, placement, and
 unknown or distant bands. This helper has no Lean refinement proof.
 
 The follow-up source pins are `UltraListView.swift` SHA-256
-`668c7cbcbb39623c8e76db8c5c3c86b42120de02f11fc18af5670fe18bfcd71f` and
+`7ddb8aef51fbd70cd041627400730ebaabec9776d8e6008b1f5d47b39bdb52c0` and
 `AnimationController.swift` SHA-256
-`0d0d515ffbd0e283c2c8dca49d6ee1965aa45cc0ecac1f9d780ad573cf56b8b5`.
+`01d74bf1189bcca6b97f5f50778403277c413fd14ebcf9d1295655dd64014ae9`.
 `UltraListView.mountMotion` saves the latest `SizePositionGeometry` and keeps
 the source heights presented when the structural pass began. Both band orders
 use those frozen heights, including a source crossing their interval in a move.
@@ -791,6 +791,16 @@ presented position; a small remaining fraction or more than threefold travel
 uses a fresh transition. This is position continuity, not a velocity guarantee.
 Capturing the origin before detaching its layer is part of the UIKit contract.
 These installation, fallback and bounded-history choices remain outside Lean.
+
+The clock-boundary follow-up checks the installed animation's generation before
+reading its native origin, and prefers a participant's own position clock as
+the structural witness. If a carry has only follower motion, its join uses a
+fresh transition on the longest remaining follower timing. The UIKit boundary
+suite checks stale row and viewport generations and the carry's presented
+positions. A single scan collects the participant deadline; idle mounts skip
+the reconstruction when there is no continuation, height, layout or carry.
+The additive-sum and height-coefficient model rows above remain unchanged;
+neither these UIKit guards nor their execution cost have a Lean refinement.
 
 ## Pending scroll targets and readiness holds
 

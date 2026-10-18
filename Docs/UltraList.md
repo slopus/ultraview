@@ -376,7 +376,11 @@ as its existing participants.
 A carried view joining its measured slot resumes from its presented position
 on the old clock. Near its deadline, or when that would amplify travel more
 than threefold, it uses a short remaining transition. This preserves position
-at the join; it does not preserve velocity there.
+at the join; it does not preserve velocity there. A carry with only follower
+motion uses a fresh join transition based on the longest remaining follower
+clock. Saved witnesses reject a replacement animation's generation when
+resolving their native origin. Continuation deadlines are collected in one
+track scan, and idle mounts skip motion reconstruction.
 
 ## Decisions for unresolved behavior
 
