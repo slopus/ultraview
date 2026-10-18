@@ -379,8 +379,15 @@ than threefold, it uses a short remaining transition. This preserves position
 at the join; it does not preserve velocity there. A carry with only follower
 motion uses a fresh join transition based on the longest remaining follower
 clock. Saved witnesses reject a replacement animation's generation when
-resolving their native origin. Continuation deadlines are collected in one
-track scan, and idle mounts skip motion reconstruction.
+resolving their native origin. New records choose their witness after incoming
+rows finish installing their continuation clocks. Fresh joins apply duration
+scaling once, including the curve's playback scale. Continuation deadlines are
+collected in one track scan, and idle mounts skip motion reconstruction.
+
+A later animated structural pass can put a mounted row's remaining displacement
+on its new transition while an unaffected neighbour keeps its older clock.
+With multiple mutation boundaries, a temporary gap can therefore close later
+than the first transition planned.
 
 ## Decisions for unresolved behavior
 

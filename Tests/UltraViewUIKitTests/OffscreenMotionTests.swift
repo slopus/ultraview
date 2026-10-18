@@ -25,6 +25,37 @@ private enum UnloadedMutation: CaseIterable {
 @MainActor
 @Suite(.serialized) struct OffscreenMotionTests {
     @Test(arguments: ScrollEngineMode.allCases)
+    func anIncomingWitnessKeepsTheCommitOriginAfterItsOwnTrackIsReplaced(mode: ScrollEngineMode) async throws {
+        let window = makeWindow()
+        window.frame = .init(x: 0, y: 0, width: 320, height: 300)
+        let list = UltraListView(engineMode: mode)
+        list.frame = window.bounds; list.preloadMargin = 0
+        window.addSubview(list); window.isHidden = false
+        defer { list.haltScrolling(); window.isHidden = true }
+        list.layoutIfNeeded()
+        var rows = (0..<30).map { MountMotionRow(identity: String($0)) }
+        list.applyChanges(items: rows, transition: .none)
+        try await flush()
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        rows.remove(at: 2)
+        list.applyChanges(items: rows, transition: .init(duration: 1, curve: .linear))
+        delayCommit()
+        CATransaction.commit()
+        try await flush()
+        let incoming = try #require(list.loadedItemView(at: 2))
+        let original = try #require(incoming.layer.animation(forKey: "ultraview.list.continuation"))
+        let originalOrigin = list.layer.convertTime(original.beginTime, from: incoming.layer)
+        list.setScrollOffset(list.currentScrollOffset + 100)
+        list.handleScroll(list.currentScrollOffset)
+        try await flush()
+        let mounted = try #require(list.loadedItemView(at: 3))
+        let inherited = try #require(mounted.layer.animation(forKey: "ultraview.list.continuation"))
+        let inheritedOrigin = list.layer.convertTime(inherited.beginTime, from: mounted.layer)
+        #expect(abs(inheritedOrigin - originalOrigin) <= 0.001,
+                "\(mode): replacing an incoming witness moved later mounts to the pass clock")
+    }
+
+    @Test(arguments: ScrollEngineMode.allCases)
     func aResizingSourceCanMoveAcrossTheMountedInterval(mode: ScrollEngineMode) async throws {
         let window = (UIWindow.self as NSObject.Type).init() as! UIWindow
         window.frame = .init(x: 0, y: 0, width: 320, height: 300)

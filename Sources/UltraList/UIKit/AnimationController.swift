@@ -196,7 +196,7 @@ final class AnimationController {
         } else if abs(residual) > 1e-6 {
             var transition = track.transition
             transition.duration = max((origin ?? time) + transition.duration - time, 0.2 * transition.duration)
-            replace(owner, .positionY, from: residual, to: 0, at: time, transition: transition)
+            replace(owner, .positionY, from: residual, to: 0, at: time, transition: transition.scaled(by: 1 / durationScale))
         } else {
             replace(owner, .positionY, from: 0, to: 0, at: time, transition: .immediate)
         }

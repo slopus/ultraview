@@ -6,6 +6,41 @@ import Testing
 
 @MainActor
 @Suite(.serialized) struct AnimationClockBoundaryTests {
+    @Test(arguments: [ListCurve.linear, .dampedSpring(damping: 22)])
+    func aFreshCarryJoinScalesItsDurationAndCurveOnce(curve: ListCurve) async throws {
+        let window = makeWindow(), host = UIView(frame: .init(x: 0, y: 0, width: 100, height: 500))
+        window.addSubview(host); window.isHidden = false
+        defer { window.isHidden = true }
+        host.layer.speed = 0; host.layer.timeOffset = 100.2
+        let row = CALayer()
+        row.anchorPoint = .zero; row.position = .init(x: 0, y: 400)
+        row.bounds = .init(x: 0, y: 0, width: 100, height: 100)
+        host.layer.addSublayer(row)
+        let controller = AnimationController(), owner = AnimationOwner.row("carry")
+        controller.durationScale = 2
+        controller.referenceLayer = host.layer; controller.bind(owner, layer: row)
+        let transition = ListTransition(duration: 0.5, curve: curve).scaled(by: 2)
+        let follower = AnimationTrack(generation: 1, from: -100, to: 0, startTime: 100, transition: transition)
+        controller.setPositionLayers(owner, [.init(source: .height("source"), track: follower, origin: 100)])
+        let residual = 350 - 400 - follower.value(at: 100.2)
+        controller.joinPosition(owner, shown: 350, target: 400, at: 100.2)
+        let actual = try #require(controller.model.tracks[.init(owner, .positionY)])
+        var remaining = transition; remaining.duration = 0.8
+        let expected = AnimationTrack(generation: 1, from: residual, to: 0, startTime: 100.2, transition: remaining)
+        #expect(abs(actual.transition.duration - 0.8) <= 1e-6)
+        #expect(actual.transition.durationFactor == 2)
+        try await flush()
+        let samples = curve == .linear ? [0.0, 0.05, 0.1, 0.2, 0.4, 0.6, 0.8] : [0.0, 0.05, 0.1, 0.2, 0.4, 0.6]
+        for elapsed in samples {
+            host.layer.timeOffset = 100.2 + elapsed
+            try await flush()
+            let shown = try #require(row.presentation())
+            let position = 400 + follower.value(at: 100.2 + elapsed) + expected.value(at: 100.2 + elapsed)
+            #expect(abs(shown.position.y - position) <= 0.5,
+                    "\(curve) at \(elapsed): a fresh join applied the duration scale twice")
+        }
+    }
+
     @Test(arguments: [AnimationOwner.row("row"), .viewport])
     func replacingAnAnimationRejectsThePreviousGenerationsOrigin(owner: AnimationOwner) async throws {
         let window = makeWindow(), host = UIView(frame: .init(x: 0, y: 0, width: 100, height: 400))

@@ -655,18 +655,14 @@ public final class UltraListView: UltraScrollView {
                 animations.replace(owner, .positionY, from: inferred - newY - animations.positionLayerValue(owner, at: time), to: 0, at: time, transition: transition)
             }
         }
+        let startsMountContinuation = !transition.isImmediate && (mutatesRows || !diff.moves.isEmpty) && !isCarousel && !fullReplace
         if isCarousel || fullReplace {
             mountContinuation = nil
-        } else if !transition.isImmediate && (mutatesRows || !diff.moves.isEmpty) {
+        } else if startsMountContinuation {
             func band(_ row: WindowRow) -> ContinuationField.Band {
                 .init(height: row.height, top: row.reservedTop, bottom: row.reservedBottom)
             }
             let participants = Set(views.keys).union(carried.keys)
-            let witness = animations.model.tracks.first { entry in
-                guard entry.value.startTime == time, entry.key.property == .positionY,
-                      entry.key.positionSource == nil, case .row(let id) = entry.key.owner else { return false }
-                return participants.contains(id)
-            } ?? animations.model.tracks.first { $0.value.startTime == time }
             let deadline = max(time + transition.duration * animations.durationScale,
                 animations.retentionDeadline(owners: Set(participants.map(AnimationOwner.row))))
             let oldBands = Dictionary(uniqueKeysWithValues: oldWindow.rows.map { (oldItems[$0.index].identity, band($0)) })
@@ -684,9 +680,9 @@ public final class UltraListView: UltraScrollView {
                     return (motion.identity, motion.track.to + residual)
                 }),
                 clock: .init(generation: 0, from: 0, to: 0, startTime: time, transition: transition.scaled(by: animations.durationScale)),
-                origin: witness == nil ? time : nil,
+                origin: nil,
                 deadline: deadline,
-                witness: witness?.key, witnessGeneration: witness?.value.generation)
+                witness: nil, witnessGeneration: nil)
         }
         if preservesMoveClock {
             mountMotion(previous: oldWindow, carriedPositions: mountedCarryPositions, at: time)
@@ -700,6 +696,21 @@ public final class UltraListView: UltraScrollView {
             if !incoming.isEmpty {
                 mountMotion(previous: previous, carriedPositions: [:], at: time, mounting: incoming)
             }
+        }
+        if startsMountContinuation, var record = mountContinuation {
+            func isInstalledRowClock(_ entry: (key: ListAnimationModel.Key, value: AnimationTrack)) -> Bool {
+                guard entry.value.startTime == time, case .row(let id) = entry.key.owner,
+                      let view = views[id], let animation = view.layer.animation(forKey: entry.key.animationKey) else { return false }
+                return (animation.value(forKey: "ultraviewGeneration") as? NSNumber)?.uint64Value == entry.value.generation
+            }
+            // Incoming rows can replace their own tracks with a continuation.
+            // Choose the witness after those installations have finished.
+            let witness = animations.model.tracks.first { $0.key.positionSource == .continuation && isInstalledRowClock($0) }
+                ?? animations.model.tracks.first { $0.key.property == .positionY && $0.key.positionSource == nil && isInstalledRowClock($0) }
+                ?? animations.model.tracks.first { $0.value.startTime == time }
+            record.witness = witness?.key; record.witnessGeneration = witness?.value.generation
+            if witness == nil { record.origin = time }
+            mountContinuation = record
         }
         CATransaction.commit()
         sweepPreparations(force: newItems != nil || sizeChanged)

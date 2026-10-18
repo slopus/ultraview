@@ -772,9 +772,9 @@ repeated index differences across move boundaries, reserves, placement, and
 unknown or distant bands. This helper has no Lean refinement proof.
 
 The follow-up source pins are `UltraListView.swift` SHA-256
-`7ddb8aef51fbd70cd041627400730ebaabec9776d8e6008b1f5d47b39bdb52c0` and
+`7496a1ca5c38bf8a4fc18270c119b5924be5d2805e84ccc69349ead02fb5e4d7` and
 `AnimationController.swift` SHA-256
-`01d74bf1189bcca6b97f5f50778403277c413fd14ebcf9d1295655dd64014ae9`.
+`79a898b507478a4a989f8b502382c5f6c9ea1f453f371f82381db536e96880b7`.
 `UltraListView.mountMotion` saves the latest `SizePositionGeometry` and keeps
 the source heights presented when the structural pass began. Both band orders
 use those frozen heights, including a source crossing their interval in a move.
@@ -793,14 +793,26 @@ Capturing the origin before detaching its layer is part of the UIKit contract.
 These installation, fallback and bounded-history choices remain outside Lean.
 
 The clock-boundary follow-up checks the installed animation's generation before
-reading its native origin, and prefers a participant's own position clock as
-the structural witness. If a carry has only follower motion, its join uses a
+reading its native origin. After incoming rows finish installing their clocks,
+the structural witness prefers an installed continuation, then a participant's
+own position clock, before the pass-time fallback. If a carry has only follower
+motion, its join uses a
 fresh transition on the longest remaining follower timing. The UIKit boundary
 suite checks stale row and viewport generations and the carry's presented
 positions. A single scan collects the participant deadline; idle mounts skip
 the reconstruction when there is no continuation, height, layout or carry.
 The additive-sum and height-coefficient model rows above remain unchanged;
 neither these UIKit guards nor their execution cost have a Lean refinement.
+
+The origin follow-up checks a delayed native commit when deleting the last
+loaded row: incoming rows can replace their own track with a continuation, so
+the witness is selected after that replacement. Fresh joins undo the existing
+duration and playback scaling before `replace` applies it once. UIKit tests
+check the shared commit origin in all three engines, plus duration, playback
+scale and linear or damped-spring positions at scale 2. The row-by-row restart
+policy remains: a later structural pass can place one row's continuation on a
+new clock while an unaffected neighbour retains its old clock, delaying gap
+closure across multiple mutation boundaries. This policy is outside Lean.
 
 ## Pending scroll targets and readiness holds
 
