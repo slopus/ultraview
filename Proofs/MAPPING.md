@@ -754,7 +754,7 @@ window (the anchor staying put, the pinned boundary) is the choice's, which
 the Swift's intent. UIKit playback (that installed clocks are the model's)
 and generation callbacks are hypotheses, checked by the tests above.
 
-### Mount continuation review based on `926e692`
+### Mount continuation review based on `cde2528` and the follow-up below
 
 The follow-up adds `PositionSource.continuation` to the same additive sum.
 The `ListAnimationModel.value`, `positionLayerValue`, generation replacement
@@ -771,12 +771,22 @@ necessary height is unknown. Its exact-value Linux tests cover both directions,
 repeated index differences across move boundaries, reserves, placement, and
 unknown or distant bands. This helper has no Lean refinement proof.
 
+The follow-up source pins are `UltraListView.swift` SHA-256
+`668c7cbcbb39623c8e76db8c5c3c86b42120de02f11fc18af5670fe18bfcd71f` and
+`AnimationController.swift` SHA-256
+`0d0d515ffbd0e283c2c8dca49d6ee1965aa45cc0ecac1f9d780ad573cf56b8b5`.
 `UltraListView.mountMotion` saves the latest `SizePositionGeometry` and keeps
-the structural pass's height contributions frozen separately. Only height
-clocks present in that pass enter its continuation delta; later resizes remain
-independent. `AnimationController.inheritPosition` copies an own track and its
-origin. The saved record outlives a short structural pass if its witnesses still
-carry an older motion. A carried view's join solves for a new start on the same clock from its
+the source heights presented when the structural pass began. Both band orders
+use those frozen heights, including a source crossing their interval in a move.
+An already-running resize is not subtracted twice, and later resizes remain
+independent. Surviving rows first measured by the full pass use this calculation
+before becoming witnesses for later mounts. The record retains both identity
+orders across immediate updates;
+it uses record-time bands and copies its neighbour when a needed band is unknown.
+`AnimationController.inheritPosition` copies an own track and its origin, leaving
+an uncommitted origin unset so the native transaction assigns it to all rows.
+The saved record outlives a short or immediate structural pass if its witnesses
+still carry an older motion. A carried view's join solves for a new start on the same clock from its
 presented position; a small remaining fraction or more than threefold travel
 uses a fresh transition. This is position continuity, not a velocity guarantee.
 Capturing the origin before detaching its layer is part of the UIKit contract.

@@ -148,8 +148,12 @@ final class AnimationController {
         guard let track = model.tracks[key] else { return nil }
         return .init(source: source, track: track, origin: animationOrigin(key, generation: track.generation))
     }
-    func clockOrigin(_ key: ListAnimationModel.Key, generation: UInt64) -> Double? {
-        animationOrigin(key, generation: generation)
+    func clockOrigin(_ key: ListAnimationModel.Key, generation: UInt64, fallback: Double? = nil) -> Double? {
+        if let origin = animationOrigin(key, generation: generation) { return origin }
+        // An installed animation with a zero beginTime is waiting for its
+        // transaction's clock. Followers in that transaction must wait too.
+        if layers[key.owner]?.animation(forKey: key.animationKey) != nil { return nil }
+        return fallback
     }
     func inheritPosition(_ owner: AnimationOwner, from reference: AnimationOwner) {
         let key = ListAnimationModel.Key(reference, .positionY)
@@ -158,7 +162,7 @@ final class AnimationController {
             clear(owner, .positionY); origins.removeValue(forKey: .init(owner, .positionY))
             return
         }
-        let origin = animationOrigin(key, generation: track.generation) ?? track.startTime
+        let origin = clockOrigin(key, generation: track.generation, fallback: track.startTime)
         if let inherited = model.replace(owner, .positionY, from: track.from, to: track.to,
                                          at: track.startTime, transition: track.transition) {
             install(owner, .positionY, track: inherited, explicitOrigin: origin)
@@ -167,8 +171,8 @@ final class AnimationController {
     func joinPosition(_ owner: AnimationOwner, shown: Double, target: Double, at time: Double) {
         let key = ListAnimationModel.Key(owner, .positionY)
         guard let track = model.tracks[key] else { return }
-        let origin = animationOrigin(key, generation: track.generation) ?? track.startTime
-        let current = track.value(at: track.startTime + time - origin)
+        let origin = clockOrigin(key, generation: track.generation, fallback: track.startTime)
+        let current = origin.map { track.value(at: track.startTime + time - $0) } ?? track.from
         let remaining = abs(track.from - track.to) > 1e-6 ? (current - track.to) / (track.from - track.to) : 0
         let residual = shown - target - positionLayerValue(owner, at: time)
         let from = remaining > 0 ? residual / remaining : 0
@@ -179,7 +183,7 @@ final class AnimationController {
             }
         } else if abs(residual) > 1e-6 {
             var transition = track.transition
-            transition.duration = max(origin + transition.duration - time, 0.2 * transition.duration)
+            transition.duration = max((origin ?? time) + transition.duration - time, 0.2 * transition.duration)
             replace(owner, .positionY, from: residual, to: 0, at: time, transition: transition)
         } else {
             replace(owner, .positionY, from: 0, to: 0, at: time, transition: .immediate)

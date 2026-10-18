@@ -361,10 +361,18 @@ Rows that enter the measured window during a mutation inherit a surviving
 neighbour's position clock. A bounded comparison of old and new row bands
 adjusts that motion across insertions, deletions and moves; height followers
 keep their own clocks and the geometry used by the latest full pass. The
-structural pass saves its original height contributions, so a later resize
-does not become part of the older move. Its mount witnesses remain available
-until any older motion they carry also ends. Unknown band heights, or intervals
-longer than 64 rows, retain the neighbour's motion without measuring more rows.
+structural pass compares both row orders using the source heights presented
+when the pass began, so an older resize is not counted twice and a later resize
+keeps its own timing. Incoming rows in the full pass use the same calculation
+before serving as witnesses for subsequent mounts. Mount witnesses remain
+available through immediate collection updates until any older motion they
+carry also ends. The saved identity order
+keeps that calculation stable when pagination changes current indices. Unknown
+band heights, or intervals longer than 64 rows, retain the neighbour's motion
+without measuring more rows; current measurements do not fill unknown mutation
+bands retroactively. A never-loaded moved row also follows its neighbour.
+Rows mounted before a transaction commits receive the same native start time
+as its existing participants.
 A carried view joining its measured slot resumes from its presented position
 on the old clock. Near its deadline, or when that would amplify travel more
 than threefold, it uses a short remaining transition. This preserves position

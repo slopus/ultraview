@@ -18,9 +18,191 @@ private final class MountMotionRowView: ListRowView {
 private enum MountMutation: CaseIterable {
     case deletion, insertion, resize, move, deletionThenResize, deletionThenImmediateResize
 }
+private enum UnloadedMutation: CaseIterable {
+    case insertion, move
+}
 
 @MainActor
 @Suite(.serialized) struct OffscreenMotionTests {
+    @Test(arguments: ScrollEngineMode.allCases)
+    func aResizingSourceCanMoveAcrossTheMountedInterval(mode: ScrollEngineMode) async throws {
+        let window = (UIWindow.self as NSObject.Type).init() as! UIWindow
+        window.frame = .init(x: 0, y: 0, width: 320, height: 300)
+        let list = UltraListView(engineMode: mode)
+        list.frame = window.bounds; list.preloadMargin = 0
+        window.addSubview(list); window.isHidden = false
+        defer { list.haltScrolling(); window.isHidden = true }
+        list.layoutIfNeeded()
+        var rows = (0..<30).map { MountMotionRow(identity: String($0)) }
+        list.applyChanges(items: rows, transition: .none)
+        list.layer.speed = 0; list.layer.timeOffset = 100
+        let transition = ListTransition(duration: 1, curve: .linear)
+        rows[2].height = 240; rows[2].revision += 1
+        list.applyChanges(items: rows, transition: transition)
+        try await flush()
+        list.layer.timeOffset = 100.5
+        try await flush()
+        let moved = rows.remove(at: 2)
+        rows.insert(moved, at: 8)
+        list.applyChanges(items: rows, transition: transition)
+        try await flush()
+        #expect(!list.loadedIndexRange.contains(9))
+        list.layer.timeOffset = 100.6
+        try await flush()
+        list.setScrollOffset(list.currentScrollOffset + 750)
+        list.handleScroll(list.currentScrollOffset)
+        try await flush()
+        let mounted = try #require(list.loadedItemView(at: 9))
+        for (phase, expected) in [(0.6, -56.0), (1.0, 0.0), (1.5, 0.0)] {
+            list.layer.timeOffset = 100 + phase
+            try await flush()
+            let shown = try #require(shownFrame(mounted, in: list))
+            let settled = try #require(list.settledFrame(at: 9))
+            #expect(abs(shown.minY - settled.minY - expected) <= 0.5,
+                    "\(mode) at \(phase): crossing a resizing source changed the row's own movement")
+        }
+    }
+
+    @Test(arguments: ScrollEngineMode.allCases)
+    func aResizeAlreadyRunningAtTheStructuralPassIsNotCountedTwice(mode: ScrollEngineMode) async throws {
+        let window = (UIWindow.self as NSObject.Type).init() as! UIWindow
+        window.frame = .init(x: 0, y: 0, width: 320, height: 300)
+        let list = UltraListView(engineMode: mode)
+        list.frame = window.bounds; list.preloadMargin = 0
+        window.addSubview(list); window.isHidden = false
+        defer { list.haltScrolling(); window.isHidden = true }
+        list.layoutIfNeeded()
+        var rows = (0..<30).map { MountMotionRow(identity: String($0)) }
+        list.applyChanges(items: rows, transition: .none)
+        list.layer.speed = 0; list.layer.timeOffset = 100
+        let transition = ListTransition(duration: 1, curve: .linear)
+        rows[2].height = 240; rows[2].revision += 1
+        list.applyChanges(items: rows, transition: transition)
+        try await flush()
+        list.layer.timeOffset = 100.5
+        try await flush()
+        rows.remove(at: 0)
+        list.applyChanges(items: rows, transition: transition)
+        try await flush()
+        #expect(!list.loadedIndexRange.contains(2))
+        list.layer.timeOffset = 100.6
+        try await flush()
+        list.setScrollOffset(list.currentScrollOffset + 150)
+        list.handleScroll(list.currentScrollOffset)
+        try await flush()
+        let mounted = try #require(list.loadedItemView(at: 2))
+        for (phase, expected) in [(0.6, 34.0), (1.0, 50.0), (1.5, 0.0)] {
+            list.layer.timeOffset = 100 + phase
+            try await flush()
+            let shown = try #require(shownFrame(mounted, in: list))
+            let settled = try #require(list.settledFrame(at: 2))
+            #expect(abs(shown.minY - settled.minY - expected) <= 0.5,
+                    "\(mode) at \(phase): an older resize entered the structural clock twice")
+        }
+    }
+
+    @Test(arguments: ScrollEngineMode.allCases)
+    func anImmediateOffscreenInsertKeepsTheRunningMountContinuation(mode: ScrollEngineMode) async throws {
+        let window = (UIWindow.self as NSObject.Type).init() as! UIWindow
+        window.frame = .init(x: 0, y: 0, width: 320, height: 300)
+        let list = UltraListView(engineMode: mode)
+        list.frame = window.bounds; list.preloadMargin = 0
+        window.addSubview(list); window.isHidden = false
+        defer { list.haltScrolling(); window.isHidden = true }
+        list.layoutIfNeeded()
+        var rows = (0..<30).map { MountMotionRow(identity: String($0)) }
+        list.applyChanges(items: rows, transition: .none)
+        list.layer.speed = 0; list.layer.timeOffset = 100
+        rows.remove(at: 1)
+        list.applyChanges(items: rows, transition: .init(duration: 1, curve: .linear))
+        try await flush()
+        list.layer.timeOffset = 100.25
+        try await flush()
+        rows.insert(.init(identity: "pagination"), at: 20)
+        list.applyChanges(items: rows, transition: .none)
+        try await flush()
+        let oldRange = list.loadedIndexRange
+        list.layer.timeOffset = 100.3
+        try await flush()
+        list.setScrollOffset(list.currentScrollOffset + 150)
+        list.handleScroll(list.currentScrollOffset)
+        try await flush()
+        let newIndex = try #require(list.loadedIndexRange.first { !oldRange.contains($0) })
+        let mounted = try #require(list.loadedItemView(at: newIndex))
+        let shown = try #require(shownFrame(mounted, in: list))
+        let settled = try #require(list.settledFrame(at: newIndex))
+        #expect(abs(shown.minY - settled.minY - 70) <= 0.5,
+                "\(mode): immediate pagination discarded the earlier running motion")
+    }
+
+    @Test(arguments: ScrollEngineMode.allCases, UnloadedMutation.allCases)
+    private func aNeverLoadedMutationKeepsNewNeighboursTogether(mode: ScrollEngineMode, mutation: UnloadedMutation) async throws {
+        let window = (UIWindow.self as NSObject.Type).init() as! UIWindow
+        window.frame = .init(x: 0, y: 0, width: 320, height: 300)
+        let list = UltraListView(engineMode: mode)
+        list.frame = window.bounds; list.preloadMargin = 0
+        window.addSubview(list); window.isHidden = false
+        defer { list.haltScrolling(); window.isHidden = true }
+        list.layoutIfNeeded()
+        var rows = (0..<30).map { MountMotionRow(identity: String($0)) }
+        list.applyChanges(items: rows, transition: .none)
+        list.layer.speed = 0; list.layer.timeOffset = 100
+        switch mutation {
+        case .insertion: rows.insert(.init(identity: "new", height: 150), at: 8)
+        case .move:
+            let moved = rows.remove(at: 20)
+            rows.insert(moved, at: 8)
+        }
+        list.applyChanges(items: rows, transition: .init(duration: 1, curve: .linear))
+        try await flush()
+        list.layer.timeOffset = 100.25
+        try await flush()
+        list.setScrollOffset(list.currentScrollOffset + 750)
+        list.handleScroll(list.currentScrollOffset)
+        try await flush()
+        #expect(list.loadedIndexRange.contains(8) && list.loadedIndexRange.contains(9))
+        for index in list.loadedIndexRange {
+            let mounted = try #require(list.loadedItemView(at: index))
+            let shown = try #require(shownFrame(mounted, in: list))
+            let settled = try #require(list.settledFrame(at: index))
+            #expect(abs(shown.minY - settled.minY) <= 0.5,
+                    "\(mode)/\(mutation), row \(rows[index].identity): an unknown band split adjacent rows")
+        }
+    }
+
+    @Test(arguments: ScrollEngineMode.allCases)
+    func sameTransactionMountsShareTheParticipantsNativeOrigin(mode: ScrollEngineMode) async throws {
+        let window = (UIWindow.self as NSObject.Type).init() as! UIWindow
+        window.frame = .init(x: 0, y: 0, width: 320, height: 300)
+        let list = UltraListView(engineMode: mode)
+        list.frame = window.bounds; list.preloadMargin = 500
+        window.addSubview(list); window.isHidden = false
+        defer { list.haltScrolling(); window.isHidden = true }
+        list.layoutIfNeeded()
+        var rows = (0..<30).map { MountMotionRow(identity: String($0)) }
+        list.applyChanges(items: rows, transition: .none)
+        try await flush()
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        let moved = rows.remove(at: 1)
+        rows.insert(moved, at: 9)
+        list.applyChanges(items: rows, transition: .init(duration: 1, curve: .linear))
+        list.setScrollOffset(list.currentScrollOffset + 300)
+        list.handleScroll(list.currentScrollOffset)
+        delayCommit()
+        CATransaction.commit()
+        try await flush()
+        let participant = try #require(list.loadedItemView(at: 1))
+        let mounted = try #require(list.loadedItemView(at: 10))
+        let original = try #require(participant.layer.animation(forKey: "ultraview.list.positionY"))
+        let originalOrigin = list.layer.convertTime(original.beginTime, from: participant.layer)
+        for key in ["ultraview.list.positionY", "ultraview.list.continuation"] {
+            let inherited = try #require(mounted.layer.animation(forKey: key))
+            let inheritedOrigin = list.layer.convertTime(inherited.beginTime, from: mounted.layer)
+            #expect(abs(inheritedOrigin - originalOrigin) <= 0.001,
+                    "\(mode)/\(key): a same-transaction mount started before its participant")
+        }
+    }
+
     @Test(arguments: ScrollEngineMode.allCases)
     func aShortMutationKeepsAnOlderMovesMountWitness(mode: ScrollEngineMode) async throws {
         let window = (UIWindow.self as NSObject.Type).init() as! UIWindow
@@ -208,6 +390,7 @@ private enum MountMutation: CaseIterable {
     private func flush() async throws {
         CATransaction.flush(); try await Task.sleep(for: .milliseconds(35))
     }
+    private func delayCommit() { Thread.sleep(forTimeInterval: 0.03) }
     private func shownFrame(_ view: ListRowView?, in list: UltraListView) -> CGRect? {
         guard let layer = view?.layer.presentation(), let destination = list.layer.presentation() else { return nil }
         return layer.convert(layer.bounds, to: destination)
