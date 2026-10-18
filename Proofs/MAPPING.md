@@ -940,6 +940,34 @@ and display readiness themselves), the empty-items case of the zero guard
 (both cleared, nothing can apply), staged view reuse, mutations with new
 items (the preparation queue), and the `passing` deferral.
 
+**Animated destination coverage (the commit after `04e5f98`).**
+The distant-jump hold now applies to animated transitions too. The only
+source change removes `transition.isImmediate` from its guard
+(UltraListView.swift:519); that file's SHA-256 is
+`cb717770cdaf2db62d8a760422a2404534c378cd59c212597a5e6042c5461965`.
+The `Out.hold`, `Ev.observe` and `Ev.flush` rows above retain their behavior:
+the original target and transition are retried after the destination's
+visible geometry is measured and its required views report ready. The hold
+returns before replacing the settled window or promoting the departing
+strip. A target still halts the engine before this check.
+
+Previously an animated jump could start with a partial destination window.
+Later rows covered the old strip, which stayed beneath their transparent
+areas until its departure deadline. `FarJumpCoverageTests` gates the fourth
+100-point destination row of a 400-point viewport in every engine. Before
+the source change it failed the hold, coverage and stale-strip overlap
+checks in all three engines. After the change these checks and eventual
+departure cleanup pass; all 183 UIKit tests pass. Cleanup waits for the
+existing real-time completion fallback when the test pauses layer time.
+
+No Lean definition changes. The destination predicate, literal pixel
+coverage, measurements and UIKit readiness remain outside `Readiness`.
+The requested animation starts with its full duration when the hold ends;
+tap-to-motion latency and rows mounted beyond the initial destination
+margin during travel require interaction evidence. Existing pending-target
+semantics also remain: a later successful pass can supersede a held target,
+and touching the list does not cancel that target.
+
 ## Placing transformed row views at `460d78f`
 
 `Proofs/UltraProofs/List/Placement.lean` relates the list's content

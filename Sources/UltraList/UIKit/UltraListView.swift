@@ -516,7 +516,7 @@ public final class UltraListView: UltraScrollView {
         } else { coordinateMap = shift }
         let displacing = !isCarousel && (target != nil || displaces)
         let detachedShift = displacing ? coordinateMap : shift
-        if isCarousel, transition.isImmediate, !changesCollection, !displaces, let target {
+        if isCarousel, !changesCollection, !displaces, let target {
             let required = newWindow.rows.filter { newBase + $0.maxY - destination > viewport.insets.top && newBase + $0.y - destination < viewport.height - viewport.insets.bottom }
             var missing: [Int] = []
             if newWindow.range.lowerBound > 0, newBase + newWindow.minY - destination > viewport.insets.top + 0.5 { missing.append(newWindow.range.lowerBound - 1) }
