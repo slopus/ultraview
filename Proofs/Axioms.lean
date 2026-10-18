@@ -379,3 +379,13 @@ open UltraProofs
 #print axioms ListMount.delta_telescopes
 #print axioms ListMount.mounted_as_moved
 #print axioms ListMount.delta_sample
+#print axioms ListDeferred.step_shared
+#print axioms ListDeferred.shared_inv
+#print axioms ListDeferred.applies_idle
+#print axioms ListDeferred.old_stale
+#print axioms ListDeferred.step_once
+#print axioms ListDeferred.once_inv
+#print axioms ListDeferred.run_all
+#print axioms ListDeferred.overtake_sample
+#print axioms ListDeferred.normalize_affine
+#print axioms ListDeferred.normalize_all
