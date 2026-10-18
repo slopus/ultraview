@@ -2662,6 +2662,82 @@ The final hosted target imports the app module and uses its bundle loader
 without linking another library copy. Its build and all three unit-test
 stage logs contain no project duplicate-class or static-library warnings.
 
+## Public accessory viewport motion (after `71e1cce`)
+
+This review supersedes the accessory-copy and residual-reading details in the
+historical `ListReturn` (cancelled keyboard dismissal), `ListProfile` (keyboard
+viewport profile) and `ListDeferred` (deferred accessory updates) sections. The gesture,
+release decisions, request supersession and engine transitions are unchanged.
+The source pins are SHA-256:
+
+| Source | SHA-256 |
+| --- | --- |
+| `UltraList/UIKit/UltraListView.swift` | `24c11fdd99be3b2f2a040b853c3f6a55e4a0f7459a53230fecd3048123741f8e` |
+| `UltraViewDemo/List/ListChatController.swift` | `4713dbf5b00da4485271ec047790c790bcf421c2ba06c93706314e7fdfb3bf52` |
+
+| Existing model relation | Reviewed Swift |
+| --- | --- |
+| `ListDeferred.perform`, `apply`, `shared_inv`'s per-application clock condition | `performAfterCurrentPass` (UltraListView.swift:352) still queues the whole callback. `applyComposerInset` (ListChatController.swift:280) still rejects superseded requests. `applyComposerInsetNow` (:288) captures presentation (:297-301), applies the inset (:309), assigns the final accessory frame with actions disabled (:310-312), then calls the public seam for position and height (:314-315). |
+| `ListDeferred.normalize_affine`, `normalize_all` | `applyViewportMotion` (UltraListView.swift:415) normalizes nonconstant keyframes to `displacement * (value - last) / (first - last)` (:426-427). A constant template with a viewport profile uses `displacement * (1 - progress)` (:428-429); basic and spring templates instead set their scalar endpoints to displacement and zero (:433-434). |
+| `ListPass.lockstep_iff`'s shared-progress hypothesis | With a viewport template, the seam copies its duration, speed and curve, and converts a committed begin time into the accessory layer's coordinates (:438). The callback must run synchronously after its inset pass, in the same window with clocks running at the same speed. Actual native clock commitment and rendering remain assumptions, not proved refinements. |
+| `ListPass.finish_together`, `ListMomentum.finish_keeps_engine` | `removeComposerAnimations` (ListChatController.swift:319) now passes zero for both properties. The existing finishing transaction (:290-294) still removes accessory flight and calls `finishViewportTransition`; target travel retains its existing exception. |
+| `ListInsets.cheapSwift` and the full list pass | `viewportMotionSnaps` (UltraListView.swift:48) records immediate or at-most-half-point inset changes before applying new insets (:581, :1094). The adjacent `viewportMotionTransition` stores the inset timing with the animation duration scale (:582, :1095). These fields gate only the accessory animation; engine, viewport track and inset-compensation calculations are unchanged. |
+
+With a profile and a moving viewport, the copied keyframes are
+`from + (to - from) * progress`, so normalization gives
+`displacement * (1 - progress)` by `ListDeferred.normalize_affine`. The bar relation
+in `ListProfile.profile_exact` is unchanged, up to floating-point rounding.
+`viewportMotionSnaps` reflects the latest applied `newInsets` request. Passes
+without `newInsets` leave that flag unchanged. An inset request deferred during
+a pass or queued with items has not yet applied its flag or template. The seam is mapped only for the synchronous
+call after an applied inset change, as `applyComposerInsetNow` makes it.
+
+With an empty list or no viewport template, the seam synthesizes a
+keyframe animation from the latest inset transition (:440-455). It uses that
+transition's viewport profile, or 481 samples of its curve, with values
+`displacement * (1 - progress)`. An empty list ignores any viewport template
+retained from before its rows were cleared (:422). Logical duration and speed
+keep the effective duration under the animation scale. Progress is the model
+curve sampled by `AnimationTrack.value`, rather than the native spring installed
+by `AnimationController.compile`. Agreement retains the existing curve
+assumption; the last sample is forced to one so a spring lands at its duration.
+An empty list retains the requested viewport profile even though its full list
+pass does not apply a profile to rows. A new fallback begins at zero so Core
+Animation commits it on the inset transaction's clock. A repeated fallback
+whose metadata matches the existing `viewportRequest` keeps its committed
+begin time (:449-454). Any size or inset request advances `viewportRequest`
+(:504); a repeat after such a request starts a new clock with the stored
+transition. The sampled approximation and native clock behavior
+are runtime obligations; no new Lean relation is claimed for this branch.
+
+The public seam removes its previous animation for zero/subpixel displacement,
+an immediate/no-op inset or an unlaid-out viewport.
+It also removes the accessory animation for a constant keyframe template without
+a profile (:430-431), or a template that is neither keyframe nor basic (:435-436).
+This supersedes the historical `ListDeferred` not-covered third-branch bullet.
+These cases snap to the caller's model value; they do not assert shared motion
+with any unrelated viewport flight. Repeated calls replace one animation per
+accessory property on the same template clock. The list retains no accessory
+layer. Callers must capture the current presented scalar before changing their
+model, including on an interruption, and pass zero on detachment.
+
+Presentation sampling replaces the demo's analytic `composerAnimationResidual`.
+Core Animation's presentation availability, frame timing, interruption continuity,
+cross-layer time conversion and automatic mirror removal are not modeled in
+Lean. `ViewportMotionTests` adds 78 UIKit cases across all three engines for
+position/size curves, return and dismissal regrabs, hide/show interruption,
+rotation, idempotency, clock conversion, empty-list motion and the snap fallbacks.
+A new hosted runtime method exercises an empty chat's composer on keyboard
+show and hide in all three engines. The hosted keyboard/runtime and demo tests discover the accessory motion by property
+instead of depending on a demo-owned animation key. Native validation is pending.
+The 333 Linux tests and all 390 existing Lean checks pass; no Lean definition or
+theorem changed.
+
+The cold-row and target-ownership UltraListView citations and current-hash block
+above pin `7bdc426a` (`fda45e5`). At `24c11fdd`, lines from :48 move by 2, from
+:406 by 56, from :525 by 60 and from :1034 by 62. :524 is now :580-584.
+NodeRow, ListRow and WindowProjection are unchanged by this accessory change.
+
 ## Theorems
 
 **Correctness**

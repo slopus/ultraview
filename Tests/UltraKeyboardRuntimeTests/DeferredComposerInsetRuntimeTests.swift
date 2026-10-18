@@ -98,7 +98,7 @@ final class DeferredComposerInsetRuntimeTests: XCTestCase {
         XCTAssertTrue(reentered)
         try await Task.sleep(for: .milliseconds(60))
         CATransaction.flush()
-        let animation = try XCTUnwrap(bar.layer.animation(forKey: "ultraview.chat.composerPosition") as? CAPropertyAnimation)
+        let animation = try XCTUnwrap(composerMotion(bar.layer))
         let first = (animation as? CABasicAnimation)?.fromValue as? Double
             ?? ((animation as? CAKeyframeAnimation)?.values?.first as? Double)
         let initial = try XCTUnwrap(first)
@@ -113,5 +113,11 @@ final class DeferredComposerInsetRuntimeTests: XCTestCase {
             XCTAssertEqual(gap, relative, accuracy: 0.5, "\(mode)/\(phase): deferred inset and accessory must share one clock")
         }
     }
+}
+
+@MainActor
+private func composerMotion(_ layer: CALayer) -> CAPropertyAnimation? {
+    layer.animationKeys()?.compactMap { layer.animation(forKey: $0) as? CAPropertyAnimation }
+        .first { $0.keyPath == "position.y" }
 }
 #endif

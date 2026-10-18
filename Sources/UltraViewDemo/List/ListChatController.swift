@@ -13,7 +13,6 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
     private let placeholder = UILabel()
     private var composerHeight: NSLayoutConstraint?
     private var composerBottom: NSLayoutConstraint?
-    private var composerAnimationCurves: [String: ListCurve] = [:]
     private var waitsForSentCollection = false
     private var pendingComposerHeight: CGFloat?
     private var keyboardProbe: ListKeyboardGeometryProbe?
@@ -296,8 +295,9 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
             return
         }
         let modelFrame = composerBar.frame
-        let oldHeight = modelFrame.height + composerAnimationResidual("ultraview.chat.composerHeight")
-        let oldCenter = modelFrame.midY + composerAnimationResidual("ultraview.chat.composerPosition")
+        let presented = composerBar.layer.presentation()
+        let oldHeight = presented?.bounds.height ?? modelFrame.height
+        let oldCenter = presented?.position.y ?? modelFrame.midY
         let oldFrame = CGRect(x: modelFrame.minX, y: oldCenter - oldHeight / 2, width: modelFrame.width, height: oldHeight)
         composerInset = inset
         let height = composerHeight?.constant ?? composerBar.bounds.height
@@ -310,64 +310,15 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
         UIView.performWithoutAnimation {
             composerBar.frame = .init(x: oldFrame.minX, y: top, width: oldFrame.width, height: height)
         }
-        if !transition.isImmediate,
-           let animation = list.contentView.layer.animation(forKey: "ultraview.list.viewportOffset") as? CAPropertyAnimation {
-            keyboardProbe?.recordKeyboardTransition(transition)
-            animateComposerProperty("position.y", key: "ultraview.chat.composerPosition",
-                                    from: oldFrame.midY - composerBar.frame.midY, using: animation, transition: transition)
-            animateComposerProperty("bounds.size.height", key: "ultraview.chat.composerHeight",
-                                    from: oldFrame.height - height, using: animation, transition: transition)
-        } else if transition.isImmediate {
-            removeComposerAnimations()
-        }
+        if !transition.isImmediate { keyboardProbe?.recordKeyboardTransition(transition) }
+        list.applyViewportMotion(to: composerBar.layer, keyPath: "position.y", displacement: Double(oldFrame.midY - composerBar.frame.midY))
+        list.applyViewportMotion(to: composerBar.layer, keyPath: "bounds.size.height", displacement: Double(oldFrame.height - height))
         CATransaction.commit()
         keyboardProbe?.recordInsetUpdate(milliseconds: (CACurrentMediaTime() - start) * 1000)
     }
     private func removeComposerAnimations() {
-        composerBar.layer.removeAnimation(forKey: "ultraview.chat.composerPosition")
-        composerBar.layer.removeAnimation(forKey: "ultraview.chat.composerHeight")
-        composerAnimationCurves.removeAll(keepingCapacity: true)
-    }
-    private func composerAnimationResidual(_ key: String) -> Double {
-        guard let animation = composerBar.layer.animation(forKey: key) as? CAPropertyAnimation else { return 0 }
-        let initial = (animation as? CABasicAnimation)?.fromValue as? Double
-            ?? ((animation as? CAKeyframeAnimation)?.values?.first as? Double) ?? 0
-        guard animation.beginTime != 0 else { return initial }
-        let elapsed = max(0, composerBar.layer.convertTime(CACurrentMediaTime(), from: nil) - animation.beginTime) * Double(animation.speed)
-        guard elapsed < animation.duration else { return 0 }
-        if let values = (animation as? CAKeyframeAnimation)?.values as? [Double], values.count >= 2 {
-            let index = elapsed / animation.duration * Double(values.count - 1)
-            let lower = min(values.count - 2, Int(index)), fraction = index - Double(lower)
-            return values[lower] + (values[lower + 1] - values[lower]) * fraction
-        }
-        guard let curve = composerAnimationCurves[key] else { return 0 }
-        return initial * (1 - curve.value(at: elapsed / animation.duration, duration: animation.duration))
-    }
-    private func animateComposerProperty(_ path: String, key: String, from displacement: Double, using template: CAPropertyAnimation, transition: ListTransition) {
-        guard abs(displacement) > 0.5 else {
-            composerBar.layer.removeAnimation(forKey: key); composerAnimationCurves.removeValue(forKey: key)
-            return
-        }
-        let animation = template.copy() as! CAPropertyAnimation
-        animation.keyPath = path
-        if let keyframes = animation as? CAKeyframeAnimation {
-            if let curve = transition.viewportCurve {
-                keyframes.values = curve.progress.map { displacement * (1 - $0) }
-            } else if let values = keyframes.values as? [Double], let first = values.first, let last = values.last, abs(first - last) > 1e-6 {
-                keyframes.values = values.map { displacement * ($0 - last) / (first - last) }
-            } else {
-                keyframes.values = (0...480).map { step in
-                    displacement * (1 - transition.curve.value(at: Double(step) / 480, duration: transition.duration))
-                }
-            }
-        } else if let basic = animation as? CABasicAnimation {
-            basic.fromValue = displacement; basic.toValue = 0
-        }
-        animation.isAdditive = true; animation.delegate = nil
-        animation.isRemovedOnCompletion = true
-        if animation.beginTime != 0 { animation.beginTime = composerBar.layer.convertTime(animation.beginTime, from: list.contentView.layer) }
-        composerAnimationCurves[key] = transition.curve
-        composerBar.layer.add(animation, forKey: key)
+        list.applyViewportMotion(to: composerBar.layer, keyPath: "position.y", displacement: 0)
+        list.applyViewportMotion(to: composerBar.layer, keyPath: "bounds.size.height", displacement: 0)
     }
     @objc private func keyboardWillChange(_ notification: Notification) {
         let started = CACurrentMediaTime()

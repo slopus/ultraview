@@ -392,6 +392,34 @@ and a synchronous update callback.
 The callback resolves its resting inset from the signed overlap, applies the list
 inset, and then positions its accessory synchronously. `refresh()` follows layout
 and window changes; `invalidate()` detaches the window recognizer.
+Use `UltraListView.applyViewportMotion(to:keyPath:displacement:)` for the accessory's
+scalar position or size. The caller captures the presented value, applies the
+inset, sets the final model with actions disabled, then passes presented − final:
+
+```swift
+let applyAccessoryInset: (Double, ListTransition) -> Void = { inset, transition in
+    let presented = accessory.layer.presentation()?.position.y ?? accessory.layer.position.y // 1. Capture the presented value.
+    list.applyChanges(newInsets: .init(top: inset), transition: transition) // 2. Apply the inset.
+    UIView.performWithoutAnimation { accessory.frame = finalAccessoryFrame(inset) } // 3. Set the final model with actions disabled.
+    list.applyViewportMotion(to: accessory.layer, keyPath: "position.y", displacement: Double(presented - accessory.layer.position.y)) } // 4. Pass presented − final.
+```
+
+Resolve the inset (the larger of resting height and keyboard overlap, plus accessory height)
+before this helper. Supply it through `KeyboardDismissalController`'s `update:`
+callback for tracking, returning and dismissing. Forward notifications through
+`handle(_:)`; send unconsumed notification insets and their `ListTransition` to
+the same helper. Run the entire helper on the main thread, in
+`performAfterCurrentPass` when reentry is possible. Both layers must be in the
+same window and use running clocks at the same speed. The seam copies the
+viewport's basic, spring or sampled curve and its start time. Repeating it in a
+pass replaces the same property without stacking or restarting its clock.
+Capture presentation again when a show interrupts a hide, a finger regrabs a
+release, or rotation changes the destination. Immediate or unchanged/subpixel
+insets, displacement within half a point, or an unlaid-out viewport remove the
+property's mirror and snap to its model.
+An empty list or missing viewport animation follows the latest inset transition.
+An accessory already at its target is harmless. Pass displacement zero for each
+mirrored property when detaching it; completed mirrors remove themselves.
 `dismissImmediately()` ends editing and removes keyboard animations during
 immediate navigation.
 Forward keyboard frame-change and did-hide notifications through `handle(_:)`

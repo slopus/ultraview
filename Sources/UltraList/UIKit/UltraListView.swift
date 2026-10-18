@@ -45,6 +45,8 @@ public final class UltraListView: UltraScrollView {
     private let attachmentsHost = PassthroughView()
     private let carousel = PassthroughView()
     private let animations = AnimationController()
+    private var viewportMotionSnaps = true
+    private var viewportMotionTransition = ListTransition.immediate
     private var views: [String: ListRowView] = [:]
     private var carried: [String: (view: ListRowView, index: Int)] = [:]
     private var carryGenerations: [String: UInt64] = [:]
@@ -403,6 +405,60 @@ public final class UltraListView: UltraScrollView {
         renderAttachments(); reportVisibility()
     }
 
+    /// Adds the latest inset transition's flight to a scalar accessory property.
+    /// Capture its presented value before `applyChanges(newInsets:)`, set its final
+    /// model value with actions disabled, then pass presented minus final here.
+    /// Call synchronously after the inset pass, on a layer in the same window with
+    /// an ordinary running clock. An empty list uses the latest inset transition.
+    /// Immediate/no-op insets and displacements within half a point remove the flight.
+    /// Passing zero also cleans up when the accessory leaves its window.
+    public func applyViewportMotion(to layer: CALayer, keyPath: String, displacement: Double) {
+        let key = "ultraview.list.viewportMotion.\(keyPath)"
+        guard !viewportMotionSnaps, abs(displacement) > 0.5,
+              viewport.width > 0, viewport.height > 0 else {
+            layer.removeAnimation(forKey: key); return
+        }
+        let animation: CAPropertyAnimation
+        if !settledWindow.rows.isEmpty, let template = contentView.layer.animation(forKey: "ultraview.list.viewportOffset") as? CAPropertyAnimation {
+            animation = template.copy() as! CAPropertyAnimation
+            animation.keyPath = keyPath
+            if let keyframes = animation as? CAKeyframeAnimation {
+                if let values = keyframes.values as? [Double], let first = values.first, let last = values.last, abs(first - last) > 1e-6 {
+                    keyframes.values = values.map { displacement * ($0 - last) / (first - last) }
+                } else if let curve = animations.model.tracks[.init(.viewport, .viewportOffset)]?.viewportCurve {
+                    keyframes.values = curve.progress.map { displacement * (1 - $0) }
+                } else {
+                    layer.removeAnimation(forKey: key); return
+                }
+            } else if let basic = animation as? CABasicAnimation {
+                basic.fromValue = displacement; basic.toValue = 0
+            } else {
+                layer.removeAnimation(forKey: key); return
+            }
+            if animation.beginTime != 0 { animation.beginTime = layer.convertTime(animation.beginTime, from: contentView.layer) }
+        } else {
+            let transition = viewportMotionTransition
+            let duration = transition.duration / transition.durationFactor
+            let progress = transition.viewportCurve?.progress ?? (0...480).map { step in
+                step == 480 ? 1 : transition.curve.value(at: Double(step) / 480, duration: duration)
+            }
+            let keyframes = CAKeyframeAnimation(keyPath: keyPath)
+            keyframes.values = progress.map { displacement * (1 - $0) }
+            keyframes.calculationMode = .linear
+            keyframes.duration = duration; keyframes.speed = Float(1 / transition.durationFactor)
+            // A repeat on this inset request keeps its committed transaction clock.
+            if let previous = layer.animation(forKey: key),
+               (previous.value(forKey: "ultraviewViewportMotionRequest") as? NSNumber)?.uint64Value == viewportRequest {
+                keyframes.beginTime = previous.beginTime
+            }
+            keyframes.setValue(viewportRequest, forKey: "ultraviewViewportMotionRequest")
+            animation = keyframes
+        }
+        animation.isAdditive = true; animation.delegate = nil
+        animation.fillMode = .backwards; animation.isRemovedOnCompletion = true
+        layer.add(animation, forKey: key)
+    }
+
     /// All options are captured intact if a callback re-enters the pass.
     public func applyChanges(items newItems: [any ListRow]? = nil, newSize: CGSize? = nil, newInsets: ListInsets? = nil, scrollTo: ListScrollTarget? = nil, additionalScrollDistance: Double = 0, anchorMode: ListAnchorMode = .automatic, compensatesInsetChange: Bool = true, absorbsEdgeChangeIntoOverscroll: Bool = false, animatesInsertions: Bool = true, transition requestedTransition: ListTransition = .default) {
         // A newer explicit target supersedes a waiting one; a drag that
@@ -521,7 +577,11 @@ public final class UltraListView: UltraScrollView {
         let oldViews = views
         let dirty = scheduler.consume()
         if let newSize { viewport.width = newSize.width; viewport.height = newSize.height }
-        if let newInsets { viewport.insets = newInsets }
+        if let newInsets {
+            viewportMotionSnaps = transition.isImmediate || max(abs(newInsets.top - viewport.insets.top), abs(newInsets.bottom - viewport.insets.bottom), abs(newInsets.left - viewport.insets.left), abs(newInsets.right - viewport.insets.right)) <= 0.5
+            viewportMotionTransition = (requestedTransition.inheritsDefault ? transition : requestedTransition).scaled(by: animations.durationScale)
+            viewport.insets = newInsets
+        }
         let sizeChanged = oldViewport.width != viewport.width || oldViewport.height != viewport.height
         let insetChanged = oldViewport.insets != viewport.insets
         let displaces = sizeChanged || insetChanged || additionalScrollDistance != 0
@@ -1031,6 +1091,8 @@ public final class UltraListView: UltraScrollView {
     }
 
     private func updateViewportInsets(_ insets: ListInsets, compensates: Bool, transition: ListTransition) {
+        viewportMotionSnaps = transition.isImmediate || max(abs(insets.top - viewport.insets.top), abs(insets.bottom - viewport.insets.bottom), abs(insets.left - viewport.insets.left), abs(insets.right - viewport.insets.right)) <= 0.5
+        viewportMotionTransition = transition.scaled(by: animations.durationScale)
         guard insets != viewport.insets else { return }
         let started = CACurrentMediaTime()
         defer { MainThreadMonitor.shared.note("list inset compensates=\(compensates) \((CACurrentMediaTime() - started) * 1000) ms") }
