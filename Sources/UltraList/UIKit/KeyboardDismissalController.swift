@@ -4,7 +4,7 @@ import UIKit
 /// Opt-in keyboard dismissal driven together with an app's accessory and list.
 /// Call `refresh()` after layout and `invalidate()` when the owner leaves its window.
 /// The callback must apply its inset and accessory frame synchronously. Its supplied
-/// transition uses the keyboard's transaction clock and already includes resting-edge clipping.
+/// transition uses the keyboard's release curve; the client resolves its resting inset.
 /// Private keyboard hierarchy access is optional; unsupported configurations retain
 /// the scroll view's ordinary system interactive dismissal.
 @MainActor
@@ -15,6 +15,12 @@ public final class KeyboardDismissalController: NSObject {
     private weak var scrollView: UltraScrollView?
     private weak var attachedWindow: UIWindow?
     private var recognizer: KeyboardDismissalRecognizer?
+    private var layoutCommitView: KeyboardDismissalLayoutView?
+    private enum LayoutChange {
+        case tracking(KeyboardDismissalGesture.Tracking)
+        case release(KeyboardDismissalGesture.Release)
+    }
+    private var pendingLayout: (generation: UInt64, change: LayoutChange)?
     private var host: KeyboardHostLookup.Host?
     private var gesture = KeyboardDismissalGesture()
     private var generation: UInt64 = 0
@@ -33,6 +39,8 @@ public final class KeyboardDismissalController: NSObject {
     /// True while finger or release motion owns the app's keyboard inset.
     public var isDriving: Bool { ownership != .idle }
     public var dismissedInTouchSequence: Bool { gesture.dismissedInTouchSequence }
+    /// Return false for a touched view or any ancestor to decline this gesture.
+    public var shouldBegin: ((UIView) -> Bool)?
 
     public convenience init(scrollView: UltraScrollView, coordinateView: UIView,
                 accessoryHeight: @escaping () -> Double, restingHeight: @escaping () -> Double, hasInput: @escaping () -> Bool,
@@ -53,12 +61,14 @@ public final class KeyboardDismissalController: NSObject {
 
     private func takeOwnership(_ value: Ownership) {
         generation &+= 1
+        pendingLayout = nil
         ownership = value
     }
 
     isolated deinit {
         NotificationCenter.default.removeObserver(self)
         if let recognizer { attachedWindow?.removeGestureRecognizer(recognizer) }
+        layoutCommitView?.removeFromSuperview()
         if isDriving, let host {
             CATransaction.begin(); CATransaction.setDisableActions(true)
             host.view.layer.removeAnimation(forKey: Self.animationKey)
@@ -72,8 +82,11 @@ public final class KeyboardDismissalController: NSObject {
         guard let view = coordinateView, let window = view.window else { invalidate(); return }
         if attachedWindow !== window {
             if let recognizer { attachedWindow?.removeGestureRecognizer(recognizer) }
+            layoutCommitView?.removeFromSuperview(); pendingLayout = nil
             let input = KeyboardDismissalRecognizer(owner: self)
             window.addGestureRecognizer(input); recognizer = input; attachedWindow = window
+            let commitView = KeyboardDismissalLayoutView(owner: self)
+            window.addSubview(commitView); layoutCommitView = commitView
         }
         guard !isDriving else { return }
         host = lookupHost(window.windowScene)
@@ -145,8 +158,7 @@ public final class KeyboardDismissalController: NSObject {
                 let motionGeneration = self.generation
                 let finish: @MainActor @Sendable () -> Void = { [weak self] in
                     guard let self, self.generation == motionGeneration else { return }
-                    self.apply(offset: 0, duration: 0, phase: .returning)
-                    self.takeOwnership(.idle); self.refresh()
+                    self.finishReturning()
                 }
                 let holdOrigin = host.view.layer.animation(forKey: Self.animationKey).flatMap { animation in
                     animation.beginTime > 0 ? host.view.layer.convertTime(animation.beginTime, to: nil) : nil
@@ -189,6 +201,7 @@ public final class KeyboardDismissalController: NSObject {
         takeOwnership(.idle)
         gesture.cancelTracking(); touchHasClaimed = false
         if let recognizer { attachedWindow?.removeGestureRecognizer(recognizer) }
+        layoutCommitView?.removeFromSuperview(); layoutCommitView = nil
         recognizer = nil; attachedWindow = nil
         if let host {
             CATransaction.begin(); CATransaction.setDisableActions(true)
@@ -210,7 +223,7 @@ public final class KeyboardDismissalController: NSObject {
             removeAnimations(in: host.window)
             host.view.layer.bounds.origin.y = 0
         }
-        update(.init(height: restingHeight(), transition: .immediate, phase: .dismissing))
+        update(.init(height: 0, transition: .immediate, phase: .dismissing))
         CATransaction.commit()
         offset = 0
     }
@@ -222,17 +235,25 @@ public final class KeyboardDismissalController: NSObject {
 
     fileprivate func begin(_ touch: UITouch) -> Bool {
         guard let window = coordinateView?.window else { return false }
-        return begin(y: touch.location(in: window).y, time: touch.timestamp, touchedView: touch.view)
+        return begin(y: touch.location(in: window).y, time: CACurrentMediaTime(), touchedView: touch.view)
     }
 
+    fileprivate func resetTouchOutcome() { gesture.beginTouchSequence() }
+
     func begin(y: Double, time: Double, touchedView: UIView?) -> Bool {
-        gesture.beginTouchSequence()
+        resetTouchOutcome()
         refresh()
         touchHasClaimed = false
         if !isDriving { gesture = .init() }
-        guard ownership != .awaitingHide, let window = attachedWindow, let host,
+        guard ownership != .awaitingHide, ownership != .dismissing, let window = attachedWindow, let host,
               let view = coordinateView, hasInput(), let touchedView,
               touchedView === view || touchedView.isDescendant(of: view) else { return false }
+        var ancestor: UIView? = touchedView
+        while let current = ancestor {
+            if shouldBegin?(current) == false { return false }
+            if current === window { break }
+            ancestor = current.superview
+        }
         let frame = host.view.convert(host.view.bounds, to: window)
         let top = Double(frame.minY), screenHeight = Double(window.bounds.maxY)
         // An out-of-process or floating keyboard cannot be driven by this path.
@@ -250,40 +271,63 @@ public final class KeyboardDismissalController: NSObject {
 
     fileprivate func move(_ touch: UITouch) -> Bool {
         guard let window = attachedWindow else { return false }
-        return move(y: touch.location(in: window).y, time: touch.timestamp)
+        return move(y: touch.location(in: window).y, time: CACurrentMediaTime())
     }
 
     @discardableResult func move(y: Double, time: Double) -> Bool {
+        synchronizeGeometry()
         guard let value = gesture.move(y: y, time: time) else { return false }
         if !touchHasClaimed {
             if isDriving, let host {
                 let presented = -(host.view.layer.presentation()?.bounds.origin.y ?? host.view.layer.bounds.origin.y)
                 // A touch above the returning keyboard leaves that return running
                 // until the finger reaches it. Grabbing it cannot jump to zero.
-                guard value >= presented else { return false }
+                guard value.offset >= presented else { return false }
                 offset = presented
             }
             takeOwnership(.tracking); touchHasClaimed = true
         }
-        let currentGeneration = generation
-        performUpdate { [weak self] in
-            guard let self, self.generation == currentGeneration else { return }
-            self.apply(offset: value, duration: 0, phase: .tracking)
-        }
+        stage(.tracking(value))
         return true
     }
 
     fileprivate func end(_ touch: UITouch, cancelled: Bool) {
         guard let window = attachedWindow else { return }
-        end(y: touch.location(in: window).y, time: touch.timestamp, cancelled: cancelled)
+        end(y: touch.location(in: window).y, time: CACurrentMediaTime(), cancelled: cancelled)
     }
 
     func end(y: Double, time: Double, cancelled: Bool = false) {
-        guard let release = gesture.end(y: y, time: time, cancelled: cancelled), touchHasClaimed else { return }
-        let currentGeneration = generation
+        synchronizeGeometry()
+        guard let release = gesture.end(y: y, time: time, cancelled: cancelled) else { return }
+        guard touchHasClaimed || release.dismisses else { return }
+        takeOwnership(release.dismisses ? .dismissing : .returning)
+        stage(.release(release))
+    }
+
+    private func stage(_ change: LayoutChange) {
+        updateRequest &+= 1
+        pendingLayout = (generation, change)
+        if let layoutCommitView {
+            layoutCommitView.setNeedsLayout()
+            attachedWindow?.setNeedsLayout()
+        } else { commitPendingLayout() }
+    }
+
+    fileprivate func commitPendingLayout() {
+        guard let pending = pendingLayout else { return }
+        pendingLayout = nil
         performUpdate { [weak self] in
-            guard let self, self.generation == currentGeneration else { return }
-            self.release(release)
+            guard let self, self.generation == pending.generation else { return }
+            switch pending.change {
+            case .tracking(let value):
+                var value = value
+                if self.synchronizeGeometry() != nil { value.offset = max(0, value.boundary - self.keyboardTop) }
+                let interactive = self.attachedWindow.map { value.boundary != Double($0.bounds.maxY) } ?? false
+                self.apply(offset: value.offset, duration: 0, phase: .tracking, isInteractive: interactive)
+                self.gesture.commit(value)
+            case .release(let value):
+                self.release(value)
+            }
         }
     }
 
@@ -299,50 +343,83 @@ public final class KeyboardDismissalController: NSObject {
     }
 
     private func release(_ release: KeyboardDismissalGesture.Release) {
+        let keyboardHeight = synchronizeGeometry()
+        let targetOffset = release.dismisses ? keyboardHeight ?? release.targetOffset : 0
+        if !touchHasClaimed, let host, host.view.layer.animation(forKey: Self.animationKey) != nil {
+            offset = -(host.view.layer.presentation()?.bounds.origin.y ?? host.view.layer.bounds.origin.y)
+        }
         takeOwnership(release.dismisses ? .dismissing : .returning)
-        let duration = release.dismisses ? 0.3832 : 0.25
+        let duration = KeyboardDismissalMotion.releaseTransition(dismisses: release.dismisses).duration
         let currentGeneration = generation
-        apply(offset: release.targetOffset, duration: duration, phase: release.dismisses ? .dismissing : .returning) { [weak self] in
+        apply(offset: targetOffset, duration: duration, phase: release.dismisses ? .dismissing : .returning,
+              nativeRelease: true) { [weak self] in
             guard let self, self.generation == currentGeneration else { return }
-            self.apply(offset: release.targetOffset, duration: 0, phase: release.dismisses ? .dismissing : .returning)
             if release.dismisses {
+                self.apply(offset: self.synchronizeGeometry() ?? targetOffset, duration: 0, phase: .dismissing)
                 self.takeOwnership(.awaitingHide)
                 self.coordinateView?.window?.endEditing(true)
             } else {
-                self.takeOwnership(.idle)
-                self.refresh()
+                self.finishReturning()
             }
         }
+    }
+
+    @discardableResult private func synchronizeGeometry(lookupCurrentHost: Bool = false) -> Double? {
+        guard hasInput(), let window = attachedWindow,
+              let current = lookupCurrentHost ? lookupHost(window.windowScene) : host else { return nil }
+        let frame = current.view.convert(current.view.bounds, to: window)
+        guard frame.width >= window.bounds.width - 1, abs(frame.maxY - window.bounds.maxY) <= 1 else { return nil }
+        let top = Double(frame.minY)
+        if !lookupCurrentHost || abs(top - keyboardTop) > 0.5 { keyboardTop = top }
+        gesture.updateGeometry(screenHeight: Double(window.bounds.maxY), keyboardTop: keyboardTop)
+        return max(0, Double(window.bounds.maxY) - keyboardTop)
+    }
+
+    private func finishReturning() {
+        synchronizeGeometry(lookupCurrentHost: true)
+        apply(offset: 0, duration: 0, phase: .returning)
+        takeOwnership(.idle); refresh()
     }
 
     private func apply(offset target: Double, duration: Double, phase: KeyboardDismissalUpdate.Phase,
                        followsSystemClock: Bool = false,
                        replacingPositionKeys: [String] = [],
+                       nativeRelease: Bool = false, isInteractive: Bool = false,
                        completion: (@MainActor @Sendable () -> Void)? = nil) {
         guard let host, let view = coordinateView, let window = attachedWindow else { return }
         let bottom = Double(view.convert(view.bounds, to: window).maxY)
         let motion = KeyboardDismissalMotion(beginHeight: bottom - keyboardTop - offset,
                                             endHeight: bottom - keyboardTop - target, restingHeight: restingHeight())
-        let progress = duration > 0 ? KeyboardDismissalMotion.progress(duration: duration) : []
+        let progress = duration > 0 && !nativeRelease ? KeyboardDismissalMotion.progress(duration: duration) : []
         let scale = (scrollView as? UltraListView)?.animationDurationScale ?? 1
         let playbackDuration = followsSystemClock ? duration : duration * scale
         let transitionDuration = followsSystemClock ? duration / scale : duration
-        let transition = duration > 0 ? motion.transition(duration: transitionDuration, progress: progress) : .immediate
-        CATransaction.begin(); CATransaction.setDisableActions(true)
-        host.view.layer.bounds.origin.y = -target
+        let transition: ListTransition = duration <= 0 ? .immediate : nativeRelease
+            ? KeyboardDismissalMotion.releaseTransition(dismisses: phase == .dismissing)
+            : motion.transition(duration: transitionDuration, progress: progress)
+        if followsSystemClock { CATransaction.begin(); CATransaction.setDisableActions(true) }
+        let previousOffset = offset
+        offset = target
+        update(.init(height: bottom - keyboardTop - target, transition: transition, phase: phase, isInteractive: isInteractive))
+        UIView.performWithoutAnimation { host.view.layer.bounds.origin.y = -target }
         for key in replacingPositionKeys { host.view.layer.removeAnimation(forKey: key) }
         if duration > 0 {
-            let animation = CAKeyframeAnimation(keyPath: "bounds.origin.y")
-            animation.values = progress.map { (target - offset) * (1 - $0) }
-            animation.duration = playbackDuration; animation.isAdditive = true
-            animation.calculationMode = .linear
+            let animation: CAPropertyAnimation
+            if nativeRelease {
+                animation = KeyboardDismissalAnimation.make(dismisses: phase == .dismissing, from: previousOffset,
+                    to: target, durationScale: scale, maximumFramesPerSecond: window.windowScene?.screen.maximumFramesPerSecond ?? 60)
+            } else {
+                let sampled = CAKeyframeAnimation(keyPath: "bounds.origin.y")
+                sampled.values = progress.map { (target - previousOffset) * (1 - $0) }
+                sampled.duration = playbackDuration; sampled.isAdditive = true
+                sampled.calculationMode = .linear
+                animation = sampled
+            }
             if let completion { animation.delegate = KeyboardDismissalCompletion(completion) }
             host.view.layer.add(animation, forKey: Self.animationKey)
             if let completion { scheduleCompletion(completion, generation: generation, after: playbackDuration + 0.05) }
         } else { host.view.layer.removeAnimation(forKey: Self.animationKey) }
-        offset = target
-        update(.init(height: motion.height(at: 1), transition: transition, phase: phase))
-        CATransaction.commit()
+        if followsSystemClock { CATransaction.commit() }
     }
 
     private func scheduleCompletion(_ completion: @escaping @MainActor @Sendable () -> Void, generation: UInt64, after delay: Double) {
@@ -350,7 +427,7 @@ public final class KeyboardDismissalController: NSObject {
             guard let self, self.generation == generation else { return }
             if let host = self.host, let animation = host.view.layer.animation(forKey: Self.animationKey), animation.beginTime > 0 {
                 let now = host.view.layer.convertTime(CACurrentMediaTime(), from: nil)
-                let remaining = animation.beginTime + animation.duration - now
+                let remaining = animation.beginTime + animation.duration / max(0.001, Double(animation.speed)) - now
                 if remaining > 0 {
                     self.scheduleCompletion(completion, generation: generation, after: max(0.05, remaining)); return
                 }
@@ -366,10 +443,27 @@ public final class KeyboardDismissalController: NSObject {
         CATransaction.begin(); CATransaction.setDisableActions(true)
         host?.view.layer.removeAnimation(forKey: Self.animationKey)
         host?.view.layer.bounds.origin.y = 0
-        update(.init(height: restingHeight(), transition: .immediate, phase: .dismissing))
+        update(.init(height: 0, transition: .immediate, phase: .dismissing))
         CATransaction.commit()
         offset = 0
         refresh()
+    }
+}
+
+@MainActor
+private final class KeyboardDismissalLayoutView: UIView {
+    private weak var owner: KeyboardDismissalController?
+    init(owner: KeyboardDismissalController) {
+        self.owner = owner
+        super.init(frame: .zero)
+        isUserInteractionEnabled = false
+        isAccessibilityElement = false; accessibilityElementsHidden = true
+    }
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        owner?.commitPendingLayout()
     }
 }
 
@@ -386,6 +480,7 @@ private final class KeyboardDismissalRecognizer: UIGestureRecognizer, UIGestureR
     }
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
         guard !primary.isActive else { return }
+        owner?.resetTouchOutcome()
         guard touches.count == 1, let touch = touches.first, primary.begin(ObjectIdentifier(touch)), owner?.begin(touch) == true else {
             primary = .init(); state = .failed; return
         }

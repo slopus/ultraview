@@ -1,18 +1,27 @@
 import Foundation
 
-/// An update is delivered inside the same transaction that moves the keyboard.
+/// An update is delivered before the keyboard write in the same layout pass.
 public struct KeyboardDismissalUpdate: Sendable {
     public enum Phase: Sendable, Equatable { case tracking, returning, dismissing }
-    /// Keyboard overlap with the client's coordinate view, clamped to its resting inset.
+    /// Signed keyboard overlap with the client's coordinate view.
     public var height: Double
     public var transition: ListTransition
     public var phase: Phase
+    public var isInteractive: Bool = false
 }
 
 /// Converts one physical displacement into a viewport correction. The clamp is
 /// applied to every sample, so a shorter app view stops at its resting edge at
 /// the exact point where the keyboard passes it.
 struct KeyboardDismissalMotion: Sendable {
+    static let dismissalDuration = 0.3832
+    static let returnDuration = 0.25
+    static let returnCurve = ListCurve.bezier(0.380, 0.700, 0.125, 1)
+
+    static func releaseTransition(dismisses: Bool) -> ListTransition {
+        dismisses ? .keyboard(dismissalDuration) : .init(duration: returnDuration, curve: returnCurve)
+    }
+
     var beginHeight: Double
     var endHeight: Double
     var restingHeight: Double

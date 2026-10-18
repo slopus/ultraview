@@ -389,14 +389,23 @@ enables it in every engine; `-listSystemKeyboardDismissal YES` selects the
 system control path. A client supplies its scroll view, coordinate view,
 accessory height, resting keyboard inset, a constant-time first-responder check,
 and a synchronous update callback.
-The callback applies the supplied height and transition to its accessory and
-list. `refresh()` follows layout and window changes; `invalidate()` detaches
-the window recognizer. `dismissImmediately()` ends editing and removes keyboard
-animations during immediate navigation.
+The callback resolves its resting inset from the signed overlap, applies the list
+inset, and then positions its accessory synchronously. `refresh()` follows layout
+and window changes; `invalidate()` detaches the window recognizer.
+`dismissImmediately()` ends editing and removes keyboard animations during
+immediate navigation.
 Forward keyboard frame-change and did-hide notifications through `handle(_:)`
 before applying ordinary notification insets. It consumes updates while the
 driver owns the motion and recovers a show that interrupts its final system
-hide. An interrupted release still resolves ownership and lands the accessory
+hide. Moves, releases and tracked layouts read the current docked host's model
+geometry while retaining the accessory height captured at touch-down. At idle,
+a return reconciles a changed native host top before its final inset update.
+Owned notifications retain the existing recovery policy: a height change with
+no further finger sample can leave a gap until motion completes, followed by an
+immediate endpoint correction. Hosted tests cover a native height change during
+tracking and return. Notification transition timing, host replacement, hardware
+keyboard changes and rotation during a drag still need runtime evidence.
+An interrupted release still resolves ownership and lands the accessory
 and viewport at their target. Playback honors the list's animation duration scale.
 Refocus can retain native hide motion underneath the next show. The controller
 holds its offset until the native show commits, then reads the physical position
@@ -412,35 +421,59 @@ In hosted simulator rotation tests, both system and driven paths retain a stale
 keyboard layout-guide frame until the next native keyboard change. The composer
 uses the host frame and stays aligned with the physical keyboard during that gap.
 
-On supported phones the controller moves the keyboard host, accessory, and
-viewport correction in one transaction. A window recognizer permits simultaneous
-recognition without cancelling or delaying touches. It arms above the keyboard
-and accessory when a first responder exists, ignores the bottom 44 points, and
-starts tracking after three points of vertical travel. The last tenth of a
-second determines release velocity. Passing the bottom threshold or releasing
-downward faster than 500 points per second below the keyboard dismisses it;
-other releases return it. Dismissal takes 0.3832 seconds and return takes 0.25.
-Both use the same sampled spring for the keyboard and app, with exact endpoints
-and a viewport profile clamped at the resting edge. Scroll momentum continues
-through both outcomes. `dismissedInTouchSequence` reports the dismissal decision
-until the next touch sequence.
-During finger tracking, the pan moves the rows and the inset changes without
-anchor compensation. Release motion compensates the inset so the rows follow
-the returning or dismissing composer. Driven updates also apply subpixel inset
-changes, keeping the accessory on the keyboard's edge at low finger speeds.
+On supported phones, raw touch changes coalesce until window layout. That layout
+applies the list inset, the accessory frame, and finally the keyboard host bounds.
+A window recognizer permits simultaneous recognition without cancelling or
+delaying touches. It arms strictly above the keyboard minus the accessory height
+when a first responder exists. The accessory height excludes the demo's 8-point
+gap. Touches inside the bottom 44 points are rejected; its upper boundary is
+accepted. A client can decline a touched view or any ancestor with `shouldBegin`.
+Tracking starts at three points of absolute vertical travel. Once a boundary
+commits, smaller moves are accepted too. The boundary is finger position plus
+the captured accessory height; downward displacement has no upper clamp.
 
-The driven-controller checkpoint passed 310 Linux tests, 390 Lean theorem checks,
-and simulator suites with 3 clock checks, 10 hosted keyboard methods and 19 demo
-tests. Five gesture methods passed 36 launches across all three engines and both
-keyboard paths. The momentum comparison uses card rows; the other scenarios use
-the default variable-height bubbles. Sampled video review covers partial and
-midway returns in every engine. More detailed analysis of the variable-rate
-recordings found separate composites during finger tracking: the keyboard can
+Velocity uses the latest six callback-time samples. Consecutive pair slopes whose
+second timestamp falls in the last tenth of a second are averaged and divided
+by five. A normal end adds its endpoint; cancellation adds no sample and supplies
+no velocity. Dismissal requires the final finger plus accessory to be strictly
+below the resting keyboard top, together with either estimated velocity above
+100 points per second or the last committed boundary at or beyond the window
+bottom minus the accessory height. An uncommitted move cannot satisfy that
+position threshold. Cancellation can dismiss by committed position.
+
+Dismissal uses a native additive spring for 0.3832 seconds; return uses a cubic
+curve for 0.25 seconds. The app uses the same release curve between its resolved
+inset endpoints, rather than clamping each physical sample. The composer can
+therefore separate from the keyboard while approaching its resting inset.
+Tracking updates retain the demo's 8-point gap and accept subpixel changes.
+`isInteractive` reports exact boundary inequality with the window bottom; signed
+overlap can be negative. During tracking, the pan moves the rows without inset
+compensation. When the list is neither tracking nor dragging, release inset
+changes compensate so rows follow the composer. Scroll momentum currently
+continues through both outcomes. `dismissedInTouchSequence` reports the decision
+until the next touch sequence. Editing ends after dismissal animation completion.
+
+The gesture and release regressions pass 322 Linux tests in 54 suites, and 390
+Lean theorem checks pass. The staged baseline passed simulator suites with 3 clock
+checks, 20 hosted methods, 17 demo tests and 5 interaction methods over 36 launches,
+with no Swift compiler or duplicate-library warnings. Exact subpixel placement,
+multiline growth, refocus and rotation checks pass. The momentum comparison uses
+card rows; the other interaction scenarios use variable-height bubbles.
+
+Four focused height-change methods failed before the geometry fix and passed
+after it. They cover shrinkage before a fast release, growth during tracking and
+return, and a taller host at dismissal completion. Six native cases, across all
+engines during tracking and return, grew the keyboard from 335 to 399 points,
+observed a matching notification while ownership was held, and checked stable
+host identity and the final inset. The final integrated run after rebasing is
+pending. Earlier variable-rate recordings found separate composites during finger
+tracking: the keyboard can
 lead the composer and rows by 3–7 milliseconds before they catch up. The observed
 gap ranges from about 3 points at slow speeds to 46 points in a fast fling.
 Those captures do not establish whether a physical display shows the intermediate
-composite. The shared release clock therefore does not establish alignment at
-every composite during finger tracking. The hosted tests load the app's symbols
+composite. Pixel review of the staged baseline is pending. The shared release clock
+therefore does not establish alignment at every composite during finger tracking.
+The hosted tests load the app's symbols
 without linking another copy of the library into the test bundle.
 
 The keyboard lookup depends on private UIKit hierarchy. It dynamically checks

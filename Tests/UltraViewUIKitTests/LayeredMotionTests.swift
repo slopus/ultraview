@@ -65,7 +65,8 @@ private enum MotionSequence: String, CaseIterable {
         if sequence == .insertThenMoveAndResize {
             for identity in ["6", "7"] {
                 let view = try #require(list.loadedItemView(at: rows.firstIndex { $0.identity == identity }!))
-                movesBefore[identity] = try #require(view.layer.animation(forKey: "ultraview.list.positionY"))
+                let animation: CAAnimation = try #require(view.layer.animation(forKey: "ultraview.list.positionY"))
+                movesBefore[identity] = animation
             }
         }
         switch sequence {

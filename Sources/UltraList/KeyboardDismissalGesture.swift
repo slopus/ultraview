@@ -1,6 +1,13 @@
 /// One input stream's keyboard displacement. Scroll velocity belongs to its
 /// scroller and is never changed by this decision.
 struct KeyboardDismissalGesture: Sendable {
+    static let movementThreshold = 3.0
+    static let reservedBottomHeight = 44.0
+    static let velocitySampleLimit = 6
+    static let velocityWindow = 0.1
+    static let velocityDivisor = 5.0
+    static let dismissalVelocity = 100.0
+
     struct Geometry: Sendable, Equatable {
         var screenHeight: Double
         var keyboardTop: Double
@@ -12,6 +19,10 @@ struct KeyboardDismissalGesture: Sendable {
         var targetOffset: Double
         var dismisses: Bool
     }
+    struct Tracking: Sendable, Equatable {
+        var boundary: Double
+        var offset: Double
+    }
     private struct Sample: Sendable {
         var time: Double
         var y: Double
@@ -19,6 +30,7 @@ struct KeyboardDismissalGesture: Sendable {
     private var geometry: Geometry?
     private var startY = 0.0
     private var samples: [Sample] = []
+    private var committedBoundary: Double?
     private(set) var isTracking = false
     private(set) var offset = 0.0
     private(set) var dismissedInTouchSequence = false
@@ -34,55 +46,61 @@ struct KeyboardDismissalGesture: Sendable {
     mutating func begin(y: Double, time: Double, geometry: Geometry, hasFirstResponder: Bool) -> Bool {
         self = .init()
         guard hasFirstResponder, geometry.keyboardHeight > 0,
-              y < geometry.screenHeight - 44,
+              y <= geometry.screenHeight - Self.reservedBottomHeight,
               y < geometry.keyboardTop - geometry.accessoryHeight else { return false }
         self.geometry = geometry; startY = y
         samples = [.init(time: time, y: y)]
         return true
     }
 
-    @discardableResult mutating func move(y: Double, time: Double) -> Double? {
+    @discardableResult mutating func move(y: Double, time: Double) -> Tracking? {
         guard let geometry else { return nil }
         sample(y: y, time: time)
-        if !isTracking {
-            guard abs(y - startY) >= 3 else { return nil }
-            isTracking = true
-        }
-        offset = min(geometry.keyboardHeight, max(0, y + geometry.accessoryHeight - geometry.keyboardTop))
-        return offset
+        guard committedBoundary != nil || abs(y - startY) >= Self.movementThreshold else { return nil }
+        isTracking = true
+        let boundary = y + geometry.accessoryHeight
+        return .init(boundary: boundary, offset: max(0, boundary - geometry.keyboardTop))
+    }
+
+    /// Window geometry can change while the accessory remains captured.
+    mutating func updateGeometry(screenHeight: Double, keyboardTop: Double) {
+        guard var geometry else { return }
+        geometry.screenHeight = screenHeight; geometry.keyboardTop = keyboardTop
+        self.geometry = geometry
+    }
+
+    mutating func commit(_ tracking: Tracking) {
+        guard geometry != nil else { return }
+        committedBoundary = tracking.boundary
+        offset = tracking.offset
     }
 
     mutating func end(y: Double, time: Double, cancelled: Bool = false) -> Release? {
         guard let geometry else { return nil }
-        sample(y: y, time: time)
+        if !cancelled { sample(y: y, time: time) }
         self.geometry = nil
-        guard isTracking else { return nil }
         isTracking = false
-        let passesEdge = y + geometry.accessoryHeight >= geometry.screenHeight - geometry.accessoryHeight
-        let dismisses = !cancelled && y > geometry.keyboardTop && (passesEdge || recentVelocity > 500)
+        let passesEdge = committedBoundary.map { $0 >= geometry.screenHeight - geometry.accessoryHeight } ?? false
+        let velocity = cancelled ? 0 : estimatedVelocity(at: time)
+        let dismisses = y + geometry.accessoryHeight > geometry.keyboardTop
+            && (passesEdge || velocity > Self.dismissalVelocity)
         dismissedInTouchSequence = dismisses
         return .init(offset: offset, targetOffset: dismisses ? geometry.keyboardHeight : 0, dismisses: dismisses)
     }
 
-    private var recentVelocity: Double {
-        guard let first = samples.first, let last = samples.last, last.time > first.time else { return 0 }
-        let cutoff = last.time - 0.1
-        var time = first.time, y = first.y
-        if first.time < cutoff, samples.count > 1 {
-            let next = samples[1]
-            if next.time > first.time {
-                let fraction = (cutoff - first.time) / (next.time - first.time)
-                time = cutoff; y += (next.y - first.y) * fraction
-            }
+    func estimatedVelocity(at time: Double) -> Double {
+        // Callback times and whole pairs are retained, including equal timestamps.
+        let slopes = zip(samples, samples.dropFirst()).compactMap { first, second -> Double? in
+            guard second.time >= time - Self.velocityWindow else { return nil }
+            return (second.y - first.y) / (second.time - first.time)
         }
-        return (last.y - y) / (last.time - time)
+        guard !slopes.isEmpty else { return 0 }
+        return slopes.reduce(0, +) / Double(slopes.count) / Self.velocityDivisor
     }
 
     private mutating func sample(y: Double, time: Double) {
-        guard samples.last.map({ time > $0.time }) ?? true else { return }
         samples.append(.init(time: time, y: y))
-        while samples.count > 2, samples[1].time <= time - 0.1 { samples.removeFirst() }
-        if samples.count > 64 { samples.removeFirst(samples.count - 64) }
+        if samples.count > Self.velocitySampleLimit { samples.removeFirst(samples.count - Self.velocitySampleLimit) }
     }
 }
 

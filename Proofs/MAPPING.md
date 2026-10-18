@@ -2145,50 +2145,91 @@ This review pins the new sources by SHA-256:
 
 | Source | SHA-256 |
 | --- | --- |
-| `KeyboardDismissalGesture.swift` | `065a207fa82565442ad9a531e5631d30302e2c2b0c2baee3f40fe0eb78ca7b30` |
-| `KeyboardDismissalMotion.swift` | `9df94511e9e4efcef2470ffdc9d8ba24470740e6061cdee37824172a8f42a1f2` |
-| `UIKit/KeyboardDismissalController.swift` | `19f641e012fcf52333005a0800f8fff3d9e1b65d041b2c30600c6b953a6dd3c8` |
+| `KeyboardDismissalGesture.swift` | `12be1df541aa8d78d7c882d71043df8e858633eb945fbc7721c42fc669ded5eb` |
+| `KeyboardDismissalMotion.swift` | `32be8df047fa68c4608b987ddc2528085c53f09cd5aa7683c83b223f4c97187d` |
+| `UIKit/KeyboardDismissalController.swift` | `34b30622ae9b09df411e8b393eba3a27910185463129c80a71d596a5523bedd7` |
+| `UIKit/KeyboardDismissalAnimation.swift` | `a790414ac44028edd88335c0bebd6f7d8784c82a45cf8fb3e9b128faa8a16cb6` |
 | `UIKit/KeyboardHostLookup.swift` | `b7d05de5c4fd9a1d03aa497ecf382b17bf1f0be22cf0879dd46b631feafc38a2` |
 | `UIKit/KeyboardHostMotion.swift` | `3ea35b72d3d03adf395c6745f01af5b159d2aa52972c035f72ff0d27d1eb0768` |
-| `UltraViewDemo/List/ListChatController.swift` | `850043406cd79865effc28f3d1c53c2847fdf680cefc417d6b37cb585384143f` |
+| `UltraViewDemo/List/ListChatController.swift` | `5381dc8b29f886e1be05c709a0d5ae6149866571c93ec530af41ad5d11e0c73a` |
 
-The pure gesture selects a primary touch, the tracking threshold and the
-release result from geometry and timestamped input. Its motion maps one
-physical offset curve into a viewport curve, clamped at the client's
-resting edge. The keyboard keyframe and callback receive the same samples.
-Linux tests check release endpoints, monotonicity and dense interpolation
-through that clamp. These are ordinary regressions, not a new refinement
-theorem.
+The pure gesture records a raw boundary separately from the committed boundary.
+Tracking requires three points of absolute vertical travel until a layout commits
+a boundary. Displacement is nonnegative with no upper clamp. The release uses
+the last committed boundary, drops pending drag work, and requires the final
+finger plus captured accessory height to cross the resting keyboard top. Its
+velocity estimator retains six callback-time samples, includes whole pairs by
+their second timestamp in the last 0.1 seconds, and averages slopes before
+dividing by five. Cancellation uses committed position without adding an end
+sample or velocity. `updateGeometry` refreshes the current window height and
+resting keyboard top while preserving the captured accessory and committed
+boundary. Linux regressions cover these exact boundaries, timing and
+release endpoints. They are ordinary regressions, not a refinement theorem.
 
-With the required synchronous client callback, the controller commits host
-bounds, the callback's inset and the accessory in one transaction (`apply`,
-:318-345). It defers the whole update past an
-active list pass and rejects superseded requests (`performUpdate`,
-:290-299). During tracking the list pan moves rows without inset anchor
-compensation; releases compensate so rows follow the accessory
-(`applyDrivenKeyboard`, ListChatController.swift:235-245). Driven callbacks
-accept subpixel changes. A release resolves by animation completion or a
-generation-checked deadline, including when its animation is removed
-(:301-315, :348-359). Completion delivery and the generation protocol are
-outside the existing models.
+`stage` coalesces changes until `commitPendingLayout`. The synchronous callback
+applies the list inset first and accessory frame second; `apply` then assigns
+host bounds. Tracking and ordinary release introduce no enclosing driver
+transaction. The callback receives signed overlap and an exact interactive flag.
+`performUpdate` defers the whole operation past an active list pass and rejects
+superseded requests. The demo disables inset compensation while its list tracks
+or drags (`applyDrivenKeyboard`), and accepts subpixel inset changes.
+Its owned `viewDidLayoutSubviews` restores the bottom constraint's exact position
+after Auto Layout rounds the result, preserving its anchor when the composer
+grows. The hosted subpixel regression keeps its exact-value comparison, and a
+multiline-growth regression checks the anchor. The deferred-inset clock regressions now run
+in `DeferredComposerInsetRuntimeTests` with a live window scene.
+
+`KeyboardDismissalAnimation.make` creates a native additive spring on dismissal
+and a cubic basic animation on return. `releaseTransition` supplies the same
+curve to the app, which resolves its resting endpoint before interpolation.
+These releases do not use the clipped viewport profile; `height` and `transition`
+retain that profile for interrupted-hide recovery only. A shared clock therefore
+does not imply a fixed keyboard-to-accessory gap during release. Completion or a
+generation-checked deadline resolves ownership, including when an animation is
+removed. A velocity-only end that interrupts a running return starts its new
+host animation at the current presentation offset. An unmoved, nondismissing
+touch leaves ordinary notification ownership intact. Completion delivery and
+generation checks remain outside the models.
+
+Owned frame notifications are consumed. `synchronizeGeometry` samples the
+validated docked host's model before moves, release decisions and tracked layout
+application. A tracking commit recalculates displacement from the boundary and
+current top. Release application refreshes its displacement target without
+changing the decision already made at end; dismissal completion refreshes it
+again so a taller host ends fully below the window. `finishReturning` temporarily
+resolves the current host, reconciles a changed top, then preserves the final apply,
+idle and refresh order. A missing lookup therefore does not suppress the stored
+host's final callback or animation cleanup.
+
+This geometry path is not a model of native notification transition timing.
+Without another finger sample a height change can leave an in-flight gap and
+an immediate correction at completion. Four hosted height-change methods fail
+on the staged baseline and pass with this geometry fix. They include six native
+keyboard changes during tracking and return (335 to 399 points), with matching
+notifications while owned, stable host identity and corrected final insets.
+The dismissal growth check uses an injected host. Notification durations/curves,
+changes between end and layout, native height changes during dismissal, host
+replacement, hardware keyboard changes and rotation during a drag still lack
+runtime parity evidence. The historical models establish none of these UIKit
+behaviors. The final integrated 24-method hosted run remains pending.
 
 On a show that interrupts the driver's final system hide, a hold waits for
 committed native position motion and the final shown model frame. The
 controller reads fresh presentation geometry inside the applying closure,
 removes validated native position animation keys, and starts its bounds
-motion and the app on one new transaction clock (:140-178, :318-345). Native
+motion and the app on one new transaction clock (`handle` and `apply`). Native
 animation cancellation delivers `finished == false`; notifications and
 subsequent cycles need runtime evidence. Ancestor motion, host bounds or
 transform motion, and a host that draws its own contents, background or
 shadow reject takeover (`KeyboardHostMotion.positionKeys`). Invalid
 configurations end owned recovery. A changed target during recovery
-returns notification handling to the ordinary path (:116-120). Animation
+returns notification handling to the ordinary path. Animation
 groups and transitions are not inspected by these property guards.
 
 `Deferred.shared_inv` still supplies the relevant per-application clock
 condition: an applied accessory update copies the viewport animation
 produced by that update. Both the controller and the chat now drop
-superseded requests (`applyComposerInset`, ListChatController.swift:270-277),
+superseded requests (`applyComposerInset`),
 so `once_inv` and `run_all`, which run every requested closure, are not
 liveness results for this queue. The old `overtake_sample` regression is
 checked by `DeferredComposerInsetTests` with a newer request made after
@@ -2206,13 +2247,14 @@ bar immediately, and require the guide to match after the next native
 cycle. The traces retain the stale guide frame. This is runtime evidence
 for the tested simulator configuration, not a theorem about UIKit.
 
-Validation for these pinned sources: 310 Linux tests in 54 suites and all
-390 Lean theorems passed. Simulator validation passed 3 clock checks,
+Validation for the revised gesture and release behavior: 322 Linux tests in 54
+suites and all 390 Lean checks passed, with the two documented known issues.
+UIKit validation of these pinned sources is pending. The previous controller
+checkpoint passed all 390 Lean theorems, and simulator validation passed 3 clock checks,
 10 hosted runtime methods and 19 demo tests. Five interaction methods
 passed 36 launches across all three engines and the system and driven
 paths: 12 card-row momentum comparisons and 24 default-bubble gestures.
-Sampled recordings of the six driven partial and midway returns show the
-composer staying with the keyboard. The recordings average about 30 frames
+Recordings from that checkpoint average about 30 frames
 per second, but their variable-rate timestamps also include short intermediate
 composites. Detailed analysis of the pinned final build found keyboard-only
 movement followed by composer and rows 3–7 milliseconds later during tracking;

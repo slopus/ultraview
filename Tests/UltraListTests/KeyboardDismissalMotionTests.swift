@@ -2,6 +2,21 @@ import Testing
 @testable import UltraList
 
 struct KeyboardDismissalMotionTests {
+    @Test func releasesInterpolateEndpointFramesWithTheSpecifiedSpringOrCubic() {
+        let dismissing = KeyboardDismissalMotion.releaseTransition(dismisses: true)
+        #expect(dismissing.duration == 0.3832)
+        #expect(dismissing.curve == .keyboardSpring)
+        #expect(dismissing.viewportCurve == nil)
+        let returning = KeyboardDismissalMotion.releaseTransition(dismisses: false)
+        #expect(returning.duration == 0.25)
+        #expect(returning.curve == .bezier(0.380, 0.700, 0.125, 1))
+        #expect(returning.viewportCurve == nil)
+        let motion = KeyboardDismissalMotion(beginHeight: 250, endHeight: -80, restingHeight: 20)
+        let progress = dismissing.curve.value(at: 0.5, duration: dismissing.duration)
+        let interpolated = motion.height(at: 0) + (motion.height(at: 1) - motion.height(at: 0)) * progress
+        #expect(interpolated > motion.height(at: progress))
+    }
+
     @Test func bothReleaseDurationsHaveExactEndpointsAndMonotoneProgress() {
         for duration in [0.25, 0.3832] {
             let progress = KeyboardDismissalMotion.progress(duration: duration)

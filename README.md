@@ -112,6 +112,10 @@ destinations and `presentedFrame(at:)` for animated positions. Floating or
 reserving headers implement `ListAttachment`. See [the list design](Docs/UltraList.md)
 for threading, measurement, animation and host behavior.
 
+On iPhone, set `CADisableMinimumFrameDurationOnPhone` to `YES` in the host app's
+Info.plist to allow app-driven Core Animation and display links above 60 Hz.
+The demo enables it. The display and system determine the achieved frame rate.
+
 ### Threads
 
 A change to a node, from any thread, records the new value and schedules a

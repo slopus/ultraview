@@ -5,6 +5,7 @@ import os
 
 @MainActor
 final class ListChatController: UIViewController, UITextViewDelegate, ListChaosRowHost {
+    private static let stopsMomentumOnKeyboardDismissal = false
     let list: UltraListView
     private let composer = UITextView(), send = UIButton(type: .system), stream = UIButton(type: .system)
     private let composerBar = UIStackView()
@@ -151,10 +152,13 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardDidHide(_:)), name: UIResponder.keyboardDidHideNotification, object: nil)
         if !UserDefaults.standard.bool(forKey: "listSystemKeyboardDismissal") {
             keyboardDismissal = KeyboardDismissalController(scrollView: list, coordinateView: view,
-                accessoryHeight: { [weak self] in Double(self?.composerBar.bounds.height ?? 0) + 8 },
+                accessoryHeight: { [weak self] in Double(self?.composerBar.bounds.height ?? 0) },
                 restingHeight: { [weak self] in Double(self?.view.safeAreaInsets.bottom ?? 0) },
                 hasInput: { [weak self] in self?.composer.isFirstResponder == true },
                 update: { [weak self] update in self?.applyDrivenKeyboard(update) })
+        }
+        list.shouldStopScrolling = { [weak self] _ in
+            Self.stopsMomentumOnKeyboardDismissal && self?.keyboardDismissal?.dismissedInTouchSequence == true
         }
         if UserDefaults.standard.bool(forKey: "listKeyboardGeometryProbe") || UserDefaults.standard.bool(forKey: "listComposerMetrics") {
             keyboardProbe = ListKeyboardGeometryProbe(owner: view, composer: composerBar, list: list,
@@ -213,7 +217,14 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
         super.viewDidLayoutSubviews()
         updateComposerHeight()
         keyboardDismissal?.refresh()
-        guard keyboardDismissal?.isDriving != true else { return }
+        if keyboardDismissal?.isDriving == true {
+            // Auto Layout rounds its constraint result to pixels. Keep the
+            // owned bottom anchor exact after that layout has finished.
+            UIView.performWithoutAnimation {
+                composerBar.frame.origin.y = view.bounds.maxY + (composerBottom?.constant ?? -8) - composerBar.frame.height
+            }
+            return
+        }
         let guideHeight = Double(view.bounds.maxY - view.keyboardLayoutGuide.layoutFrame.minY)
         if isTrackingKeyboard, abs(view.keyboardLayoutGuide.layoutFrame.minY - gestureKeyboardTop) > 1 { followsComposer = false }
         // The guide can lay out its destination before our keyboard notification.
@@ -237,8 +248,8 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
         keyboardIsVisible = update.height > view.safeAreaInsets.bottom + 0.5
         followsComposer = true
         keyboardTransition = update.transition
-        applyComposerInset(update.height + (composerHeight?.constant ?? composerBar.bounds.height) + 8,
-                           transition: update.transition, compensatesInsetChange: update.phase != .tracking,
+        applyComposerInset(max(update.height, view.safeAreaInsets.bottom) + (composerHeight?.constant ?? composerBar.bounds.height) + 8,
+                           transition: update.transition, compensatesInsetChange: !list.isTracking && !list.isDragging,
                            finishesAnimation: update.transition.isImmediate && update.phase != .tracking,
                            minimumChange: 1e-6)
         keyboardTransition = nil
@@ -293,12 +304,12 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
         composerBottom?.constant = -(inset - height)
         let top = view.bounds.maxY - inset
         CATransaction.begin(); CATransaction.setDisableActions(true)
-        UIView.performWithoutAnimation {
-            composerBar.frame = .init(x: oldFrame.minX, y: top, width: oldFrame.width, height: height)
-        }
         let start = CACurrentMediaTime()
         let compensates = compensatesInsetChange ?? (!isTrackingKeyboard && followsComposer)
         list.applyChanges(newInsets: .init(top: inset), compensatesInsetChange: compensates, transition: transition)
+        UIView.performWithoutAnimation {
+            composerBar.frame = .init(x: oldFrame.minX, y: top, width: oldFrame.width, height: height)
+        }
         if !transition.isImmediate,
            let animation = list.contentView.layer.animation(forKey: "ultraview.list.viewportOffset") as? CAPropertyAnimation {
             keyboardProbe?.recordKeyboardTransition(transition)

@@ -37,6 +37,8 @@ final class KeyboardDismissalRuntimeTests: XCTestCase {
                     CATransaction.flush(); try await Task.sleep(for: .milliseconds(35))
                     let row = try XCTUnwrap(fixture.list.loadedItemView(at: 25))
                     let relative = try fixture.rowGap(row)
+                    let initialOffset = -fixture.host.layer.bounds.origin.y
+                    let initialBottom = fixture.bar.frame.maxY
                     driver.end(y: top + 65, time: dismisses ? 0.11 : 0.4)
                     CATransaction.flush(); try await Task.sleep(for: .milliseconds(35))
                     let hostAnimation = try XCTUnwrap(fixture.host.layer.animation(forKey: "ultraview.keyboard.dismissal"))
@@ -46,25 +48,28 @@ final class KeyboardDismissalRuntimeTests: XCTestCase {
                     XCTAssertEqual(fixture.bar.layer.convertTime(barAnimation.beginTime, to: nil), begin, accuracy: 0.000_001)
                     XCTAssertEqual(fixture.list.contentView.layer.convertTime(listAnimation.beginTime, to: nil), begin, accuracy: 0.000_001)
                     let duration = hostAnimation.duration / Double(hostAnimation.speed)
+                    XCTAssertEqual(hostAnimation is CASpringAnimation, dismisses)
                     XCTAssertEqual(barAnimation.duration / Double(barAnimation.speed), duration, accuracy: 1e-9)
                     XCTAssertEqual(listAnimation.duration / Double(listAnimation.speed), duration, accuracy: 1e-9)
                     let appBegin = fixture.window.layer.convertTime(begin, from: nil)
                     let keyboardBegin = fixture.keyboardWindow.layer.convertTime(begin, from: nil)
+                    let targetOffset = -fixture.host.layer.bounds.origin.y
+                    let targetBottom = fixture.bar.frame.maxY
                     fixture.window.layer.speed = 0; fixture.keyboardWindow.layer.speed = 0
                     for phase in [0.0, 0.1, 0.25, 0.5, 0.8, 1] {
                         CATransaction.begin(); CATransaction.setDisableActions(true)
-                        fixture.window.layer.timeOffset = appBegin + max(0.000_001, hostAnimation.duration * phase)
-                        fixture.keyboardWindow.layer.timeOffset = keyboardBegin + max(0.000_001, hostAnimation.duration * phase)
+                        fixture.window.layer.timeOffset = appBegin + max(0.000_001, duration * phase)
+                        fixture.keyboardWindow.layer.timeOffset = keyboardBegin + max(0.000_001, duration * phase)
                         CATransaction.commit(); CATransaction.flush()
                         try await Task.sleep(for: .milliseconds(35))
                         let shownHost = try XCTUnwrap(fixture.host.layer.presentation())
                         let shownBar = try XCTUnwrap(fixture.bar.layer.presentation())
                         let root = try XCTUnwrap(fixture.window.layer.presentation())
-                        let keyboardTop = top - shownHost.bounds.origin.y
                         let barBottom = shownBar.convert(shownBar.bounds, to: root).maxY
-                        let floor = fixture.controller.view.bounds.maxY - fixture.controller.view.safeAreaInsets.bottom
+                        let progress = (-shownHost.bounds.origin.y - initialOffset) / (targetOffset - initialOffset)
+                        let expectedBottom = initialBottom + (targetBottom - initialBottom) * progress
                         let label = "\(mode)/scale=\(scale)/dismiss=\(dismisses)/phase=\(phase)"
-                        XCTAssertEqual(barBottom + 8, min(floor, keyboardTop), accuracy: 0.5, label)
+                        XCTAssertEqual(barBottom, expectedBottom, accuracy: 0.5, label)
                         XCTAssertEqual(try fixture.rowGap(row), relative, accuracy: 0.5, label)
                     }
                 }
@@ -126,7 +131,7 @@ final class KeyboardDismissalRuntimeTests: XCTestCase {
         }
     }
 
-    func testSubpixelTrackingUpdatesTheComposerOnEveryInput() async throws {
+    func testSubpixelTrackingUpdatesTheComposerAtEachLayout() async throws {
         for mode in ScrollEngineMode.allCases {
             let fixture = try await Fixture(mode: mode)
             defer { fixture.close() }
@@ -134,7 +139,352 @@ final class KeyboardDismissalRuntimeTests: XCTestCase {
             XCTAssertTrue(fixture.driver.begin(y: top - fixture.accessory - 40, time: 0, touchedView: fixture.list))
             for step in 0...4 {
                 fixture.driver.move(y: top + 65 + Double(step) * 0.125, time: 0.1 + Double(step) * 0.01)
+                fixture.window.layoutIfNeeded()
                 XCTAssertEqual(Double(fixture.bar.frame.maxY) + 8, top - Double(fixture.host.layer.bounds.origin.y), accuracy: 1e-6)
+            }
+        }
+    }
+
+    func testComposerGrowthDuringTrackingKeepsItsExactBottomAnchor() async throws {
+        for mode in ScrollEngineMode.allCases {
+            let fixture = try await Fixture(mode: mode)
+            defer { fixture.close() }
+            let driver = fixture.driver, top = fixture.keyboardTop
+            XCTAssertTrue(driver.begin(y: top - fixture.accessory - 40, time: 0, touchedView: fixture.list))
+            driver.move(y: top + 65.125, time: 0.1)
+            fixture.window.layoutIfNeeded()
+            let bottom = fixture.bar.frame.maxY, height = fixture.bar.bounds.height
+            let composer = try XCTUnwrap((fixture.bar as? UIStackView)?.arrangedSubviews.compactMap { $0 as? UITextView }.first)
+            composer.text = "One\nTwo\nThree"
+            fixture.controller.view.setNeedsLayout()
+            fixture.window.layoutIfNeeded(); fixture.controller.view.layoutIfNeeded()
+            XCTAssertGreaterThan(fixture.bar.bounds.height, height + 10)
+            XCTAssertEqual(fixture.bar.frame.maxY, bottom, accuracy: 1e-6,
+                           "\(mode): growing the composer must preserve its exact bottom constraint")
+        }
+    }
+
+    func testTrackingCoalescesUntilLayoutAndKeepsTheLatestAcceptedSample() async throws {
+        for mode in ScrollEngineMode.allCases {
+            let fixture = try await Fixture(mode: mode)
+            defer { fixture.close() }
+            let driver = fixture.driver, top = fixture.keyboardTop, before = fixture.bar.frame
+            XCTAssertTrue(driver.begin(y: top - fixture.accessory - 40, time: 0, touchedView: fixture.list))
+            driver.move(y: top + 50, time: 0.1)
+            driver.move(y: top + 70, time: 0.11)
+            XCTAssertEqual(fixture.host.layer.bounds.origin.y, 0)
+            XCTAssertEqual(fixture.bar.frame, before)
+            fixture.window.layoutIfNeeded()
+            XCTAssertEqual(-fixture.host.layer.bounds.origin.y, 70 + fixture.accessory, accuracy: 1e-6)
+            XCTAssertEqual(fixture.bar.frame.maxY + 8, top + 70 + fixture.accessory, accuracy: 1e-6)
+        }
+    }
+
+    func testReleaseDropsAnUncommittedDragAndUsesTheCommittedPositionThreshold() async throws {
+        for mode in ScrollEngineMode.allCases {
+            let fixture = try await Fixture(mode: mode)
+            defer { fixture.close() }
+            let driver = fixture.driver, top = fixture.keyboardTop
+            let end = fixture.window.bounds.maxY - fixture.accessory * 2
+            XCTAssertTrue(driver.begin(y: top - fixture.accessory - 40, time: 0, touchedView: fixture.list))
+            driver.move(y: end, time: 1)
+            driver.end(y: end, time: 2)
+            XCTAssertFalse(driver.dismissedInTouchSequence)
+            XCTAssertEqual(fixture.host.layer.bounds.origin.y, 0)
+            fixture.window.layoutIfNeeded()
+            XCTAssertEqual(fixture.host.layer.bounds.origin.y, 0)
+            XCTAssertEqual((fixture.host.layer.animation(forKey: "ultraview.keyboard.dismissal") as? CABasicAnimation)?.fromValue as? Double, 0)
+        }
+    }
+
+    func testAnAncestorCanDeclineAndTheUpperComposerStripCanArm() async throws {
+        for mode in ScrollEngineMode.allCases {
+            let fixture = try await Fixture(mode: mode)
+            defer { fixture.close() }
+            let blocked = UIView(), child = UIView()
+            fixture.list.addSubview(blocked); blocked.addSubview(child)
+            fixture.driver.shouldBegin = { $0 !== blocked }
+            let y = fixture.keyboardTop - fixture.accessory - 4
+            XCTAssertFalse(fixture.driver.begin(y: y, time: 0, touchedView: child))
+            fixture.driver.shouldBegin = nil
+            XCTAssertTrue(fixture.driver.begin(y: y, time: 1, touchedView: child))
+        }
+    }
+
+    func testAnUnmovedTapLeavesKeyboardNotificationsInControl() async throws {
+        for mode in ScrollEngineMode.allCases {
+            let fixture = try await Fixture(mode: mode)
+            defer { fixture.close() }
+            let y = fixture.keyboardTop - fixture.accessory - 40
+            XCTAssertTrue(fixture.driver.begin(y: y, time: 0, touchedView: fixture.list))
+            fixture.driver.end(y: y, time: 0.1)
+            XCTAssertFalse(fixture.driver.isDriving)
+            let hidden = CGRect(x: 0, y: fixture.window.bounds.maxY, width: fixture.window.bounds.width, height: 300)
+            NotificationCenter.default.post(name: UIResponder.keyboardWillChangeFrameNotification, object: nil, userInfo: [
+                UIResponder.keyboardFrameEndUserInfoKey: hidden,
+                UIResponder.keyboardAnimationDurationUserInfoKey: 0.2,
+                UIResponder.keyboardAnimationCurveUserInfoKey: 7,
+            ])
+            XCTAssertNotNil(fixture.bar.layer.animation(forKey: "ultraview.chat.composerPosition"))
+        }
+    }
+
+    func testAnUnclaimedFlickDuringReturnStartsAtTheDisplayedOffset() async throws {
+        for mode in ScrollEngineMode.allCases {
+            let fixture = try await Fixture(mode: mode)
+            defer { fixture.close() }
+            let driver = fixture.driver, top = fixture.keyboardTop
+            XCTAssertTrue(driver.begin(y: top - fixture.accessory - 40, time: 0, touchedView: fixture.list))
+            driver.move(y: top + 65, time: 0.1)
+            fixture.window.layoutIfNeeded()
+            driver.end(y: top + 65, time: 0.4)
+            fixture.window.layoutIfNeeded()
+            CATransaction.flush(); try await Task.sleep(for: .milliseconds(35))
+            let clock = fixture.keyboardWindow.layer.convertTime(CACurrentMediaTime(), from: nil)
+            fixture.keyboardWindow.layer.speed = 0; fixture.keyboardWindow.layer.timeOffset = clock
+            CATransaction.flush(); try await Task.sleep(for: .milliseconds(35))
+            let shown = -(try XCTUnwrap(fixture.host.layer.presentation())).bounds.origin.y
+            XCTAssertGreaterThan(shown, 1)
+            XCTAssertTrue(driver.begin(y: top - fixture.accessory - 0.5, time: 1, touchedView: fixture.list))
+            driver.end(y: top - fixture.accessory + 0.5, time: 1.001)
+            XCTAssertTrue(driver.dismissedInTouchSequence)
+            fixture.window.layoutIfNeeded()
+            let animation = try XCTUnwrap(fixture.host.layer.animation(forKey: "ultraview.keyboard.dismissal") as? CASpringAnimation)
+            let from = try XCTUnwrap(animation.fromValue as? Double)
+            XCTAssertEqual(from, fixture.window.bounds.maxY - top - shown, accuracy: 0.5)
+        }
+    }
+
+    func testAFastReleaseAboveTheShrunkenKeyboardReturnsIt() async throws {
+        for mode in ScrollEngineMode.allCases {
+            let fixture = try await Fixture(mode: mode)
+            defer { fixture.close() }
+            let driver = fixture.driver, top = fixture.keyboardTop, accessory = fixture.accessory
+            XCTAssertTrue(driver.begin(y: top - accessory - 1, time: 0, touchedView: fixture.list))
+            driver.move(y: top - accessory - 4, time: 0.001)
+            fixture.window.layoutIfNeeded()
+            var frame = fixture.host.frame
+            frame.origin.y += 44; frame.size.height -= 44
+            UIView.performWithoutAnimation { fixture.host.frame = frame }
+            XCTAssertTrue(driver.handle(Notification(name: UIResponder.keyboardWillChangeFrameNotification, userInfo: [
+                UIResponder.keyboardFrameEndUserInfoKey: fixture.host.convert(fixture.host.bounds, to: nil),
+                UIResponder.keyboardAnimationDurationUserInfoKey: 0.0,
+            ])))
+            fixture.keyboardWindow.layoutIfNeeded(); CATransaction.flush()
+            driver.end(y: top - accessory + 0.5, time: 0.002)
+            XCTAssertFalse(driver.dismissedInTouchSequence,
+                           "\(mode): the finger plus captured accessory is above the current keyboard top")
+            fixture.window.layoutIfNeeded(); CATransaction.flush()
+            for _ in 0..<150 where driver.isDriving { try await Task.sleep(for: .milliseconds(10)) }
+            XCTAssertFalse(driver.isDriving)
+            XCTAssertEqual(fixture.host.layer.bounds.origin.y, 0, accuracy: 0.5)
+        }
+    }
+
+    func testAChangedHostHeightIsAppliedWhenOwnedMotionReturnsToIdle() async throws {
+        for mode in ScrollEngineMode.allCases {
+            for changesDuringReturn in [false, true] {
+                let fixture = try await Fixture(mode: mode)
+                defer { fixture.close() }
+                let driver = fixture.driver, top = fixture.keyboardTop
+                XCTAssertTrue(driver.begin(y: top - fixture.accessory - 40, time: 0, touchedView: fixture.list))
+                driver.move(y: top + 65, time: 0.1)
+                fixture.window.layoutIfNeeded()
+                if changesDuringReturn {
+                    driver.end(y: top + 65, time: 0.4)
+                    fixture.window.layoutIfNeeded()
+                }
+                var frame = fixture.host.frame
+                frame.origin.y -= 44; frame.size.height += 44
+                UIView.performWithoutAnimation { fixture.host.frame = frame }
+                let notification = Notification(name: UIResponder.keyboardWillChangeFrameNotification, userInfo: [
+                    UIResponder.keyboardFrameEndUserInfoKey: fixture.host.convert(fixture.host.bounds, to: nil),
+                    UIResponder.keyboardAnimationDurationUserInfoKey: 0.0,
+                    UIResponder.keyboardAnimationCurveUserInfoKey: 7,
+                ])
+                XCTAssertTrue(driver.handle(notification))
+                if !changesDuringReturn {
+                    driver.end(y: top + 65, time: 0.4, cancelled: true)
+                    fixture.window.layoutIfNeeded()
+                }
+                XCTAssertFalse(driver.dismissedInTouchSequence)
+                CATransaction.flush()
+                for _ in 0..<150 where driver.isDriving { try await Task.sleep(for: .milliseconds(10)) }
+                XCTAssertFalse(driver.isDriving)
+                let height = Double(fixture.window.bounds.maxY - frame.minY)
+                let label = "\(mode)/duringReturn=\(changesDuringReturn)"
+                XCTAssertEqual(try XCTUnwrap(fixture.updates.values.last).height, height, accuracy: 0.5, label)
+                XCTAssertEqual(fixture.bar.frame.maxY + 8, frame.minY, accuracy: 0.5, label)
+                XCTAssertEqual(fixture.list.viewportInsets.top, height + fixture.bar.bounds.height + 8, accuracy: 0.5, label)
+            }
+        }
+    }
+
+    func testAHeightChangeDuringDismissalKeepsTheHostBelowTheWindow() async throws {
+        for mode in ScrollEngineMode.allCases {
+            let fixture = try await Fixture(mode: mode)
+            defer { fixture.close() }
+            let driver = fixture.driver, top = fixture.keyboardTop
+            XCTAssertTrue(driver.begin(y: top - fixture.accessory - 40, time: 0, touchedView: fixture.list))
+            driver.move(y: top + 65, time: 0.1)
+            fixture.window.layoutIfNeeded()
+            driver.end(y: top + 65, time: 0.11)
+            fixture.window.layoutIfNeeded()
+            XCTAssertTrue(driver.dismissedInTouchSequence)
+            var frame = fixture.host.frame
+            frame.origin.y -= 44; frame.size.height += 44
+            UIView.performWithoutAnimation { fixture.host.frame = frame }
+            XCTAssertTrue(driver.handle(Notification(name: UIResponder.keyboardWillChangeFrameNotification, userInfo: [
+                UIResponder.keyboardFrameEndUserInfoKey: fixture.host.convert(fixture.host.bounds, to: nil),
+                UIResponder.keyboardAnimationDurationUserInfoKey: 0.0,
+            ])))
+            CATransaction.flush()
+            for _ in 0..<150 where driver.ownership != .awaitingHide { try await Task.sleep(for: .milliseconds(10)) }
+            XCTAssertEqual(driver.ownership, .awaitingHide)
+            XCTAssertEqual(fixture.host.layer.bounds.origin.y, -frame.height, accuracy: 0.5,
+                           "\(mode): a taller host must be fully below the window before ending editing")
+            XCTAssertEqual(try XCTUnwrap(fixture.updates.values.last).height, 0, accuracy: 0.5)
+        }
+    }
+
+    func testANativeKeyboardHeightChangeIsAppliedAfterOwnedMotion() async throws {
+        for mode in ScrollEngineMode.allCases {
+            for changesDuringReturn in [false, true] {
+                try await checkNativeHeightChange(mode: mode, changesDuringReturn: changesDuringReturn)
+            }
+        }
+    }
+
+    private func checkNativeHeightChange(mode: ScrollEngineMode, changesDuringReturn: Bool) async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let oldKey = scene.windows.first { $0.isKeyWindow }
+        let controller = ListChatController(mode: mode), window = UIWindow(windowScene: scene)
+        window.frame = scene.effectiveGeometry.coordinateSpace.bounds
+        window.rootViewController = controller; window.makeKeyAndVisible()
+        defer {
+            controller.keyboardDismissal?.invalidate(); window.endEditing(true)
+            window.isHidden = true; window.rootViewController = nil; oldKey?.makeKeyAndVisible()
+        }
+        if window.bounds.width > window.bounds.height { try await rotate(scene, controller: controller, landscape: false) }
+        controller.view.layoutIfNeeded()
+        let composer = try XCTUnwrap(controller.view.subviews.compactMap { $0 as? UIStackView }.first?.arrangedSubviews.compactMap { $0 as? UITextView }.first)
+        let bar = try XCTUnwrap(controller.view.subviews.first { $0.accessibilityIdentifier == "composerBar" })
+        XCTAssertTrue(composer.becomeFirstResponder())
+        try await Task.sleep(for: .milliseconds(800))
+        controller.keyboardDismissal?.invalidate()
+        let updates = KeyboardUpdateLog()
+        let driver = KeyboardDismissalController(scrollView: controller.list, coordinateView: controller.view,
+            accessoryHeight: { [weak bar] in Double(bar?.bounds.height ?? 0) },
+            restingHeight: { [weak controller] in Double(controller?.view.safeAreaInsets.bottom ?? 0) },
+            hasInput: { [weak composer] in composer?.isFirstResponder == true },
+            update: { [weak controller] in updates.values.append($0); controller?.applyDrivenKeyboard($0) })
+        controller.keyboardDismissal = driver; driver.refresh()
+        XCTAssertTrue(driver.isAvailable)
+        let host = try XCTUnwrap(KeyboardHostLookup.find(in: scene))
+        let before = host.view.convert(host.view.bounds, to: window)
+        let trace = KeyboardRecoveryTrace(window: window, bar: bar)
+        defer {
+            composer.inputAccessoryView = nil
+            if let data = try? JSONSerialization.data(withJSONObject: trace.events, options: [.sortedKeys, .prettyPrinted]) {
+                let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "public.json")
+                attachment.name = "native-keyboard-height-\(mode)-duringReturn=\(changesDuringReturn)"
+                attachment.lifetime = .keepAlways; add(attachment)
+            }
+        }
+        // Keep the owned return alive while native input-view reload finishes.
+        controller.list.animationDurationScale = 4
+        XCTAssertTrue(driver.begin(y: before.minY - bar.bounds.height - 40, time: 0, touchedView: controller.list))
+        driver.move(y: before.minY + 65, time: 0.1)
+        window.layoutIfNeeded()
+        if changesDuringReturn {
+            driver.end(y: before.minY + 65, time: 0.4)
+            window.layoutIfNeeded()
+        }
+        trace.record("before-height-change")
+        let accessory = UIView(frame: CGRect(x: 0, y: 0, width: window.bounds.width, height: 64))
+        accessory.autoresizingMask = [.flexibleWidth]
+        composer.inputAccessoryView = accessory
+        composer.reloadInputViews()
+        var changed: CGRect?
+        for _ in 0..<100 {
+            if let current = KeyboardHostLookup.find(in: scene) {
+                let frame = current.view.convert(current.view.bounds, to: window)
+                if abs(frame.height - before.height) > 32 { changed = frame; break }
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let changedFrame = try XCTUnwrap(changed, "The native host must actually change height during this diagnostic")
+        for _ in 0..<20 where driver.isDriving
+            && trace.count(UIResponder.keyboardWillChangeFrameNotification, endingAt: changedFrame) == 0 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertTrue(driver.isDriving, "The height must change before ownership ends")
+        XCTAssertGreaterThanOrEqual(trace.count(UIResponder.keyboardWillChangeFrameNotification, endingAt: changedFrame), 1,
+                                    "A matching native notification must arrive while ownership is held")
+        let changedHost = try XCTUnwrap(KeyboardHostLookup.find(in: scene))
+        XCTAssertTrue(changedHost.view === host.view, "Replacing the native host is a separate diagnostic outcome")
+        trace.record("changed-height-while-owned")
+        if !changesDuringReturn {
+            driver.end(y: before.minY + 65, time: 0.4, cancelled: true)
+            window.layoutIfNeeded()
+        }
+        XCTAssertFalse(driver.dismissedInTouchSequence)
+        CATransaction.flush()
+        for _ in 0..<200 where driver.isDriving { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertFalse(driver.isDriving)
+        trace.record("idle-after-height-change")
+        let finalHost = try XCTUnwrap(KeyboardHostLookup.find(in: scene))
+        XCTAssertTrue(finalHost.view === host.view)
+        XCTAssertEqual(finalHost.view.layer.bounds.origin.y, 0, accuracy: 0.5)
+        let final = finalHost.view.convert(finalHost.view.bounds, to: window)
+        XCTAssertEqual(final.height, changedFrame.height, accuracy: 0.5)
+        let height = Double(controller.view.bounds.maxY - controller.view.convert(final, from: window).minY)
+        let inset = max(height, controller.view.safeAreaInsets.bottom) + bar.bounds.height + 8
+        XCTAssertEqual(try XCTUnwrap(updates.values.last).height, height, accuracy: 0.5)
+        XCTAssertEqual(controller.list.viewportInsets.top, inset, accuracy: 0.5)
+        XCTAssertEqual(bar.frame.maxY + 8, min(controller.view.bounds.maxY - controller.view.safeAreaInsets.bottom,
+                                            controller.view.convert(final, from: window).minY), accuracy: 0.5)
+    }
+
+    func testInteractiveStateUsesExactBoundaryEqualityAndOverlapCanBeNegative() async throws {
+        for mode in ScrollEngineMode.allCases {
+            let fixture = try await Fixture(mode: mode)
+            defer { fixture.close() }
+            let driver = fixture.driver, bottom = fixture.window.bounds.maxY
+            XCTAssertTrue(driver.begin(y: fixture.keyboardTop - fixture.accessory - 40, time: 0, touchedView: fixture.list))
+            driver.move(y: bottom - fixture.accessory, time: 0.1)
+            fixture.window.layoutIfNeeded()
+            XCTAssertEqual(fixture.updates.values.last?.isInteractive, false)
+            driver.move(y: bottom - fixture.accessory + 20, time: 0.2)
+            fixture.window.layoutIfNeeded()
+            XCTAssertEqual(fixture.updates.values.last?.isInteractive, true)
+            XCTAssertEqual(fixture.updates.values.last?.height, -20)
+            XCTAssertEqual(-fixture.host.layer.bounds.origin.y, bottom - fixture.keyboardTop + 20, accuracy: 1e-6)
+        }
+    }
+
+    func testNativeReleaseAnimationsCarryTheSpecifiedCurvesAndRefreshRequests() throws {
+        for maximum in [60, 61, 62, 120] {
+            for scale in [1.0, 2] {
+                let spring = try XCTUnwrap(KeyboardDismissalAnimation.make(dismisses: true, from: 70, to: 300,
+                    durationScale: scale, maximumFramesPerSecond: maximum) as? CASpringAnimation)
+                XCTAssertEqual(spring.mass, 1); XCTAssertEqual(spring.stiffness, 555.027); XCTAssertEqual(spring.damping, 47.118)
+                XCTAssertEqual(spring.initialVelocity, 0); XCTAssertFalse(spring.allowsOverdamping)
+                XCTAssertEqual(spring.duration, 0.3832); XCTAssertEqual(spring.speed, Float(1 / scale))
+                XCTAssertEqual(spring.fromValue as? Double, 230); XCTAssertEqual(spring.toValue as? Double, 0)
+                XCTAssertTrue(spring.isAdditive); XCTAssertEqual(spring.fillMode, .forwards); XCTAssertTrue(spring.isRemovedOnCompletion)
+                XCTAssertEqual(spring.value(forKey: KeyboardDismissalAnimation.frameRateHint.key) as? Int, 1_048_619)
+                XCTAssertEqual(spring.preferredFrameRateRange.minimum, maximum > 61 ? 30 : 80)
+                XCTAssertEqual(spring.preferredFrameRateRange.maximum, maximum > 61 ? Float(maximum) : 120)
+                XCTAssertEqual(spring.preferredFrameRateRange.preferred, maximum > 61 ? Float(maximum) : 120)
+                let returning = KeyboardDismissalAnimation.make(dismisses: false, from: 70, to: 0,
+                    durationScale: scale, maximumFramesPerSecond: maximum)
+                XCTAssertFalse(returning is CASpringAnimation)
+                XCTAssertEqual(returning.duration, 0.25); XCTAssertEqual(returning.fromValue as? Double, -70)
+                var first: [Float] = [0, 0], second: [Float] = [0, 0]
+                first.withUnsafeMutableBufferPointer { returning.timingFunction?.getControlPoint(at: 1, values: $0.baseAddress!) }
+                second.withUnsafeMutableBufferPointer { returning.timingFunction?.getControlPoint(at: 2, values: $0.baseAddress!) }
+                XCTAssertEqual(first, [0.380, 0.700]); XCTAssertEqual(second, [0.125, 1])
             }
         }
     }
@@ -473,6 +823,7 @@ private final class KeyboardRecoveryTrace: NSObject {
 
 @MainActor
 private final class Fixture {
+    let updates = KeyboardUpdateLog()
     let controller: ListChatController
     let window: UIWindow
     let keyboardWindow: UIWindow
@@ -495,7 +846,7 @@ private final class Fixture {
         }
         controller.view.layoutIfNeeded(); controller.keyboardDismissal?.invalidate()
         bar = try XCTUnwrap(controller.view.subviews.first { $0.accessibilityIdentifier == "composerBar" })
-        accessory = bar.bounds.height + 8
+        accessory = bar.bounds.height
         let height = min(300, window.bounds.height * 0.45)
         keyboardTop = window.bounds.maxY - height
         keyboardWindow = UIWindow(windowScene: scene); keyboardWindow.frame = window.frame
@@ -505,13 +856,13 @@ private final class Fixture {
         keyboardController.view.layoutIfNeeded()
         controller.view.addSubview(input)
         XCTAssertTrue(input.becomeFirstResponder())
-        let keyboardWindow = self.keyboardWindow, host = self.host, input = self.input, bar = self.bar, controller = self.controller
+        let keyboardWindow = self.keyboardWindow, host = self.host, input = self.input, bar = self.bar, controller = self.controller, updates = self.updates
         driver = KeyboardDismissalController(scrollView: controller.list, coordinateView: controller.view,
-            accessoryHeight: { [weak bar] in Double(bar?.bounds.height ?? 0) + 8 },
+            accessoryHeight: { [weak bar] in Double(bar?.bounds.height ?? 0) },
             restingHeight: { [weak controller] in Double(controller?.view.safeAreaInsets.bottom ?? 0) },
             hasInput: { [weak input] in input?.isFirstResponder == true },
             lookupHost: { _ in keyboardWindow.isHidden ? nil : .init(window: keyboardWindow, view: host) },
-            update: { [weak controller] in controller?.applyDrivenKeyboard($0) })
+            update: { [weak controller] in updates.values.append($0); controller?.applyDrivenKeyboard($0) })
         controller.keyboardDismissal = driver; driver.refresh()
         controller.list.animationDurationScale = scale
         for _ in 0..<150 where controller.list.loadedIndexRange.isEmpty { try await Task.sleep(for: .milliseconds(20)) }
@@ -532,6 +883,10 @@ private final class Fixture {
         window.endEditing(true); keyboardWindow.isHidden = true; window.isHidden = true
         keyboardWindow.rootViewController = nil; window.rootViewController = nil; oldKey?.makeKeyAndVisible()
     }
+}
+
+@MainActor private final class KeyboardUpdateLog {
+    var values: [KeyboardDismissalUpdate] = []
 }
 
 @MainActor private final class InputView: UIView {
