@@ -190,6 +190,7 @@ open UltraProofs
 #print axioms ListReadiness.stale_noop
 #print axioms ListReadiness.later_gen_lt
 #print axioms ListReadiness.resume_applies
+#print axioms ListReadiness.pass_takes_held
 #print axioms ListMomentum.grows_compensates
 #print axioms ListMomentum.explicit_compensates
 #print axioms ListMomentum.run_follows

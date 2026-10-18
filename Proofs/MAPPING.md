@@ -892,8 +892,8 @@ modeled.
 
 `Proofs/UltraProofs/List/Readiness.lean` models how `applyChanges` keeps a
 scroll target it cannot apply yet, including the readiness hold `75fe3c8`
-added for immediate distant jumps. The rows pin `6d94fd0` plus the commit
-that adds the zero-viewport fix below.
+added for immediate distant jumps (animated ones too since `1fd22d3`). The
+rows pin `6d94fd0` plus the commit that adds the zero-viewport fix below.
 
 | Model (`Proofs/UltraProofs/List/Readiness.lean`) | Swift |
 | --- | --- |
@@ -940,11 +940,13 @@ and display readiness themselves), the empty-items case of the zero guard
 (both cleared, nothing can apply), staged view reuse, mutations with new
 items (the preparation queue), and the `passing` deferral.
 
-**Animated destination coverage (the commit after `04e5f98`).**
+**Animated destination coverage at `1fd22d3`.**
 The distant-jump hold now applies to animated transitions too. The only
 source change removes `transition.isImmediate` from its guard
-(UltraListView.swift:519); that file's SHA-256 is
-`cb717770cdaf2db62d8a760422a2404534c378cd59c212597a5e6042c5461965`.
+(UltraListView.swift:519); that file's SHA-256 at `1fd22d3` is
+`cb717770cdaf2db62d8a760422a2404534c378cd59c212597a5e6042c5461965`, and
+`FarJumpCoverageTests.swift`'s is
+`a3aa09813c864084936acd79c08f17fd9a9f46e99ed1c428416e668e3a01c0dd`.
 The `Out.hold`, `Ev.observe` and `Ev.flush` rows above retain their behavior:
 the original target and transition are retried after the destination's
 visible geometry is measured and its required views report ready. The hold
@@ -960,13 +962,29 @@ checks in all three engines. After the change these checks and eventual
 departure cleanup pass; all 183 UIKit tests pass. Cleanup waits for the
 existing real-time completion fallback when the test pauses layer time.
 
-No Lean definition changes. The destination predicate, literal pixel
-coverage, measurements and UIKit readiness remain outside `Readiness`.
-The requested animation starts with its full duration when the hold ends;
-tap-to-motion latency and rows mounted beyond the initial destination
-margin during travel require interaction evidence. Existing pending-target
-semantics also remain: a later successful pass can supersede a held target,
-and touching the list does not cancel that target.
+No Lean definition changes. `Readiness` has no transitions: how a call
+ends is an input, so `applies_latest`, `stale_noop`, `later_gen_lt` and
+`resume_applies` hold for animated holds as they are. The destination
+predicate, literal pixel coverage, measurements and UIKit readiness remain
+outside it. The requested animation starts with its full duration when the
+hold ends; tap-to-motion latency and rows mounted beyond the initial
+destination margin during travel require interaction evidence.
+
+Pending-target behaviour that animated jumps now reach, unchanged by this
+commit and not covered:
+
+- A successful pass without its own `scrollTo` takes the held target
+  (`target = scrollTo ?? pendingTarget`, :404) and applies it, and a pass
+  that changes the collection skips the destination check (`!changesCollection`,
+  :519). So a mutation applied while a jump is held performs the jump at
+  once, without waiting for coverage (`pass_takes_held`), and on the
+  mutation's transition. The held target is an index, so after rows are
+  inserted or removed before it, it names a different row. A pass with its
+  own target replaces the held one (`applies_latest`).
+- A touch or a drag doesn't cancel the hold: `didTouchDown` and
+  `handleDragBegin` (:179, :231) leave `pendingTarget` and `pendingScroll`
+  as they are, so the readiness observer still resumes the jump (:545),
+  and that pass halts the engine (:368).
 
 ## Placing transformed row views at `460d78f`
 
@@ -1876,7 +1894,7 @@ UltraListView.swift:208) still replaces the correction with none, so a
 rotation or appearance change during the travel lands it, along with
 everything else that pass relays out.
 
-## The bubble chat (the commit after `1fd22d3`)
+## The bubble chat at `32bf281`
 
 The chat shows bubbles (`ChatBubbles.swift`) unless a chaos run or
 `-chatCards YES` asks for card rows. No mapped behaviour changes: every
@@ -1885,10 +1903,11 @@ keyboard, inset, drag and momentum function is untouched, and the
 at the top of `sendMessage`, which still inserts the sent row with the pass
 alone (one `applyChanges`, no inserted-block animation). The edits add lines,
 so the rows above that cite `ListChatController.swift` at `c5743ae`,
-`65db16e` and `c06d876` move: lines 1-31 stay, 33-46 move by 4, 55-148 by
+`65db16e`, `c06d876` and `1fd22d3` (the file is the same at all four) move:
+lines 1-31 stay, 32-54 are edited or move (no row cites them), 55-148 move by
 20, 149-460 by 21 (the keyboard functions), 461-538 by 23 (`textViewDidChange`
 at :485), and `sendMessage`'s `followsComposer` write is at :583.
-`ListChatController.swift` here has SHA-256
+`ListChatController.swift` at `32bf281` has SHA-256
 `4e374d5116195a0ce7767fb0f508012f4834ec89f262818fcf7cb30fc9892998`.
 `Proofs/UltraProofs` is unchanged.
 

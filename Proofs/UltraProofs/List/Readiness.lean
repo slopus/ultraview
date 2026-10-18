@@ -7,8 +7,9 @@ pendingTarget`, and the call ends one of four ways:
 
 * `apply`: the pass runs. It clears `pendingTarget` and `pendingScroll`, and
   `clearPendingDisplayViews` starts a new hold generation.
-* `hold`: an immediate jump whose destination shares no row with the screen
-  finds a visible row without a height or not display-ready. It keeps the
+* `hold`: a jump whose destination shares no row with the screen (immediate,
+  and since `1fd22d3` animated too) finds a visible row without a height or
+  not display-ready. It keeps the
   old window, records the target in `pendingTarget` and in the
   `pendingScroll` closure, starts a new generation and installs readiness
   observers that capture it.
@@ -37,6 +38,9 @@ each observer's check.
   meets a zero viewport, and does nothing.
 * `resume_applies`: an observer of the current hold whose check passes
   applies the pending target when the resumed call applies.
+* `pass_takes_held`: a successful pass without its own target, such as a
+  collection change (which skips the destination check), takes the held
+  target and applies it at once.
 
 A hold changes nothing shown, so the old window stays until a later call
 applies. Mutations with new items go through the preparation queue
@@ -253,5 +257,13 @@ theorem resume_applies (fix : Bool) (s : S) (t : Nat) (hr : s.retry = some t) :
     (step fix s (.observe s.gen true .apply)).shown = s.shown ++ [t] ∧
       (step fix s (.observe s.gen true .apply)).pending = none := by
   simp [step, hr, call, pick]
+
+/-- **A pass without its own target takes the held one.** After a jump to
+`t` holds, the next call that applies with no `scrollTo` (a collection
+change, which skips the destination check) shows `t` at once. -/
+theorem pass_takes_held (fix : Bool) (s : S) (t : Nat) :
+    (call fix (call fix s (some t) .hold) none .apply).shown = s.shown ++ [t] ∧
+      (call fix (call fix s (some t) .hold) none .apply).pending = none := by
+  simp [call, pick]
 
 end UltraProofs.ListReadiness
