@@ -46,6 +46,13 @@ All positions here are at one progress `p` of the pass's timing; by
   hide interrupted by an immediate land puts the bar and the content on
   their settled values; when they share one residual their distance is the
   settled one before, at and after the land, on any curve.
+* `keep_moves_by_shift`, `keep_lands_settled`, `land_jumps_travel`: an
+  immediate inset change that keeps a running correction carrying a
+  target's travel moves the content by the change's own shift at every
+  frame, and the travel ends on its old deadline at the new settled place;
+  replacing the correction with none jumped by the travel left as well.
+  `bar_lands_content_keeps`: landing the bar while the content keeps its
+  correction leaves their gap off by that correction.
 * `ghost_follows_witness`: a departure block welded to a surviving row's
   edge stays on it through the pass when it starts there.
 * `inserted_gap`, `inserted_once`: an inserted row and its neighbour, both
@@ -317,6 +324,51 @@ def overshot : Curves := ⟨fun _ x _ => if x = 0 then 0 else 21 / 20, fun _ _ =
 theorem interrupt_sample :
     shownWith overshot 0 (some ⟨1, 90, 0, 0, ⟨1, 0, 1⟩⟩) (9 / 10) - shownWith overshot 0 none (9 / 10) = -9 / 2 ∧
       shownWith overshot 0 none (9 / 10) = 0 := by
+  decide +kernel
+
+/-! ### A target's travel through an immediate inset change
+
+An inset change with no animation moves the engine's offset by its `shift`
+at once. With no target travelling it also replaces the viewport
+correction with none. While the correction carries a scroll to a target,
+it now keeps that correction running on its own clock. -/
+
+/-- A track shows its destination from its deadline on. -/
+theorem value_after_deadline (C : Curves) (r : Track) {t : Rat} (h : t ≥ r.deadline) :
+    r.value C t = r.dst := by
+  simp only [Track.value, Track.progress, h, or_true, ite_true]; grind
+
+/-- **The content moves by the change's own shift**, at every frame: what is
+left of the travel is the same with the change as without it. -/
+theorem keep_moves_by_shift (C : Curves) (o k : Rat) (r : Track) (t : Rat) :
+    shownWith C (o + k) (some r) t = shownWith C o (some r) t + k := by
+  simp only [shownWith]; grind
+
+/-- **The travel ends on its old deadline at the new settled place.** -/
+theorem keep_lands_settled (C : Curves) (o k : Rat) (r : Track) (h0 : r.dst = 0) {t : Rat}
+    (ht : t ≥ r.deadline) : shownWith C (o + k) (some r) t = o + k := by
+  simp only [shownWith, value_after_deadline C r ht, h0]; grind
+
+/-- **Replacing the correction with none** jumped by the change's shift less
+the travel left at the change: the rest of the scroll landed at once. -/
+theorem land_jumps_travel (C : Curves) (o k : Rat) (r : Track) (t0 : Rat) :
+    shownWith C (o + k) none t0 - shownWith C o (some r) t0 = k - r.value C t0 := by
+  simp only [shownWith]; grind
+
+/-- **Landing the bar while the content keeps its correction** leaves their
+gap off by that correction until it ends (`interrupt_one_off` the other way
+round). -/
+theorem bar_lands_content_keeps (C : Curves) (bar content : Rat) (r : Track) (t : Rat) :
+    shownWith C bar none t - shownWith C content (some r) t = bar - content - r.value C t := by
+  simp only [shownWith]; grind
+
+/-- A 600-point travel, linear over one second, half done when a 20-point
+immediate change arrives: kept, the content moves by 20 and lands at the
+deadline on the new place; replaced, it jumped by 280 the other way. -/
+theorem keep_sample :
+    shownWith linear 20 (some ⟨1, 600, 0, 0, oneSecond⟩) (1 / 2) - shownWith linear 0 (some ⟨1, 600, 0, 0, oneSecond⟩) (1 / 2) = 20 ∧
+      shownWith linear 20 (some ⟨1, 600, 0, 0, oneSecond⟩) 1 = 20 ∧
+      shownWith linear 20 none (1 / 2) - shownWith linear 0 (some ⟨1, 600, 0, 0, oneSecond⟩) (1 / 2) = -280 := by
   decide +kernel
 
 /-- **The inverted chat.** The composer's top is at `c` on screen; the list

@@ -1799,25 +1799,30 @@ lands; the guard is not modeled. `ScrollToTopTests` and
 lands on the top edge, and a correction that starts after the travel still
 finishes at once. `Proofs/UltraProofs` is unchanged.
 
-**Immediate inset changes during the travel (the commit after `8cc8edf`).**
+**Immediate inset changes during the travel at `c06d876`.**
 The review above found that the guard covered `finishViewportTransition()`
 only: an immediate inset change during the travel replaced the correction
 with none (`from: 0` when immediate), so the target's remaining travel
 landed at once. The chat applies immediate insets from tracking layouts
 (ListChatController.swift:222, :351) and from a layout after typing, which
 sets `keyboardTransition` to `.none` (:463, applied at :195), so a line
-break typed during the travel landed it. `UltraListView.swift` at this
-commit has SHA-256
+break typed during the travel landed it. `UltraListView.swift` at
+`c06d876` has SHA-256
 `e02b3c688db620c6ba55fd43584d48021ace7b3f91c9c91aaeaab967823eeee4`; lines
-at `65db16e` move by 1 from :834 and by 6 from :866.
+at `65db16e` move by 1 from :834, by 3 at :864 and by 6 from :867 (:836,
+:863, :865 and :866 are edited).
 
 | Model | Change |
 | --- | --- |
-| `Insets.cheapSwift`, `Ev.keyboard` | an immediate change while the running track carries a target with more than half a point shown (`keepsTravel`, :867-868) applies `shift` as before and leaves that track, its clock and its record as they are (:869-872); the deferred `handleScroll` then runs as for an animated change (:837). Any other change is unchanged |
+| `Insets.cheapSwift`, `Ev.keyboard`; `ListPass.shownWith` with the engine offset as the settled value and the viewport correction as the residual | an immediate change while the running track carries a target with more than half a point shown (`keepsTravel`, :867-868) applies `shift` as before and leaves that track, its clock and its record as they are (:869-872); the deferred `handleScroll` then runs as for an animated change (:837). Any other change is unchanged |
 
-So the content moves by the change's own `shift` at once, and what is left
-of the travel ends on its old deadline, at the new settled place, which
-`cheapFixed` decides as for any immediate change. Compensated on the
+So the content moves by the change's own `shift` at once and at every
+later frame (`ListPass.keep_moves_by_shift`), and what is left of the
+travel ends on its old deadline, at the new settled place
+(`keep_lands_settled`, the correction ending at 0), which `cheapFixed`
+decides as for any immediate change. Before, the change jumped by its
+shift less the travel left (`land_jumps_travel`; `keep_sample`: 20 points
+kept against a 280-point jump). Compensated on the
 minimum edge (the test) that is the edge again. On an upside-down list's
 maximum edge, the chat's oldest row, a grown top inset moves the content
 with the composer and leaves it that far short of the edge, as typing
@@ -1826,9 +1831,12 @@ immediate change still lands everything, which is what `interrupt_lands`
 and `interrupt_keeps_gap` describe. They don't describe a hide whose
 correction had absorbed a target's travel (a keyboard change made during
 the travel, recorded as carrying it): there the chat's zero-duration land
-removes the bar's animations while the content keeps the shared track, the
-`interrupt_one_off` gap, until that track ends. The Lean `Insets` and
-`Return` models don't have target travel; this is checked in UIKit by
+removes the bar's animations while the content keeps its correction, which
+is on the bar's clock but carries the travel as well, so the gap is off by
+that correction until it ends (`bar_lands_content_keeps`,
+`interrupt_one_off` the other way round). The Lean `Insets` and `Return`
+models don't have target travel, and `ListPass`'s lemmas are the
+correction's arithmetic only; the rest is checked in UIKit by
 `ScrollToTopTests.anImmediateInsetChangeDuringAScrollToTheTopLeavesItRunning`
 (the travel left is unchanged across the change, the track still runs, it
 lands where the list settles, and with no travel an immediate change still
@@ -1945,6 +1953,9 @@ everything else that pass relays out.
 - `ListContent.retimes_keep`, `retime_same`, `retime_unstarted`: inner
   content retimed with its row keeps a constant inset through any number of
   retimings, and the Swift's skipped and unstarted cases are that retiming.
+- `ListPass.keep_moves_by_shift`, `keep_lands_settled`: an immediate inset
+  change during a scroll to a target moves the content by its own shift and
+  leaves the rest of the travel to end on its old deadline.
 - `ListDeferred.shared_inv`, `once_inv`, `run_all`, `normalize_affine`: an
   accessory update requested during a list pass runs once after it, copies
   the viewport animation installed for that same update, and keeps the

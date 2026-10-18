@@ -114,6 +114,12 @@ open UltraProofs
 #print axioms ListPass.interrupt_keeps_gap
 #print axioms ListPass.interrupt_one_off
 #print axioms ListPass.interrupt_sample
+#print axioms ListPass.value_after_deadline
+#print axioms ListPass.keep_moves_by_shift
+#print axioms ListPass.keep_lands_settled
+#print axioms ListPass.land_jumps_travel
+#print axioms ListPass.bar_lands_content_keeps
+#print axioms ListPass.keep_sample
 #print axioms ListPass.chat_lockstep
 #print axioms ListPass.ghost_follows_witness
 #print axioms ListInsets.edgesAt_translate
