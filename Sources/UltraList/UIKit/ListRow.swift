@@ -16,6 +16,12 @@ public extension ListPreparedContent {
     func drawAhead() -> Task<Void, Never>? { nil }
 }
 
+/// Content whose measured size can survive the host that drew it.
+@MainActor
+protocol DisplayPreparedContent: ListPreparedContent {
+    var isDisplayPrepared: Bool { get }
+}
+
 /// What the list tells a row's `prepare` about the preparation, through
 /// task-local values.
 public enum ListPreparationHint {
@@ -72,8 +78,9 @@ open class ListRowView: UIView {
     public var onContentDidChange: ((Bool) -> Void)?
     public var onDisplayReady: (() -> Void)?
     var readinessObserver: (() -> Void)?
+    var displayWaitObserver: (() -> Void)?
     /// Call after an asynchronous row's visible content becomes ready.
-    public func reportDisplayReady() { readinessObserver?(); onDisplayReady?() }
+    public func reportDisplayReady() { readinessObserver?(); displayWaitObserver?(); onDisplayReady?() }
     open var isDisplayReady: Bool { true }
     public override init(frame: CGRect) { super.init(frame: frame); layer.anchorPoint = .zero }
     public convenience init() { self.init(frame: .zero) }
@@ -134,17 +141,20 @@ public enum ListAnchorMode: Sendable { case automatic, preserveVisibleContent }
 @MainActor
 public struct ListScrollTarget {
     public var index: Int
+    /// A row to follow across later collection changes. Without an identity,
+    /// a standalone target keeps its numeric index.
+    public var identity: String?
     public var forward: Bool?
     public var resolve: (Double, ListRowView?) -> Double
     enum Edge { case first, last }
     /// A target at the first or last row goes to the row there when it
     /// applies, which may not be the one there when it was asked for.
     var edge: Edge?
-    public init(index: Int, forward: Bool? = nil, resolve: @escaping (Double, ListRowView?) -> Double) {
-        self.index = index; self.forward = forward; self.resolve = resolve
+    public init(index: Int, identity: String? = nil, forward: Bool? = nil, resolve: @escaping (Double, ListRowView?) -> Double) {
+        self.index = index; self.identity = identity; self.forward = forward; self.resolve = resolve
     }
-    public init(index: Int, pointOffset: Double = 0, forward: Bool? = nil) {
-        self.init(index: index, forward: forward, resolve: { _, _ in pointOffset })
+    public init(index: Int, identity: String? = nil, pointOffset: Double = 0, forward: Bool? = nil) {
+        self.init(index: index, identity: identity, forward: forward, resolve: { _, _ in pointOffset })
     }
 }
 

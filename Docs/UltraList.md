@@ -736,6 +736,25 @@ preparations already running without the hint can upgrade through
 turns, with about one millisecond spent starting it each turn. The demo carousel
 reports ready after its visible cards draw, with a 0.3-second fallback.
 
+For a height or revision update that keeps the same row identities and viewport,
+the preparation queue projects the new window from cached heights. Newly exposed
+node rows must draw across the physical viewport, including behind translucent
+insets, before a pass changes the live rows. Missing frontier heights trigger
+more preparation. The committed collection stays interactive while drawing
+finishes; rows farther away do not hold it up. An explicit scroll also checks
+its destination when it overlaps the current loaded window. A simultaneous size
+or inset change applies its geometry immediately. A new drag or newer explicit
+target cancels a waiting target; a queued collection can still commit while
+preserving the content held by the drag.
+
+A standalone `ListScrollTarget` keeps its numeric index while it waits. Supply
+its optional `identity` to follow that row across later insertions; removing the
+row cancels that target permanently. A target submitted with replacement items
+still follows the row at its index in those items. Scrolls to the top follow the
+current edge row.
+Name a row already in the list, or submit the target with the items that contain
+it. A target naming a missing row is canceled.
+
 The first integrated full unit run had one failure in 914 tests: the platform
 engine's carousel jump showed one drawn card after about 19 ms, before its next
 card was placed. The readiness check accepted a nonempty partial band when every

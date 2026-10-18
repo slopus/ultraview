@@ -17,7 +17,7 @@ public struct NodeRowMeasurer: NodeRowMeasuring {
 }
 
 @MainActor
-fileprivate final class PreparedNodeContent: ListPreparedContent {
+fileprivate final class PreparedNodeContent: DisplayPreparedContent {
     let root: UltraNode
     let size: CGSize
     /// The row's width and environment, to draw at.
@@ -29,17 +29,25 @@ fileprivate final class PreparedNodeContent: ListPreparedContent {
     var staged: NodeHostView?
     private var drawing: Task<Void, Never>?
     var hasLiveHost: Bool { host != nil }
+    var isDisplayPrepared: Bool { (host ?? staged)?.isContentComplete == true }
     init(root: UltraNode, size: CGSize, width: Double, environment: RenderEnvironment) {
         self.root = root; self.size = size; self.width = width; self.environment = environment
     }
     func drawAhead() -> Task<Void, Never>? {
-        // A row view has it, drawn or drawing in its window.
-        guard host == nil else { return nil }
-        if staged != nil, let drawing { return drawing }
-        let staged = NodeHostView(rootNode: root)
-        self.staged = staged
+        let target: NodeHostView
+        if let prepared = host ?? staged {
+            guard !prepared.isContentComplete else { return nil }
+            if let drawing { return drawing }
+            target = prepared
+        } else {
+            target = NodeHostView(rootNode: root)
+            staged = target
+        }
         let size = CGSize(width: width, height: size.height), environment = environment
-        let drawing = Task { await staged.prepareContent(size: size, environment: environment) }
+        let drawing = Task { [weak self] in
+            await target.prepareContent(size: size, environment: environment)
+            self?.drawing = nil
+        }
         self.drawing = drawing
         return drawing
     }
