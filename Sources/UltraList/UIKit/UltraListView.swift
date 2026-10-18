@@ -831,9 +831,10 @@ public final class UltraListView: UltraScrollView {
         let started = CACurrentMediaTime()
         defer { MainThreadMonitor.shared.note("list inset compensates=\(compensates) \((CACurrentMediaTime() - started) * 1000) ms") }
         passing = true
+        var keepsTravel = false
         defer {
             passing = false
-            if !transition.isImmediate { handleScroll(engine.offset) }
+            if !transition.isImmediate || keepsTravel { handleScroll(engine.offset) }
             else { renderAttachments(); reportVisibility() }
             if !deferred.isEmpty {
                 let queued = deferred; deferred.removeAll()
@@ -860,10 +861,15 @@ public final class UltraListView: UltraScrollView {
         }
         engine.shift(by: shift); previousOffset = engine.offset
         engine.setEdges(declaredEdges)
-        // A target's remaining travel rides on the new correction.
+        // A target's remaining travel rides on the new correction. An
+        // immediate change moves the content by its own shift at once and
+        // leaves that travel running on its own clock.
         let carries = correctionCarriesTarget && abs(correction) > 0.5
-        let generation = animations.replace(.viewport, .viewportOffset, from: transition.isImmediate ? 0 : oldOffset + correction - engine.offset, to: 0, at: time, transition: transition)
-        targetCorrectionGeneration = carries ? generation : nil
+        keepsTravel = carries && transition.isImmediate
+        if !keepsTravel {
+            let generation = animations.replace(.viewport, .viewportOffset, from: transition.isImmediate ? 0 : oldOffset + correction - engine.offset, to: 0, at: time, transition: transition)
+            targetCorrectionGeneration = carries ? generation : nil
+        }
         CATransaction.commit()
     }
 

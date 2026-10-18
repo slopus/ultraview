@@ -178,6 +178,53 @@ private actor MeasurementHold {
         #expect(landed == 1)
     }
 
+    /// An immediate inset change during a scroll to the top (a line typed in
+    /// the chat's composer, say) moves the content by its own change at once
+    /// and leaves the rest of the scroll running on its clock.
+    @Test(arguments: ScrollEngineMode.allCases, [true, false])
+    func anImmediateInsetChangeDuringAScrollToTheTopLeavesItRunning(mode: ScrollEngineMode, compensates: Bool) async throws {
+        let window = makeWindow()
+        window.frame = .init(x: 0, y: 0, width: 390, height: 600)
+        let list = UltraListView(engineMode: mode)
+        list.frame = window.bounds; window.addSubview(list); window.isHidden = false
+        defer { list.engine.teardown(); window.isHidden = true }
+        list.layoutIfNeeded()
+        list.applyChanges(items: (0..<50).map { PlainRow(identity: String($0)) }, newInsets: .init(top: 80), transition: .none)
+        list.scrollTo(.init(index: 25), transition: .immediate)
+        // Stopped time, committing each step as before.
+        func at(_ time: Double) {
+            CATransaction.begin(); CATransaction.setDisableActions(true)
+            list.layer.timeOffset = time
+            CATransaction.commit(); CATransaction.flush()
+        }
+        list.layer.speed = 0; at(100)
+        list.scrollToTop(animated: true)
+        CATransaction.flush(); at(100.1)
+        // What is left of the travel: where row 0 is shown against where it settles.
+        func travel() throws -> Double {
+            try #require(list.presentedFrame(at: 0)).minY - #require(list.settledFrame(at: 0)).minY
+        }
+        let before = try travel()
+        #expect(abs(before) > 50, "\(mode): already at the top")
+        list.applyChanges(newInsets: .init(top: 100), compensatesInsetChange: compensates, transition: .none)
+        CATransaction.flush()
+        let after = try travel()
+        #expect(abs(after - before) < 0.5, "\(mode)/compensates=\(compensates): the travel left went from \(before) to \(after)")
+        #expect(list.contentView.layer.animation(forKey: "ultraview.list.viewportOffset") != nil)
+        // It ends where the list settles: the top edge when the change moves
+        // the content with the inset, else where it already was.
+        at(102)
+        let landed = try #require(list.presentedFrame(at: 0)), settled = try #require(list.settledFrame(at: 0))
+        #expect(abs(landed.minY - settled.minY) < 0.5, "\(mode): landed at \(landed.minY), settled at \(settled.minY)")
+        #expect(abs(settled.minY - (compensates ? 100 : 80)) < 0.5, "\(mode)/compensates=\(compensates): settled at \(settled.minY)")
+        // With no travel left, an immediate change still lands everything.
+        list.applyChanges(newInsets: .init(top: 60), transition: .keyboard(0.383))
+        CATransaction.flush(); at(102.1)
+        list.applyChanges(newInsets: .init(top: 70), transition: .none)
+        CATransaction.flush()
+        #expect(list.contentView.layer.animation(forKey: "ultraview.list.viewportOffset") == nil)
+    }
+
     /// The chat lands its keyboard's inset correction when the keyboard
     /// finishes hiding. A scroll to the top tapped while the keyboard goes
     /// down, or an inset change during the scroll, must not land with it.
