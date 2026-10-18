@@ -712,6 +712,11 @@ follow the same rule for rendering. Scroll targets and inserted-block animation
 intent survive replacement by identity, while later viewport changes supersede
 older queued insets. This follow-up passed 210 Linux and 303 simulator tests.
 
+A size or inset update before the first prepared collection keeps that
+collection's measurement work alive. Its rows commit with the newest viewport
+and their queued scroll target once preparation finishes. An explicit empty
+collection still cancels the pending work.
+
 Each list owns prepared content together with its height. Normal node-row
 preparation leaves no tree in the row model. The list retains a band of 80 rows
 around its loaded window, plus pending dependencies and content with live

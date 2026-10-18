@@ -498,10 +498,10 @@ came to show the row soon, is drawn ahead later through
 
 | Model (`Proofs/UltraProofs/List/Hosts.lean`) | Swift |
 | --- | --- |
-| `S.stage` | `PreparedNodeContent.drawAhead()` (NodeRow.swift:35-45): only while `host` reads `nil` (no view keeps a host of the root, so the root has no renderer: a host's renderer detaches when it deallocates, and `host` is weak), and only when nothing is staged; a `NodeHostView` for the root, kept in `staged`. Called from `NodeRow.prepare` (:105-121) for a live identity, an appearance still to show, or `showsSoon` (:115-118); from `UltraListView.showSoon` (UltraListView.swift:1296-1299) for a stored preparation the list will show soon, called for a mutation's nearest requests (:1243), a request with the hint (:1316) and prepared rows ahead of a scroll, queued by the scroll turn (:1385-1386, `drawAheadLater` :1300-1304) and drawn about a millisecond's worth per later main-queue turn (`drainDrawAhead` :1306-1310); and before a running preparation is stored, when the list came to show it soon meanwhile (:1324-1326), which stores only while its ticket is current (:1328-1335) |
+| `S.stage` | `PreparedNodeContent.drawAhead()` (NodeRow.swift:35-45): only while `host` reads `nil` (no view keeps a host of the root, so the root has no renderer: a host's renderer detaches when it deallocates, and `host` is weak), and only when nothing is staged; a `NodeHostView` for the root, kept in `staged`. Called from `NodeRow.prepare` (:105-121) for a live identity, an appearance still to show, or `showsSoon` (:115-118); from `UltraListView.showSoon` (UltraListView.swift:1300-1303) for a stored preparation the list will show soon, called for a mutation's nearest requests (:1247), a request with the hint (:1320) and prepared rows ahead of a scroll, queued by the scroll turn (:1389-1390, `drawAheadLater` :1304-1308) and drawn about a millisecond's worth per later main-queue turn (`drainDrawAhead` :1310-1314); and before a running preparation is stored, when the list came to show it soon meanwhile (:1328-1330), which stores only while its ticket is current (:1332-1339) |
 | `S.start` | `NodeRowView.start` (NodeRow.swift:243) with `checkout(owner:)` (:46-57): the live host, else `staged`, else a new `NodeHostView` (:52), and `staged = nil` (:54). Under `accept`'s and the queued candidate's guard (:280-290, :238-241) |
 | `S.reveal` | `showPreparedHost(_:)` (NodeRow.swift:182), with the pass-end wait (:207-213) and `passDidEnd` (:295-300) |
-| `S.drop`, `sweep_never_drops_hosted` | `hasLiveHost` false at UltraListView.swift:1340 and in `sweepPreparations` (:1404-1415) |
+| `S.drop`, `sweep_never_drops_hosted` | `hasLiveHost` false at UltraListView.swift:1344 and in `sweepPreparations` (:1408-1419) |
 
 A staging after the preparation is stored is a separate step in the model
 (the model allows `stage` between any others); a `drawAhead` that finds a
@@ -523,8 +523,8 @@ again, and `one_host` holds as before. The idle turn is a timer and
 `drawAhead` after the premount finds the host kept and does nothing.
 
 Integration preserves the edge-target and pending-item retention fix from
-`1a4e486`: `atEdge` is now UltraListView.swift:848, `recordPendingTarget`
-is at :856, and the unchanged retention predicate is at :1416-1428. It
+`1a4e486`: `atEdge` is now UltraListView.swift:852, `recordPendingTarget`
+is at :860, and the unchanged retention predicate is at :1420-1432. It
 keeps pending-item preparations in addition to the existing band and live
 hosts. The edge regression file is unchanged (SHA-256 `63a61cd7…`), including
 all 12 arriving-edge cases. The keyboard controller, gesture, composer and
@@ -535,7 +535,10 @@ The current `departureEdge` is at UltraListView.swift:258-262. NodeRow.swift
 lines from :106 on at `f478507` move by 16, so `showPreparedHost`'s appearance
 condition the premount section cites (:178-179) is at :194-195. Current SHA-256:
 `UltraListView.swift`
-`7d693ea8717ac587ca58cfc1b0419e4ba8cdfcd9f51f582113033cf5801d4389`,
+`6c4d84a4481fe805ad035834f6690fd22690699a4b2504c08e882d44c10e52d7`
+(with the geometry-pass fix below; at `384e3fb` it was
+`7d693ea8717ac587ca58cfc1b0419e4ba8cdfcd9f51f582113033cf5801d4389`, and
+the fix moves its lines from :473 on by 4),
 `NodeRow.swift`
 `39aab7f88e95818b717c81ac2e507a3c5bcab8ce19d83e1c691076a5675b7767`,
 `ListRow.swift`
@@ -551,6 +554,37 @@ unmeasured. Its deadline remains a bounded fallback, outside these models.
 the deadline and retains the existing bitmap jump assertion. These are ordinary
 runtime regressions, not new proofs. `HorizontalListDemo.swift` SHA-256:
 `2ea08d1448aa28a06d0f64c84c6088af75d80ea60514582f85d79a8a7c4f4ed4`.
+
+**A geometry pass before the first prepared collection (uncommitted, on
+`384e3fb`).** `applyChanges` resets the list when the committed items are
+empty or the viewport has no size (UltraListView.swift:446-478). The reset
+also dropped every preparation, invalidated the measurement cache and
+cancelled the measurement tasks and their tickets. The first collection of
+asynchronously measured rows waits in the preparation queue with `items`
+still empty. A pass that only changed the size or the insets in that window
+took the reset and cancelled the measurements the queued entry waited for.
+A cancelled task finds its ticket gone and never completes its key, so the
+first collection stayed queued and never applied. The reset now clears the
+measurement state only when the preparation queue is empty (:469-477); the
+views, attachments, carries, ghosts and engine are reset as before. An
+explicit empty collection still empties the queue before it submits
+(`preparationQueue.removeAll()`, :367, `Op.clear`), so its pass finds the
+queue empty and still cancels the outstanding measurements.
+
+No Lean definition or theorem changes, and this is not a new theorem.
+`ListPreparation.newest_applies` and `busy_producer` assume that the keys a
+queued entry waits for are eventually measured; the measurement side is a
+hypothesis there. The old reset broke that hypothesis for this sequence,
+outside the model, and the fix restores it for this sequence only.
+Cancellation, tickets and the reset branch are not modeled, so nothing here
+proves that no other path cancels an awaited measurement. The reset's
+handling of `pendingTarget` and `pendingScroll` (:447-454) comes before the
+new condition and is unchanged, so the `Readiness` rows (`Out.empty`,
+`Out.zero`) hold as they are. The fix is checked at runtime:
+`InitialPreparationGeometryTests` runs in every engine. With the first collection's measurements held and a
+target pending, a change of size, insets or both keeps the rows and the
+target, which applies once the measurements finish. An explicit empty
+collection still cancels the first preparation.
 
 ## Node transitions at `44f8a0c`
 

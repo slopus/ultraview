@@ -466,10 +466,14 @@ public final class UltraListView: UltraScrollView {
             for view in ghostWrappers.values { view.removeFromSuperview() }
             ghostWrappers.removeAll(); ghostExitOwners.removeAll(); ghostMembers.removeAll(); ghostLedger = .init(); newGhostRanges.removeAll()
             for view in carousel.subviews { animations.unbind(.carry(UInt64(max(0, view.tag))), removeModel: true); view.removeFromSuperview() }
-            preparations.removeAll(); measurements.invalidate(); preparationKeys.removeAll()
-            speculativeRequests.removeAll(); speculativeKeys.removeAll(); soonKeys.removeAll(); drawAheadQueue.removeAll()
-            for task in measurementTasks.values { task.cancel() }
-            measurementTasks.removeAll(); measurementTickets.removeAll()
+            // A geometry pass can precede the first prepared collection.
+            // Its queued rows still need their measurements to complete.
+            if preparationQueue.isEmpty {
+                preparations.removeAll(); measurements.invalidate(); preparationKeys.removeAll()
+                speculativeRequests.removeAll(); speculativeKeys.removeAll(); soonKeys.removeAll(); drawAheadQueue.removeAll()
+                for task in measurementTasks.values { task.cancel() }
+                measurementTasks.removeAll(); measurementTickets.removeAll()
+            }
             engine.setEdges(.init(minimum: 0, maximum: 0)); engine.setOffset(0)
             runs.removeAll(); renderAttachments(); return
         }
