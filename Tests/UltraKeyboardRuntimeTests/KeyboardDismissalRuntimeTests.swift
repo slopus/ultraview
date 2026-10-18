@@ -11,6 +11,39 @@ import UltraView
 
 @MainActor
 final class KeyboardDismissalRuntimeTests: XCTestCase {
+    func testAnEmptyChatComposerAnimatesOnKeyboardShowAndHide() async throws {
+        for mode in ScrollEngineMode.allCases {
+            let fixture = try await Fixture(mode: mode)
+            defer { fixture.close() }
+            fixture.list.applyChanges(items: [], transition: .none)
+            fixture.controller.keyboardFrameChanged(height: 0, duration: 0, curve: 7)
+            CATransaction.flush(); try await Task.sleep(for: .milliseconds(50))
+            fixture.window.layer.speed = 0; fixture.window.layer.timeOffset = 100
+            for hiding in [false, true] {
+                let layer = fixture.bar.layer
+                let initialY = try XCTUnwrap(layer.presentation()).position.y
+                let start = fixture.window.layer.timeOffset
+                fixture.controller.keyboardFrameChanged(height: hiding ? 0 : 252, duration: 1, curve: 7, fullHeight: 335,
+                                                        physicalBeginHeight: hiding ? 252 : 0, physicalEndHeight: hiding ? 0 : 252)
+                let animation = try XCTUnwrap(composerMotion(layer))
+                XCTAssertTrue(animation is CAKeyframeAnimation)
+                XCTAssertEqual(animation.duration / Double(animation.speed), 1, accuracy: 1e-6)
+                XCTAssertTrue(fixture.list.items.isEmpty && fixture.list.loadedIndexRange.isEmpty)
+                let targetY = layer.position.y
+                XCTAssertGreaterThan(abs(targetY - initialY), 100)
+                CATransaction.flush(); try await Task.sleep(for: .milliseconds(35))
+                fixture.window.layer.timeOffset = start + 0.25
+                CATransaction.flush(); try await Task.sleep(for: .milliseconds(35))
+                let shownY = try XCTUnwrap(layer.presentation()).position.y
+                XCTAssertGreaterThan(abs(shownY - initialY), 1, "\(mode)/hide=\(hiding): empty-chat motion must render")
+                XCTAssertEqual(shownY < initialY, !hiding)
+                fixture.window.layer.timeOffset = start + 1.001
+                CATransaction.flush(); try await Task.sleep(for: .milliseconds(35))
+                XCTAssertEqual(try XCTUnwrap(layer.presentation()).position.y, targetY, accuracy: 0.5)
+            }
+        }
+    }
+
     func testTheSystemArgumentSelectsTheInteractiveControlPath() {
         let defaults = UserDefaults.standard
         let original = defaults.volatileDomain(forName: UserDefaults.argumentDomain)
@@ -42,7 +75,7 @@ final class KeyboardDismissalRuntimeTests: XCTestCase {
                     driver.end(y: top + 65, time: dismisses ? 0.11 : 0.4)
                     CATransaction.flush(); try await Task.sleep(for: .milliseconds(35))
                     let hostAnimation = try XCTUnwrap(fixture.host.layer.animation(forKey: "ultraview.keyboard.dismissal"))
-                    let barAnimation = try XCTUnwrap(fixture.bar.layer.animation(forKey: "ultraview.chat.composerPosition"))
+                    let barAnimation = try XCTUnwrap(composerMotion(fixture.bar.layer))
                     let listAnimation = try XCTUnwrap(fixture.list.contentView.layer.animation(forKey: "ultraview.list.viewportOffset"))
                     let begin = fixture.host.layer.convertTime(hostAnimation.beginTime, to: nil)
                     XCTAssertEqual(fixture.bar.layer.convertTime(barAnimation.beginTime, to: nil), begin, accuracy: 0.000_001)
@@ -91,7 +124,7 @@ final class KeyboardDismissalRuntimeTests: XCTestCase {
             CATransaction.flush(); try await Task.sleep(for: .milliseconds(80))
             XCTAssertFalse(driver.isDriving, "\(mode): an unfinished animation must release ownership")
             XCTAssertEqual(fixture.host.layer.bounds.origin.y, 0, accuracy: 0.5)
-            XCTAssertNil(fixture.bar.layer.animation(forKey: "ultraview.chat.composerPosition"))
+            XCTAssertNil(composerMotion(fixture.bar.layer))
             XCTAssertNil(fixture.list.contentView.layer.animation(forKey: "ultraview.list.viewportOffset"))
         }
     }
@@ -225,7 +258,7 @@ final class KeyboardDismissalRuntimeTests: XCTestCase {
                 UIResponder.keyboardAnimationDurationUserInfoKey: 0.2,
                 UIResponder.keyboardAnimationCurveUserInfoKey: 7,
             ])
-            XCTAssertNotNil(fixture.bar.layer.animation(forKey: "ultraview.chat.composerPosition"))
+            XCTAssertNotNil(composerMotion(fixture.bar.layer))
         }
     }
 
@@ -553,7 +586,7 @@ final class KeyboardDismissalRuntimeTests: XCTestCase {
         trace.record("after-refocus-flush")
         let returned = try XCTUnwrap(KeyboardHostLookup.find(in: scene))
         let animation = try XCTUnwrap(returned.view.layer.animation(forKey: "ultraview.keyboard.dismissal"))
-        let barAnimation = try XCTUnwrap(bar.layer.animation(forKey: "ultraview.chat.composerPosition"))
+        let barAnimation = try XCTUnwrap(composerMotion(bar.layer))
         let listAnimation = try XCTUnwrap(controller.list.contentView.layer.animation(forKey: "ultraview.list.viewportOffset"))
         XCTAssertFalse((returned.view.layer.animationKeys() ?? []).contains {
             (returned.view.layer.animation(forKey: $0) as? CAPropertyAnimation)?.keyPath == "position"
@@ -891,5 +924,11 @@ private final class Fixture {
 
 @MainActor private final class InputView: UIView {
     override var canBecomeFirstResponder: Bool { true }
+}
+
+@MainActor
+private func composerMotion(_ layer: CALayer) -> CAPropertyAnimation? {
+    layer.animationKeys()?.compactMap { layer.animation(forKey: $0) as? CAPropertyAnimation }
+        .first { $0.keyPath == "position.y" }
 }
 #endif

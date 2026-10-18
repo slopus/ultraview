@@ -59,7 +59,7 @@ private enum KeyboardHideCompletion: CaseIterable {
         controller.keyboardFrameChanged(height: max(0, end), duration: duration, curve: 7, fullHeight: 335,
                                         physicalBeginHeight: begin, physicalEndHeight: end)
         #expect(list.contentView.layer.animation(forKey: "ultraview.list.viewportOffset") is CAKeyframeAnimation)
-        #expect(bar.layer.animation(forKey: "ultraview.chat.composerPosition") is CAKeyframeAnimation)
+        #expect(composerMotion(bar.layer) is CAKeyframeAnimation)
         for phase in [0.0, 0.04, 0.08, 0.13, 0.2, 0.4, 0.6, 0.8, 1] {
             CATransaction.begin(); CATransaction.setDisableActions(true)
             window.layer.timeOffset = 100 + duration * phase
@@ -239,7 +239,7 @@ private enum KeyboardHideCompletion: CaseIterable {
         controller.keyboardDragChanged(inset: 154, height: 102)
         controller.keyboardFrameChanged(height: 0, duration: 0.177, curve: 7, fullHeight: 335)
         controller.keyboardDragEnded(height: 0)
-        #expect(bar.layer.animation(forKey: "ultraview.chat.composerPosition") != nil)
+        #expect(composerMotion(bar.layer) != nil)
         try await Task.sleep(for: .milliseconds(23))
         let releaseOffset = controller.list.currentScrollOffset
         switch completion {
@@ -255,7 +255,7 @@ private enum KeyboardHideCompletion: CaseIterable {
         case .didHide:
             NotificationCenter.default.post(name: UIResponder.keyboardDidHideNotification, object: nil)
         }
-        #expect(bar.layer.animation(forKey: "ultraview.chat.composerPosition") == nil)
+        #expect(composerMotion(bar.layer) == nil)
         #expect(controller.list.contentView.layer.animation(forKey: "ultraview.list.viewportOffset") == nil)
         #expect(abs(bar.frame.maxY + 8 + controller.view.safeAreaInsets.bottom - controller.view.bounds.maxY) < 0.5)
         #expect(abs(controller.list.currentScrollOffset - releaseOffset) < 0.5)
@@ -361,5 +361,11 @@ private enum KeyboardHideCompletion: CaseIterable {
         window.frame = .init(x: 0, y: 0, width: 402, height: 604)
         return window
     }
+}
+
+@MainActor
+private func composerMotion(_ layer: CALayer) -> CAPropertyAnimation? {
+    layer.animationKeys()?.compactMap { layer.animation(forKey: $0) as? CAPropertyAnimation }
+        .first { $0.keyPath == "position.y" }
 }
 #endif
