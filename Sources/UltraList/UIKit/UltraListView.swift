@@ -156,6 +156,27 @@ public final class UltraListView: UltraScrollView {
     /// which finishing it would land at once. It names the track's
     /// generation, so it lapses when that track ends or is replaced.
     private var targetCorrectionGeneration: UInt64?
+    /// A row view built on an idle turn for the next row past the window, in
+    /// the direction of the latest scroll. It isn't in `views`: it is hidden,
+    /// so it is never shown, touched or read by accessibility, until a scroll
+    /// places it or an idle turn releases it.
+    struct PremountedRow {
+        var identity: String
+        var index: Int
+        var direction: Int
+        var key: MeasurementKey
+        var height: Double
+        var view: ListRowView
+        /// `appliedPassCount` when it was built; a later pass can't use it.
+        var pass: UInt64
+    }
+    private(set) var premounted: PremountedRow?
+    /// Row views that left the window or weren't used, oldest first: hidden
+    /// at once and taken out of the hierarchy on idle turns.
+    private(set) var retired: [(identity: String, view: ListRowView)] = []
+    private var unveiling: Set<ObjectIdentifier> = []
+    private var scrollDirection = 0
+    private var idleTurnScheduled = false
     let accessibilityCoordinator = ListAccessibility()
     public let swipeActions = ListSwipeController()
 
@@ -344,6 +365,8 @@ public final class UltraListView: UltraScrollView {
             return
         }
         passing = true; appliedPassCount &+= 1
+        // A pass builds its window itself; a spare row from before it can't be used.
+        releaseSpareRows()
         resolveMountContinuation(at: animations.now)
         CATransaction.begin(); CATransaction.setDisableActions(true)
         animations.capturePositions()
@@ -900,6 +923,14 @@ public final class UltraListView: UltraScrollView {
         settledWindow.rebalance(count: items.count, offsetInFrameSpace: engine.offset - base, viewportHeight: viewport.height, margin: preloadMargin, coveredOffsets: coverage, maximumAdditionalRows: flightOffsets == nil ? nil : 64) { [self] index in
             let item = items[index], key = MeasurementKey(identity: item.identity, revision: item.revision, width: viewport.contentWidth, environment: measurementEnvironmentKey &+ item.measurementEnvironment &* 0x9e3779b97f4a7c15)
             if item.measuresAsynchronously, measurements.height(for: key) == nil { requestMeasurement(index); return nil }
+            if views[item.identity] == nil, carried[item.identity] == nil {
+                releaseRetired(item.identity)
+                if let spare = takePremounted(item.identity, key: key) {
+                    views[item.identity] = spare.view; unveiling.insert(ObjectIdentifier(spare.view))
+                    let reserve = reservedHeights(at: index)
+                    return (item.measuresAsynchronously ? measurements.height(for: key)! : spare.height, reserve.0, reserve.1)
+                }
+            }
             let view = views[item.identity] ?? carried[item.identity]?.view ?? item.makeView()
             if views[item.identity] == nil { item.apply(to: view, transition: .immediate) }
             views[item.identity] = view
@@ -914,7 +945,8 @@ public final class UltraListView: UltraScrollView {
         if previous != settledWindow {
             let current = Set(settledWindow.rows.map { items[$0.index].identity })
             for (id, view) in views where !current.contains(id) {
-                view.visibleRectUpdated(nil); animations.unbind(.row(id)); view.removeFromSuperview(); views.removeValue(forKey: id)
+                view.visibleRectUpdated(nil); animations.unbind(.row(id)); views.removeValue(forKey: id)
+                retire(view, identity: id)
             }
             let nextOrigin = engineMode == .uiKit
                 ? base + settledWindow.minY
@@ -936,6 +968,7 @@ public final class UltraListView: UltraScrollView {
                 carryGenerations.removeValue(forKey: id)
                 if view.superview !== container { container.addSubview(view) }
                 view.place(in: .init(x: viewport.insets.left, y: row.y - settledWindow.minY, width: viewport.contentWidth, height: row.height))
+                if unveiling.remove(ObjectIdentifier(view)) != nil { view.isHidden = false }
                 view.onContentDidChange = { [weak self] animated in self?.markDirty(id, animated: animated) }
                 animations.bind(.row(id), layer: view.layer)
                 view.readinessObserver = { [weak self] in self?.accessibilityCoordinator.reconcile() }
@@ -950,8 +983,116 @@ public final class UltraListView: UltraScrollView {
             let direction = engine.coveredOffsets(horizon: 0.3).map { $0.lowerBound + $0.upperBound < 2 * engine.offset ? -1 : 1 } ?? (delta < 0 ? -1 : 1)
             requestAhead(anchor: index, direction: direction)
         }
+        if let covered = engine.coveredOffsets(horizon: 0.3), covered.lowerBound + covered.upperBound != 2 * engine.offset {
+            scrollDirection = covered.lowerBound + covered.upperBound < 2 * engine.offset ? -1 : 1
+        } else if abs(delta) > 1e-6 { scrollDirection = delta < 0 ? -1 : 1 }
+        if let premounted, premounted.direction != scrollDirection { self.premounted = nil; retire(premounted.view, identity: premounted.identity) }
+        if !retired.isEmpty || premountIndex() != nil { scheduleIdleTurn() }
         sweepPreparations()
         renderAttachments(); reportVisibility(); super.handleScroll(engine.offset)
+    }
+
+    // MARK: Premount and deferred unmount
+
+    /// The row an idle turn would build: the next one past the window in the
+    /// direction of the latest scroll, unless it is built already.
+    private func premountIndex() -> Int? {
+        // A held target (a readiness hold stages its own views) comes with a pass soon.
+        guard scrollDirection != 0, !settledWindow.rows.isEmpty, viewport.contentWidth > 0,
+              pendingDisplayViews.isEmpty, pendingScroll == nil else { return nil }
+        let index = scrollDirection > 0 ? settledWindow.range.upperBound : settledWindow.range.lowerBound - 1
+        guard items.indices.contains(index) else { return nil }
+        let item = items[index]
+        if let premounted, premounted.index == index, premounted.identity == item.identity,
+           premounted.key == measurementKey(item, width: viewport.contentWidth), premounted.pass == appliedPassCount { return nil }
+        guard views[item.identity] == nil, carried[item.identity] == nil else { return nil }
+        if item.measuresAsynchronously, measurements.height(for: measurementKey(item, width: viewport.contentWidth)) == nil { return nil }
+        // A row that animates in the first time it is shown plays that where it is seen.
+        if let node = ((item as? HorizontalRow)?.base ?? item) as? NodeRow, node.animatesContent, node.appearance != nil, !node.appearanceShown { return nil }
+        return index
+    }
+    private func takePremounted(_ identity: String, key: MeasurementKey) -> PremountedRow? {
+        guard let premounted, premounted.identity == identity else { return nil }
+        self.premounted = nil
+        guard premounted.key == key, premounted.pass == appliedPassCount else { retire(premounted.view, identity: identity); return nil }
+        return premounted
+    }
+    /// Hides a row view at once; an idle turn takes it out of the hierarchy.
+    private func retire(_ view: ListRowView, identity: String) {
+        unveiling.remove(ObjectIdentifier(view))
+        view.isHidden = true; view.onContentDidChange = nil; view.readinessObserver = nil
+        retired.append((identity, view))
+        // Hidden views still cost memory; past a few, release the oldest now.
+        while retired.count > 16 { retired.removeFirst().view.removeFromSuperview() }
+        scheduleIdleTurn()
+    }
+    /// A row coming back while its old view waits gets a new view; the old
+    /// one goes first, so the two don't pass a host between them.
+    private func releaseRetired(_ identity: String) {
+        guard let index = retired.firstIndex(where: { $0.identity == identity }) else { return }
+        retired.remove(at: index).view.removeFromSuperview()
+    }
+    private func releaseSpareRows() {
+        if let premounted { self.premounted = nil; unveiling.remove(ObjectIdentifier(premounted.view)); premounted.view.removeFromSuperview() }
+        for entry in retired { entry.view.removeFromSuperview() }
+        retired.removeAll()
+    }
+    /// A turn of its own, after this one's commit: a timer, because blocks
+    /// queued on the main queue from this turn run before it ends.
+    private func scheduleIdleTurn() {
+        guard !idleTurnScheduled else { return }
+        idleTurnScheduled = true
+        let timer = Timer(timeInterval: 0.001, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.idleTurn() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+    }
+    /// One piece of work per turn: the next row's premount, else a release.
+    private func idleTurn() {
+        idleTurnScheduled = false
+        guard window != nil else { releaseSpareRows(); return }
+        guard !passing else { scheduleIdleTurn(); return }
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        // One row past the window, or none: the window moved on, or a scroll turned.
+        if let premounted, premounted.index != (premounted.direction > 0 ? settledWindow.range.upperBound : settledWindow.range.lowerBound - 1) {
+            self.premounted = nil; retire(premounted.view, identity: premounted.identity)
+        }
+        if let index = premountIndex() { premount(index) }
+        else if !retired.isEmpty { retired.removeFirst().view.removeFromSuperview() }
+        CATransaction.commit()
+        if !retired.isEmpty || premountIndex() != nil { scheduleIdleTurn() }
+    }
+    /// Builds the row as a scroll would mount it, hidden in the container.
+    private func premount(_ index: Int) {
+        let started = CACurrentMediaTime()
+        if let premounted { self.premounted = nil; retire(premounted.view, identity: premounted.identity) }
+        let item = items[index], key = measurementKey(item, width: viewport.contentWidth)
+        releaseRetired(item.identity)
+        let view = item.makeView()
+        item.apply(to: view, transition: .immediate)
+        view.isHidden = true
+        let height: Double
+        if item.measuresAsynchronously {
+            height = measurements.height(for: key)!
+            container.addSubview(view)
+            view.applyPreparation(preparations[key] ?? .init(height: height), width: viewport.contentWidth, environment: measurementEnvironment)
+        } else {
+            height = view.update(width: viewport.contentWidth, transition: .immediate)
+            container.addSubview(view)
+        }
+        precondition(height.isFinite && height >= 0)
+        view.place(in: .init(x: viewport.insets.left, y: 0, width: viewport.contentWidth, height: height))
+        // Its own layout, a nested list's included, happens now rather than in
+        // the turn that shows it.
+        view.layoutIfNeeded()
+        // Content that changes before the row is shown needs measuring again.
+        let identity = item.identity
+        view.onContentDidChange = { [weak self, weak view] _ in
+            guard let self, let premounted, premounted.view === view else { return }
+            self.premounted = nil; retire(premounted.view, identity: identity)
+        }
+        premounted = .init(identity: item.identity, index: index, direction: scrollDirection, key: key, height: height, view: view, pass: appliedPassCount)
+        MainThreadMonitor.shared.note("list premount \(index) \((CACurrentMediaTime() - started) * 1000) ms")
     }
 
     private func resolveMountContinuation(at time: Double) {

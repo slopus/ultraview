@@ -1911,6 +1911,102 @@ at :485), and `sendMessage`'s `followsComposer` write is at :583.
 `4e374d5116195a0ce7767fb0f508012f4834ec89f262818fcf7cb30fc9892998`.
 `Proofs/UltraProofs` is unchanged.
 
+## Premounted rows and deferred unmounts (the commit after `4a99653`)
+
+The list now builds the next row before a scroll needs it and removes rows
+that leave the window later. After a scroll turn, an idle turn (a `Timer` on
+the main run loop in the common modes, `scheduleIdleTurn`, :1042-1049) runs
+`premount(_:)` (:1066-1096). It builds the row just past the window in the
+direction of the latest scroll, as a scroll would mount it. The row is
+hidden, in the container and laid out. There is one at a time, built at most
+one per idle turn. When a rebalance asks for that row (:926-933), it takes
+the premounted view instead of making one, and placement unhides the view in
+the transaction that places it (:971). A row view that leaves the window
+(:948-949), or a premount that goes unused, is hidden at once (`retire`,
+:1021-1028). A later idle turn takes it out of the hierarchy, one per turn,
+with at most 16 waiting (past that, the oldest goes at once). SHA-256:
+`UltraListView.swift`
+`8cd579a7cba67fb1f6286afd92ae2123358990bc6486c0726aab8227313e1845`,
+`PremountTests.swift`
+`248f0ad998afc1d6209f46a9522b077698c240acb704abfc6b60dc98fd6bcb10`.
+
+The rows above that cite `UltraListView.swift` at `1fd22d3` (the same file
+at `32bf281` and `4a99653`, `cb717770…`) shift as follows:
+- lines 1-158 stay;
+- 159-346 move by 21;
+- 347-902 move by 23 (the far-jump hold's guard, :519, is now :542);
+- 903-916 move by 31;
+- 917, where the unmount removes the view, becomes :948-949;
+- 918-938 move by 32;
+- 939-952 move by 33;
+- 953-956 move by 38;
+- 957 to the end move by 141.
+
+- `ListWindow.rebalance_keeps`, `rebalance_screen`: the rebalance's measure
+  function returns the same height for every row. A premount is used only
+  under the same measurement key (identity, revision, width, environment)
+  and the same `appliedPassCount` (`takePremounted`, :1014-1019), so the
+  items are those it was built for. A content change before placement drops
+  it (:1090-1093), and asynchronous rows still read the measurement store.
+  Only the source of the view changes, not the window's rows or frames.
+- `Deferred.lean`, `Ev.finish` and `S.batch`: the idle turn is a timer turn,
+  not the deferred block. It never calls `applyChanges` or
+  `performAfterCurrentPass` and never touches `deferred`. During a pass it
+  reschedules itself instead of running (:1054).
+- `Hosts.lean`:
+  - A premount's `applyPreparation` is `S.start`: the checkout takes the
+    live host, else the staged one, else makes one. The view is in the
+    container, so it has a window and `NodeRowLiveness` counts it.
+  - A retired view keeps its host until it is released, which is `S.free`.
+  - A row that comes back while its old view waits releases that view first
+    (`releaseRetired`, :1031-1034, called at :927 and :1070). So the new
+    view's checkout finds the staged host or makes one (`start_uses_staged`,
+    `start_creates`), or takes the live host if the old view outlives the
+    turn (`start_reuses`). `one_host` holds in every case.
+  - A hidden view's host is live, so `sweepPreparations` keeps its
+    preparation (`hasLiveHost` at :1282 and :1345, and
+    `sweep_never_drops_hosted`).
+- `Readiness.lean`:
+  - `premountIndex` (:999-1012) returns nothing while a hold has staged
+    views or a scroll is pending (`pendingDisplayViews`, `pendingScroll`,
+    :1001-1002).
+  - Every `applyChanges` pass releases the premount and the retired views
+    before it builds its window (`releaseSpareRows`, :369, :1035-1039), so
+    a hold's views and a pass's `oldViews` never include them.
+  - A row that is mounted or carried is never premounted (:1008), so
+    `promoteCarousel` and carried rows are untouched. `applies_latest`,
+    `stale_noop` and `resume_applies` hold as they are.
+- Premounted and retired views are hidden and are not in `views`. `views`
+  is what accessibility, swipe reconciliation, attachments,
+  `reportVisibility` and the chaos checks read. A premount is dropped:
+  - when a scroll turns (:989);
+  - when the window moves past its index (:1057-1059);
+  - by every pass (:369);
+  - by a content change (:1090-1093).
+
+  The premount also skips a node row whose first-show appearance is still to
+  play (:1011): the row itself or a `HorizontalRow`'s base, under the
+  condition `showPreparedHost` consumes it on (NodeRow.swift:178-179). Rows
+  of a list nested in the row are not checked. The premount's
+  `layoutIfNeeded` (:1087) mounts them, so their appearances can play while
+  hidden, one row before the preload margin would have mounted them (also
+  off screen).
+- A list that leaves its window with a premount and no idle turn pending
+  keeps that one hidden view, with its host and preparation, until the next
+  pass or scroll turn. Retired views always have a turn pending, and a turn
+  without a window releases everything (:1053).
+
+Not modeled: the premount, the idle turn's timing and the cap. No Lean
+definition changes, and `Proofs/UltraProofs` is unchanged.
+`PremountTests` checks the observable rules in every engine:
+- a premount stays hidden and is the view shown;
+- it is dropped by a pass, a content change, a reversal or a jump;
+- nothing is premounted during a far-jump hold;
+- a row that leaves is hidden at once and released later;
+- a new revision still measuring never gets the old revision's view;
+- a row whose first-show appearance is still to play isn't premounted, and
+  the appearance plays once the row is shown.
+
 ## Theorems
 
 **Correctness**
