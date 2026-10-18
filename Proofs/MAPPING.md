@@ -2213,7 +2213,14 @@ passed 36 launches across all three engines and the system and driven
 paths: 12 card-row momentum comparisons and 24 default-bubble gestures.
 Sampled recordings of the six driven partial and midway returns show the
 composer staying with the keyboard. The recordings average about 30 frames
-per second; they do not establish continuity at every 60 Hz composite.
+per second, but their variable-rate timestamps also include short intermediate
+composites. Detailed analysis of the pinned final build found keyboard-only
+movement followed by composer and rows 3–7 milliseconds later during tracking;
+observed gaps range from about 3 points at slow speeds to 46 points in a fast
+fling. The fitted 60 Hz phase does not establish whether a physical display shows
+those intermediate composites. These are known limits of the current runtime
+evidence, and the shared release clock is not evidence of alignment at every
+composite during finger tracking.
 The final hosted target imports the app module and uses its bundle loader
 without linking another library copy. Its build and all three unit-test
 stage logs contain no project duplicate-class or static-library warnings.
