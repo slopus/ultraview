@@ -393,15 +393,18 @@ The callback resolves its resting inset from the signed overlap, applies the lis
 inset, and then positions its accessory synchronously. `refresh()` follows layout
 and window changes; `invalidate()` detaches the window recognizer.
 Use `UltraListView.applyViewportMotion(to:keyPath:displacement:)` for the accessory's
-scalar position or size. The caller captures the presented value, applies the
-inset, sets the final model with actions disabled, then passes presented − final:
+scalar position or size. Capture the presented value while that property is
+animating; otherwise use its current model value. A presentation can lag an
+immediate tracking update made earlier in the same turn. Apply the inset, set
+the final model with actions disabled, then pass captured − final:
 
 ```swift
 let applyAccessoryInset: (Double, ListTransition) -> Void = { inset, transition in
-    let presented = accessory.layer.presentation()?.position.y ?? accessory.layer.position.y // 1. Capture the presented value.
+    let moving = accessory.layer.animationKeys()?.contains { (accessory.layer.animation(forKey: $0) as? CAPropertyAnimation)?.keyPath == "position.y" } == true
+    let captured = moving ? accessory.layer.presentation()?.position.y ?? accessory.layer.position.y : accessory.layer.position.y // 1. Capture this property's current value.
     list.applyChanges(newInsets: .init(top: inset), transition: transition) // 2. Apply the inset.
     UIView.performWithoutAnimation { accessory.frame = finalAccessoryFrame(inset) } // 3. Set the final model with actions disabled.
-    list.applyViewportMotion(to: accessory.layer, keyPath: "position.y", displacement: Double(presented - accessory.layer.position.y)) } // 4. Pass presented − final.
+    list.applyViewportMotion(to: accessory.layer, keyPath: "position.y", displacement: Double(captured - accessory.layer.position.y)) } // 4. Pass captured − final.
 ```
 
 Resolve the inset (the larger of resting height and keyboard overlap, plus accessory height)
@@ -414,9 +417,12 @@ same window and use running clocks at the same speed. The seam copies the
 viewport's basic, spring or sampled curve and its start time. Repeating it in a
 pass replaces the same property without stacking or restarting its clock.
 Capture presentation again when a show interrupts a hide, a finger regrabs a
-release, or rotation changes the destination. Immediate or unchanged/subpixel
-insets, displacement within half a point, or an unlaid-out viewport remove the
-property's mirror and snap to its model.
+release, or rotation changes the destination. Match vector animations such as
+`position` or `bounds` too when they affect the scalar you capture. Immediate
+passes, unchanged/subpixel insets without a meaningful new viewport displacement,
+displacement within half a point, or an unlaid-out viewport remove the property's
+mirror and snap to its model. A flight started or retargeted by this pass can
+animate with an unchanged inset; an older unrelated template does not qualify.
 An empty list or missing viewport animation follows the latest inset transition.
 An accessory already at its target is harmless. Pass displacement zero for each
 mirrored property when detaching it; completed mirrors remove themselves.

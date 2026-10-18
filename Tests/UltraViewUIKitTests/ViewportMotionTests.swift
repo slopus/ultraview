@@ -57,8 +57,10 @@ private final class AccessoryFixture {
         list.haltScrolling(); window.isHidden = true
     }
     func apply(inset: Double, y: CGFloat, height: CGFloat = 40, transition: ListTransition) {
-        let presented = accessory.layer.presentation() ?? accessory.layer
-        let oldY = presented.position.y, oldHeight = presented.bounds.height
+        let layer = accessory.layer, presented = layer.presentation() ?? layer
+        let geometry = layer.animationKeys()?.compactMap { layer.animation(forKey: $0) as? CAPropertyAnimation } ?? []
+        let oldY = geometry.contains { ["position", "position.y"].contains($0.keyPath ?? "") } ? presented.position.y : layer.position.y
+        let oldHeight = geometry.contains { ["bounds", "bounds.size", "bounds.size.height"].contains($0.keyPath ?? "") } ? presented.bounds.height : layer.bounds.height
         CATransaction.begin(); CATransaction.setDisableActions(true)
         list.applyChanges(newInsets: .init(top: inset), transition: transition)
         accessory.frame = .init(x: 0, y: y, width: 300, height: height)
@@ -199,6 +201,28 @@ private final class AccessoryFixture {
         #expect(fixture.motion("position.y") == nil)
         try await fixture.sample(1.0 / 60)
         #expect(abs(try #require(fixture.accessory.layer.presentation()).position.y - fixture.accessory.layer.position.y) <= 0.5)
+    }
+
+    @Test(arguments: ScrollEngineMode.allCases)
+    func anImmediateTrackedInsetThenSameInsetReturnMirrorsTheNewFlight(mode: ScrollEngineMode) async throws {
+        let fixture = try await AccessoryFixture(mode: mode)
+        defer { fixture.close() }
+        fixture.apply(inset: 152, y: 280, transition: .none)
+        let layer = fixture.accessory.layer, trackedY = layer.position.y
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        fixture.list.applyChanges(newInsets: .init(top: 152), additionalScrollDistance: -70, transition: .easeInOut(1))
+        fixture.accessory.frame.origin.y = 210
+        fixture.list.applyViewportMotion(to: layer, keyPath: "position.y", displacement: Double(trackedY - layer.position.y))
+        CATransaction.commit()
+        let mirror = try #require(fixture.motion("position.y"))
+        let viewport = try #require(fixture.list.contentView.layer.animation(forKey: "ultraview.list.viewportOffset"))
+        #expect(mirror.duration == viewport.duration)
+        #expect(mirror.speed == viewport.speed)
+        try await fixture.sample(0)
+        #expect(abs(try #require(layer.presentation()).position.y - trackedY) <= 0.5)
+        try await fixture.sample(0.25)
+        let expected = Double(layer.position.y) + 70 * (1 - ListCurve.easeInOut.value(at: 0.25))
+        #expect(abs(Double(try #require(layer.presentation()).position.y) - expected) <= 0.5)
     }
 
     @Test(arguments: ScrollEngineMode.allCases)

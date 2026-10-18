@@ -45,8 +45,8 @@ public final class UltraListView: UltraScrollView {
     private let attachmentsHost = PassthroughView()
     private let carousel = PassthroughView()
     private let animations = AnimationController()
-    private var viewportMotionSnaps = true
-    private var viewportMotionTransition = ListTransition.immediate
+    private var viewportMotionGeneration: UInt64?
+    private var viewportMotionTransition: ListTransition?
     private var views: [String: ListRowView] = [:]
     private var carried: [String: (view: ListRowView, index: Int)] = [:]
     private var carryGenerations: [String: UInt64] = [:]
@@ -406,20 +406,23 @@ public final class UltraListView: UltraScrollView {
     }
 
     /// Adds the latest inset transition's flight to a scalar accessory property.
-    /// Capture its presented value before `applyChanges(newInsets:)`, set its final
-    /// model value with actions disabled, then pass presented minus final here.
+    /// Capture its presented value while the property animates, otherwise its model
+    /// value, before `applyChanges(newInsets:)`. Set the final model value with
+    /// actions disabled, then pass captured minus final here.
     /// Call synchronously after the inset pass, on a layer in the same window with
     /// an ordinary running clock. An empty list uses the latest inset transition.
-    /// Immediate/no-op insets and displacements within half a point remove the flight.
+    /// Immediate/no-op passes and displacements within half a point remove the flight.
     /// Passing zero also cleans up when the accessory leaves its window.
     public func applyViewportMotion(to layer: CALayer, keyPath: String, displacement: Double) {
         let key = "ultraview.list.viewportMotion.\(keyPath)"
-        guard !viewportMotionSnaps, abs(displacement) > 0.5,
+        guard let transition = viewportMotionTransition, abs(displacement) > 0.5,
               viewport.width > 0, viewport.height > 0 else {
             layer.removeAnimation(forKey: key); return
         }
         let animation: CAPropertyAnimation
-        if !settledWindow.rows.isEmpty, let template = contentView.layer.animation(forKey: "ultraview.list.viewportOffset") as? CAPropertyAnimation {
+        if !settledWindow.rows.isEmpty, let generation = viewportMotionGeneration,
+           animations.model.tracks[.init(.viewport, .viewportOffset)]?.generation == generation,
+           let template = contentView.layer.animation(forKey: "ultraview.list.viewportOffset") as? CAPropertyAnimation {
             animation = template.copy() as! CAPropertyAnimation
             animation.keyPath = keyPath
             if let keyframes = animation as? CAKeyframeAnimation {
@@ -437,7 +440,6 @@ public final class UltraListView: UltraScrollView {
             }
             if animation.beginTime != 0 { animation.beginTime = layer.convertTime(animation.beginTime, from: contentView.layer) }
         } else {
-            let transition = viewportMotionTransition
             let duration = transition.duration / transition.durationFactor
             let progress = transition.viewportCurve?.progress ?? (0...480).map { step in
                 step == 480 ? 1 : transition.curve.value(at: Double(step) / 480, duration: duration)
@@ -576,10 +578,12 @@ public final class UltraListView: UltraScrollView {
         let oldAttachmentState = attachmentSnapshot(offset: oldOffset, correction: oldCorrection)
         let oldViews = views
         let dirty = scheduler.consume()
+        let insetMotionChange = newInsets.map { max(abs($0.top - viewport.insets.top), abs($0.bottom - viewport.insets.bottom), abs($0.left - viewport.insets.left), abs($0.right - viewport.insets.right)) } ?? 0
         if let newSize { viewport.width = newSize.width; viewport.height = newSize.height }
         if let newInsets {
-            viewportMotionSnaps = transition.isImmediate || max(abs(newInsets.top - viewport.insets.top), abs(newInsets.bottom - viewport.insets.bottom), abs(newInsets.left - viewport.insets.left), abs(newInsets.right - viewport.insets.right)) <= 0.5
-            viewportMotionTransition = (requestedTransition.inheritsDefault ? transition : requestedTransition).scaled(by: animations.durationScale)
+            viewportMotionGeneration = nil
+            viewportMotionTransition = !transition.isImmediate && insetMotionChange > 0.5
+                ? (requestedTransition.inheritsDefault ? transition : requestedTransition).scaled(by: animations.durationScale) : nil
             viewport.insets = newInsets
         }
         let sizeChanged = oldViewport.width != viewport.width || oldViewport.height != viewport.height
@@ -832,6 +836,11 @@ public final class UltraListView: UltraScrollView {
             let carries = target != nil || correctionCarriesTarget && abs(oldCorrection) > 0.5
             let generation = animations.replace(.viewport, .viewportOffset, from: oldOffset + coordinateMap + oldCorrection - engine.offset, to: 0, at: time, transition: transition)
             targetCorrectionGeneration = carries ? generation : nil
+            if newInsets != nil, !transition.isImmediate, generation != nil,
+               max(insetMotionChange, abs(oldOffset + coordinateMap - engine.offset)) > 0.5 {
+                viewportMotionGeneration = generation
+                viewportMotionTransition = (requestedTransition.inheritsDefault ? transition : requestedTransition).scaled(by: animations.durationScale)
+            }
         }
         transitionDetachedHorizontalGeometry(at: time, transition: transition)
         resolveAttachments(transition: transition, oldItems: oldItems, oldState: oldAttachmentState, suppressFade: isCarousel && destinationNew)
@@ -1091,8 +1100,8 @@ public final class UltraListView: UltraScrollView {
     }
 
     private func updateViewportInsets(_ insets: ListInsets, compensates: Bool, transition: ListTransition) {
-        viewportMotionSnaps = transition.isImmediate || max(abs(insets.top - viewport.insets.top), abs(insets.bottom - viewport.insets.bottom), abs(insets.left - viewport.insets.left), abs(insets.right - viewport.insets.right)) <= 0.5
-        viewportMotionTransition = transition.scaled(by: animations.durationScale)
+        let insetMotionChange = max(abs(insets.top - viewport.insets.top), abs(insets.bottom - viewport.insets.bottom), abs(insets.left - viewport.insets.left), abs(insets.right - viewport.insets.right))
+        viewportMotionGeneration = nil; viewportMotionTransition = nil
         guard insets != viewport.insets else { return }
         let started = CACurrentMediaTime()
         defer { MainThreadMonitor.shared.note("list inset compensates=\(compensates) \((CACurrentMediaTime() - started) * 1000) ms") }
@@ -1135,6 +1144,10 @@ public final class UltraListView: UltraScrollView {
         if !keepsTravel {
             let generation = animations.replace(.viewport, .viewportOffset, from: transition.isImmediate ? 0 : oldOffset + correction - engine.offset, to: 0, at: time, transition: transition)
             targetCorrectionGeneration = carries ? generation : nil
+            if !transition.isImmediate, generation != nil, max(insetMotionChange, abs(shift)) > 0.5 {
+                viewportMotionGeneration = generation
+                viewportMotionTransition = transition.scaled(by: animations.durationScale)
+            }
         }
         CATransaction.commit()
     }

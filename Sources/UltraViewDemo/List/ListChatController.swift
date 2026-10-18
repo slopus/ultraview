@@ -296,8 +296,11 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
         }
         let modelFrame = composerBar.frame
         let presented = composerBar.layer.presentation()
-        let oldHeight = presented?.bounds.height ?? modelFrame.height
-        let oldCenter = presented?.position.y ?? modelFrame.midY
+        let geometry = composerBar.layer.animationKeys()?.compactMap { composerBar.layer.animation(forKey: $0) as? CAPropertyAnimation } ?? []
+        let movingHeight = geometry.contains { ["bounds", "bounds.size", "bounds.size.height"].contains($0.keyPath ?? "") }
+        let movingPosition = geometry.contains { ["position", "position.y"].contains($0.keyPath ?? "") }
+        let oldHeight = movingHeight ? presented?.bounds.height ?? modelFrame.height : modelFrame.height
+        let oldCenter = movingPosition ? presented?.position.y ?? modelFrame.midY : modelFrame.midY
         let oldFrame = CGRect(x: modelFrame.minX, y: oldCenter - oldHeight / 2, width: modelFrame.width, height: oldHeight)
         composerInset = inset
         let height = composerHeight?.constant ?? composerBar.bounds.height
