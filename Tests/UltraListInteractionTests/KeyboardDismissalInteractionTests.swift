@@ -123,10 +123,15 @@ final class KeyboardDismissalInteractionTests: XCTestCase {
     /// frames. Any visible identity then locates the same virtual row origin,
     /// even after the original witness has left the loaded window.
     @MainActor private func rowPosition(_ app: XCUIApplication) throws -> Double {
-        let viewport = app.otherElements["chatList"].frame
-        let rows = app.otherElements.matching(NSPredicate(format: "identifier BEGINSWITH %@", "row-message-")).allElementsBoundByIndex
+        // Live index queries can lose a row while the list coasts. Read every
+        // identity and frame from the same immutable accessibility snapshot.
+        let snapshot = try app.otherElements["chatList"].snapshot()
+        let viewport = snapshot.frame
+        var rows = snapshot.children
         var heights: [Int: Double] = [:], witnesses: [(Int, CGRect)] = []
-        for row in rows {
+        while let row = rows.popLast() {
+            rows.append(contentsOf: row.children)
+            guard row.elementType == .other, row.identifier.hasPrefix("row-message-") else { continue }
             guard let index = Int(row.identifier.dropFirst("row-message-".count)) else { continue }
             let frame = row.frame
             guard frame.height > 0 else { continue }

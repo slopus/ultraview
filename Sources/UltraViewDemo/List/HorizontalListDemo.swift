@@ -74,7 +74,18 @@ final class DemoCarouselView: ListRowView {
         // the cards to show come from the state.
         let list = horizontal.list
         if state.cards.isEmpty || readyDeadline > 0 && CACurrentMediaTime() >= readyDeadline { return true }
-        return !list.loadedIndexRange.isEmpty && list.loadedItemViews.allSatisfy(\.isDisplayReady)
+        let rows = list.settledWindow.rows, views = list.loadedItemViews
+        guard list.bounds.height > 0, let first = rows.first, let last = rows.last,
+              views.count == rows.count,
+              let firstFrame = list.settledFrame(at: first.index),
+              let lastFrame = list.settledFrame(at: last.index) else { return false }
+        // A ready first card can arrive before the next card's measurement.
+        // Both open edges must cover the viewport before the row reports ready.
+        let coversLeading = first.index == 0 || Double(firstFrame.minY) - first.reservedTop <= 0.5
+        let coversTrailing = last.index + 1 == list.items.count
+            || Double(lastFrame.maxY) + last.reservedBottom >= Double(list.bounds.height) - 0.5
+        if let anchor = state.anchor, !list.loadedIndexRange.contains(anchor.index) { return false }
+        return coversLeading && coversTrailing && views.allSatisfy(\.isDisplayReady)
     }
     override func update(width: Double, transition: ListTransition) -> Double {
         // The wait starts before the layout below, whose first pass of the

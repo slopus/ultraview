@@ -699,7 +699,8 @@ private actor MeasurementGate: NodeRowMeasuring {
         rows.insert(labelledRow("new", height: 112), at: 1)
         list.applyChanges(items: rows, transition: transition)
         for _ in 0..<200 where atInsert == nil { try await Task.sleep(for: .milliseconds(5)) }
-        #expect(try #require(atInsert))
+        try #require(atInsert != nil)
+        #expect(atInsert == true)
     }
     @Test(arguments: [ListTransition.immediate, .smoothDeceleration()]) func rowsAScrollBringsBackShowDrawnInThePassThatPlacesThem(transition: ListTransition) async throws {
         let list = list(count: 0)

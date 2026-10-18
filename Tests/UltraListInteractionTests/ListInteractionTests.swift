@@ -320,8 +320,11 @@ final class ListInteractionTests: XCTestCase {
         app.buttons["Send"].tap()
         XCTAssertTrue(app.buttons["Stream"].exists)
         let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35))
-        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7))
-        start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.1)
+        // Cross the committed bottom boundary before releasing the keyboard.
+        let frame = app.frame, accessoryHeight = composer.frame.height + 8
+        let end = app.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: frame.width * 0.5, dy: frame.height - accessoryHeight))
+        start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0)
         let hidden = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: app.keyboards.firstMatch)
         XCTAssertEqual(XCTWaiter.wait(for: [hidden], timeout: 5), .completed)
         let screenshot = XCTAttachment(screenshot: app.screenshot()); screenshot.lifetime = .keepAlways

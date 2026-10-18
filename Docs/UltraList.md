@@ -733,28 +733,56 @@ reports ready after its visible cards draw, with a 0.3-second fallback.
 
 The first integrated full unit run had one failure in 914 tests: the platform
 engine's carousel jump showed one drawn card after about 19 ms, before its next
-card was placed. Its readiness check accepts a nonempty partial band when every
-placed card is ready. The same test passed alone in all three engines. This
-known gap is accepted for the unfinished integration and remains follow-up work.
+card was placed. The readiness check accepted a nonempty partial band when every
+placed card was ready. The same test passed alone in all three engines.
+
+The follow-up requires the placed cards to cover the visible band, or reach
+the actual ends of a short list, and to include the restored anchor before
+reporting readiness. A controlled regression holds the later cards' measurements
+while the leading cards are already ready, placing the leading band before
+attempting a gated restored position, in both layout directions. The original
+bitmap jump assertion remains intact. Before the fix, all six engine/anchor
+cases fail only the assertions that the partial band must keep waiting. After
+the fix, all 932 simulator unit cases pass, including the original bitmap jump.
+Focused reruns pass 77 list-readiness, 21 carousel, 36 edge and five clock cases.
+All five keyboard interaction tests pass. The other 41 interaction tests finish
+with one failure: the accepted 2 ms p99 assertion for the platform carousel,
+which measured 2.270 ms. There are no functional failures, skips, compiler
+warnings or errors. Linux passes 322 tests in 54 suites; all 390 Lean checks pass.
+
+Keyboard inertia samples now read row identities and frames from one
+accessibility snapshot, avoiding live element indices that can disappear while
+the list coasts.
+The feed-mutation and streaming interaction also drags to the bottom release
+boundary before expecting the keyboard to hide; its mutations, Send action and
+hidden-keyboard assertion are unchanged.
 
 Drawing ahead still has a main-thread cost: the prepared hosts' commits can apply
-together. In a three-round alternating simulator comparison against `5b62b9b`,
-6 of 27 probes exceeded the 2 ms p99 bound, compared with 2 of 27 on the base.
-These are main-thread turn p99 medians in milliseconds:
+together. In a three-round alternating simulator comparison against the
+integrated keyboard base `f5124f8`, 6 of 27 probes reached or exceeded the 2 ms
+p99 bound, compared with 4 of 27 on the base. These are main-thread turn p99
+medians in milliseconds:
 
-| Probe | Base | Drawing ahead |
+| Probe | Base | Follow-up |
 | --- | ---: | ---: |
-| Delete, platform engine | 1.33 | 1.63 |
-| Delete, stepped | 1.59 | 1.41 |
-| Delete, keyframe | 1.51 | 1.90 |
-| Carousel, platform engine | 1.85 | 2.22 |
-| Carousel, stepped | 1.57 | 1.87 |
-| Carousel, keyframe | 1.54 | 1.77 |
+| Delete, platform engine | 1.90 | 1.75 |
+| Delete, stepped | 2.30 | 1.75 |
+| Delete, keyframe | 1.56 | 1.43 |
+| Carousel, platform engine | 1.90 | 1.03 |
+| Carousel, stepped | 1.87 | 2.10 |
+| Carousel, keyframe | 1.77 | 1.89 |
+| Reveal, platform engine | 1.66 | 1.73 |
+| Reveal, stepped | 1.55 | 1.55 |
+| Reveal, keyframe | 1.42 | 1.61 |
 
-This unfinished performance regression is accepted for integration. The queue's
-one-millisecond starting budget does not bound later commit application. Pacing
-draws to one row in flight remains follow-up work. The comparison against the
-integrated keyboard base is pending.
+The 2 ms bound is still unmet and is accepted for this unfinished integration.
+Measurements vary between rounds: the platform carousel ranges from 0.94 to
+3.34 ms in the follow-up. The full interaction run also records chat p99 of
+1.61 ms for the platform engine, 1.68 ms for stepped and 1.67 ms for keyframe;
+chat has no base comparison. All measured probes report zero layout, text or
+drawing work on main. The queue's one-millisecond starting budget does not
+bound later commit application. Pacing draws to one row in flight remains
+follow-up work.
 
 Two readiness gaps remain: cancelling a measurement leaves its drawing task to
 finish or reach its 0.5-second timeout, although the stale ticket prevents it

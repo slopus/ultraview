@@ -541,6 +541,17 @@ condition the premount section cites (:178-179) is at :194-195. Current SHA-256:
 `ListRow.swift`
 `50806041d14cec55b4c33d52fe18b6ae137f9665e5ba9f3941d07d125558a24f`.
 
+The carousel readiness follow-up after `dc33dfc` changes no host operation or
+theorem. `DemoCarouselView.isDisplayReady` additionally requires its placed
+bands to cover the visible axis, unless they reach the actual content ends,
+and requires a restored anchor to be in the window. A ready first card alone
+therefore cannot release an enclosing jump while more visible cards are still
+unmeasured. Its deadline remains a bounded fallback, outside these models.
+`CarouselReadinessTests` controls missing measurements synchronously before
+the deadline and retains the existing bitmap jump assertion. These are ordinary
+runtime regressions, not new proofs. `HorizontalListDemo.swift` SHA-256:
+`2ea08d1448aa28a06d0f64c84c6088af75d80ea60514582f85d79a8a7c4f4ed4`.
+
 ## Node transitions at `44f8a0c`
 
 Node rows can now animate their content (`NodeRow.animatesContent`). This
@@ -2304,7 +2315,7 @@ cycle. The traces retain the stale guide frame. This is runtime evidence
 for the tested simulator configuration, not a theorem about UIKit.
 
 Validation for the revised gesture and release behavior: 322 Linux tests in 54
-suites and all 390 Lean checks passed, with the two documented known issues.
+suites and all 390 Lean checks passed.
 UIKit validation of these pinned sources is pending. The previous controller
 checkpoint passed all 390 Lean theorems, and simulator validation passed 3 clock checks,
 10 hosted runtime methods and 19 demo tests. Five interaction methods
