@@ -181,6 +181,10 @@ public struct NodeTransitionSnapshot {
 final class NodeTransitionAnimator {
     static let ghostName = "ultraview.node.ghost"
     static let maskName = "ultraview.node.reveal"
+    /// A sublayer that shows a view's own bitmap while parts of it fade in.
+    static let revealedName = "ultraview.node.revealed"
+    /// On a view's layer: its sublayer named `revealedName`.
+    private static let revealedKey = "ultraviewRevealedLayer"
     static let keyPrefix = "ultraview.node."
     /// On an animation carried to a layer not yet shown: the value shown
     /// when it was carried.
@@ -203,6 +207,7 @@ final class NodeTransitionAnimator {
                 height: size.height
             )
             let contents = node.appliedContents
+            let drawn = contentsLayer(of: layer)
             var text: TextTransitionLines?
             if case .top? = contents?.placement {
                 text = node.appliedProps?.text?.lines
@@ -212,19 +217,19 @@ final class NodeTransitionAnimator {
                 parent: parent,
                 frame: frame,
                 opacity: CGFloat(shown.opacity),
-                contents: layer.contents == nil ? nil : contents?.id,
+                contents: drawn.contents == nil ? nil : contents?.id,
                 text: text
             ))
             var visual = NodeTransitionSnapshot.Visual()
-            visual.contents = layer.contents
-            visual.contentsScale = layer.contentsScale
-            visual.contentsGravity = layer.contentsGravity
-            visual.contentsCenter = layer.contentsCenter
+            visual.contents = drawn.contents
+            visual.contentsScale = drawn.contentsScale
+            visual.contentsGravity = drawn.contentsGravity
+            visual.contentsCenter = drawn.contentsCenter
             visual.backgroundColor = shown.backgroundColor
             visual.cornerRadius = shown.cornerRadius
             visual.transform = shown.transform
             visual.layer = layer
-            if let mask = layer.mask, mask.name == maskName {
+            if let mask = drawn.mask, mask.name == maskName {
                 for region in mask.sublayers ?? [] where region.animation(forKey: revealKey) != nil {
                     let opacity = presented ? (region.presentation()?.opacity ?? region.opacity) : region.opacity
                     visual.reveals.append(.init(rect: region.frame, fromOpacity: CGFloat(opacity)))
@@ -409,19 +414,21 @@ final class NodeTransitionAnimator {
                 layer.removeAnimation(forKey: key)
             }
             if layer.name == Self.ghostName { layer.removeFromSuperlayer() }
-            if layer.mask?.name == Self.maskName { layer.mask = nil }
+            Self.endReveal(on: layer)
         }
     }
 
-    /// The node views' layers under `root`, with their reveal masks' regions
-    /// and their ghosts.
+    /// The node views' layers under `root`, with the layers revealing their
+    /// bitmaps, those layers' masks' regions, and their ghosts.
     static func layers(under root: UltraNode) -> [CALayer] {
         var result: [CALayer] = []
         func visit(_ node: UltraNode) {
             guard let view = node.mountedView else { return }
             let layer = view.layer
             result.append(layer)
-            if let mask = layer.mask, mask.name == maskName { result.append(contentsOf: mask.sublayers ?? []) }
+            let drawn = contentsLayer(of: layer)
+            if drawn !== layer { result.append(drawn) }
+            if let mask = drawn.mask, mask.name == maskName { result.append(contentsOf: mask.sublayers ?? []) }
             for ghost in layer.sublayers ?? [] where ghost.name == ghostName { result.append(ghost) }
             for child in node.mountedChildren { visit(child) }
         }
@@ -465,9 +472,14 @@ final class NodeTransitionAnimator {
     }
 
     /// Shows the new text bitmap through a mask: stable regions at once,
-    /// new ones fading in.
+    /// new ones fading in. The bitmap moves onto a sublayer for this, and the
+    /// mask goes on that sublayer: on the view's layer it would mask the old
+    /// bitmap fading out over it too, so a rewritten line would show at
+    /// `p · (1 - p)` of the old bitmap plus `p` of the new instead of
+    /// `1 - p` plus `p`, nearly blank at the start.
     private func reveal(_ text: TextTransitionPlan, on layer: CALayer, move: LayoutTransitionPlan.Move, timing: NodeAnimationTiming) {
         guard !text.reveals.isEmpty else { return }
+        let drawn = Self.revealedLayer(of: layer)
         let limit = Self.limit(move)
         let mask = CALayer()
         mask.name = Self.maskName
@@ -477,9 +489,9 @@ final class NodeTransitionAnimator {
             mask.addSublayer(band)
         }
         // Every region shares the timing, so the first to finish ends them all.
-        let unmask: @MainActor () -> Void = { [weak layer, weak mask] in
-            guard let layer, let mask, layer.mask === mask else { return }
-            layer.mask = nil
+        let unmask: @MainActor () -> Void = { [weak layer, weak drawn, weak mask] in
+            guard let layer, let drawn, let mask, drawn.mask === mask else { return }
+            Self.endReveal(on: layer)
         }
         var first = true
         for region in text.reveals {
@@ -489,13 +501,73 @@ final class NodeTransitionAnimator {
             add(band, "opacity", from: from, to: Float(1), timing: timing, key: Self.revealKey, cleanup: first ? unmask : nil)
             first = false
         }
-        layer.mask = mask
+        drawn.mask = mask
+    }
+
+    /// The layer that shows `layer`'s own bitmap: `layer`, or the sublayer
+    /// revealing it.
+    static func contentsLayer(of layer: CALayer) -> CALayer {
+        layer.value(forKey: revealedKey) as? CALayer ?? layer
+    }
+
+    /// Moves `layer`'s bitmap onto a sublayer at the bottom, unless it is on
+    /// one already, which then takes `layer`'s size and running size
+    /// animations.
+    private static func revealedLayer(of layer: CALayer) -> CALayer {
+        if let drawn = layer.value(forKey: revealedKey) as? CALayer {
+            drawn.bounds = CGRect(origin: .zero, size: layer.bounds.size)
+            follow(layer, with: drawn)
+            return drawn
+        }
+        let drawn = CALayer()
+        drawn.name = revealedName
+        drawn.contents = layer.contents
+        drawn.contentsScale = layer.contentsScale
+        drawn.contentsGravity = layer.contentsGravity
+        drawn.contentsCenter = layer.contentsCenter
+        drawn.anchorPoint = .zero
+        drawn.position = .zero
+        drawn.bounds = CGRect(origin: .zero, size: layer.bounds.size)
+        follow(layer, with: drawn)
+        layer.contents = nil
+        layer.insertSublayer(drawn, at: 0)
+        layer.setValue(drawn, forKey: revealedKey)
+        return drawn
+    }
+
+    /// Puts `layer`'s bitmap back on it once nothing fades in.
+    static func endReveal(on layer: CALayer) {
+        guard let drawn = layer.value(forKey: revealedKey) as? CALayer else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.setValue(nil, forKey: revealedKey)
+        layer.contents = drawn.contents
+        layer.contentsScale = drawn.contentsScale
+        drawn.removeFromSuperlayer()
+        CATransaction.commit()
+    }
+
+    /// Gives a sublayer anchored at `layer`'s origin `layer`'s running size
+    /// animations, the same values on the same timing, so it keeps `layer`'s
+    /// size.
+    private static func follow(_ layer: CALayer, with sublayer: CALayer) {
+        for keyPath in ["bounds.size.width", "bounds.size.height"] {
+            let key = keyPrefix + keyPath
+            guard let running = layer.animation(forKey: key)?.copy() as? CAAnimation else {
+                sublayer.removeAnimation(forKey: key)
+                continue
+            }
+            running.delegate = nil
+            sublayer.add(running, forKey: key)
+        }
     }
 
     /// Puts the old bitmap over the new view's own bitmap and fades it out,
     /// following the view's size, shown only in `regions` (old view
-    /// coordinates) when given. It goes below the view's sublayers: a
-    /// view's bitmap draws under its children, and so does the old one.
+    /// coordinates) when given, and parts of it that were still fading in
+    /// only as far as they had. It goes right above the new bitmap and
+    /// below the view's other sublayers: a view's bitmap draws under its
+    /// children, and so does the old one.
     private func fadeOut(_ old: NodeTransitionSnapshot.Visual, over layer: CALayer, move: LayoutTransitionPlan.Move, regions: [CGRect]?, timing: NodeAnimationTiming) {
         guard let contents = old.contents else { return }
         let ghost = CALayer()
@@ -508,19 +580,33 @@ final class NodeTransitionAnimator {
         ghost.position = .zero
         ghost.bounds = CGRect(origin: .zero, size: layer.bounds.size)
         ghost.opacity = 0
-        if let regions {
+        let fading = old.reveals.filter { $0.fromOpacity < 0.999 }
+        if regions != nil || !fading.isEmpty {
             let mask = CALayer()
             mask.frame = CGRect(origin: .zero, size: move.from.size)
             let limit = Self.limit(move)
-            for region in regions {
+            let far = TextTransitionPlan.outset
+            let shown = regions ?? [CGRect(x: -far, y: -far, width: 2 * far, height: 2 * far)]
+            var whole = shown
+            for flight in fading {
+                whole = whole.flatMap { $0.subtracting(flight.rect) }
+            }
+            for region in whole {
                 guard let band = Self.band(region, within: limit) else { continue }
                 mask.addSublayer(band)
             }
+            // In-flight regions don't overlap, so neither do these bands.
+            for flight in fading {
+                for region in shown {
+                    guard let band = Self.band(region.intersection(flight.rect), within: limit) else { continue }
+                    band.opacity = Float(flight.fromOpacity)
+                    mask.addSublayer(band)
+                }
+            }
             ghost.mask = mask
         }
-        layer.insertSublayer(ghost, at: 0)
-        scalar(ghost, "bounds.size.width", from: move.from.width, to: ghost.bounds.width, carrier: nil, timing: timing)
-        scalar(ghost, "bounds.size.height", from: move.from.height, to: ghost.bounds.height, carrier: nil, timing: timing)
+        layer.insertSublayer(ghost, at: Self.ghostIndex(in: layer))
+        Self.follow(layer, with: ghost)
         add(ghost, "opacity", from: Float(1), to: Float(0), timing: timing, removesLayer: true)
     }
 
@@ -538,11 +624,17 @@ final class NodeTransitionAnimator {
         carried.bounds = CGRect(origin: .zero, size: layer.bounds.size)
         carried.mask = ghost.layer.mask.map(Self.replica(of:))
         carried.opacity = 0
-        layer.insertSublayer(carried, at: 0)
-        let shown = ghost.layer.presentation()?.bounds.size ?? ghost.layer.bounds.size
-        scalar(carried, "bounds.size.width", from: shown.width, to: carried.bounds.width, carrier: nil, timing: timing)
-        scalar(carried, "bounds.size.height", from: shown.height, to: carried.bounds.height, carrier: nil, timing: timing)
+        layer.insertSublayer(carried, at: Self.ghostIndex(in: layer))
+        Self.follow(layer, with: carried)
         add(carried, "opacity", from: ghost.opacity, to: Float(0), timing: timing, removesLayer: true)
+    }
+
+    /// Where a ghost goes among `layer`'s sublayers: right above the layer
+    /// revealing its bitmap, if any, or at the bottom.
+    private static func ghostIndex(in layer: CALayer) -> UInt32 {
+        let drawn = contentsLayer(of: layer)
+        guard drawn !== layer, let index = layer.sublayers?.firstIndex(where: { $0 === drawn }) else { return 0 }
+        return UInt32(index + 1)
     }
 
     private static func limit(_ move: LayoutTransitionPlan.Move) -> CGRect {
@@ -568,17 +660,18 @@ final class NodeTransitionAnimator {
         copy.anchorPoint = shown.anchorPoint
         copy.transform = shown.transform
         copy.opacity = shown.opacity
-        copy.contents = source.contents
-        copy.contentsScale = source.contentsScale
-        copy.contentsGravity = source.contentsGravity
-        copy.contentsCenter = source.contentsCenter
+        let drawn = contentsLayer(of: source)
+        copy.contents = drawn.contents
+        copy.contentsScale = drawn.contentsScale
+        copy.contentsGravity = drawn.contentsGravity
+        copy.contentsCenter = drawn.contentsCenter
         copy.backgroundColor = shown.backgroundColor
         copy.cornerRadius = shown.cornerRadius
         copy.maskedCorners = source.maskedCorners
         copy.borderWidth = shown.borderWidth
         copy.borderColor = shown.borderColor
         copy.masksToBounds = source.masksToBounds
-        for child in source.sublayers ?? [] where child.name != ghostName {
+        for child in source.sublayers ?? [] where child.name != ghostName && child !== drawn {
             copy.addSublayer(replica(of: child))
         }
         return copy

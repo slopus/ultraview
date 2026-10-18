@@ -1508,6 +1508,45 @@ the same invariants in stopped time at six points of a resize, in height and
 in width: card edges on the row's less the inset, title at the card's
 padding, radius 16 with no bitmap, one revision shown.
 
+## Text crossfade layering (the commit after `f6e590e`)
+
+`layered` above takes the old bitmap at `1 - p` over the new one, and the new
+one at `p` where it fades in. Through `3ffd162` the Swift didn't keep that:
+`reveal` put its mask on the text view's own layer, and `fadeOut` put the
+ghost in that layer's sublayers, so the mask covered the ghost too. A changed
+region showed the old bitmap at `(1 - p) * p` and the new at `p`, together
+`p * (2 - p)`: blank at the start, three quarters at mid-fade. A whole-line
+rewrite (no stable band) went blank for the transition's first frames.
+
+| Model (`Proofs/UltraProofs/List/Elastic.lean`) | Swift |
+| --- | --- |
+| `layered`, the new bitmap's part | `reveal` (NodeTransitionAnimator.swift:480-505) moves the view's bitmap onto a sublayer, `revealedLayer(of:)` (:516-536), anchored at the view's origin, with the view's size and its running size animations (`follow`, :553-563), and puts the mask on that sublayer. Commits applied meanwhile set their bitmap there (`contentsLayer(of:)`, :509-511; CommitApplier.swift:135-158), and when the reveal ends or is cancelled, `endReveal(on:)` (:539-548) puts the bitmap back on the view's layer |
+| `layered`, the old bitmap's part | `fadeOut` (:571-611) and `carryGhost` (:615-630) put the ghost directly above that sublayer (`ghostIndex(in:)`, :634-638), outside the mask, under the view's children, with the view's size animations copied the same way. Parts of the old bitmap that were still fading in get mask bands at the opacity they were shown at (:583-606), so the ghost starts where the old view was |
+
+The invariant, at every phase `p` of the transition's timing: where a line
+changed, the old bitmap is shown at opacity `1 - p` and the new one at `p`,
+so neither text is ever hidden; where it kept its start, the new bitmap
+shows at 1 with no ghost over it; appended glyphs show at `p` with nothing
+under them. A change that arrives halfway fades the older bitmaps out from
+the opacities they were shown at and the newest in from 0, so the
+opacities still add to 1. These are layer opacities, not ink: composited
+source-over, a pixel where both texts have opaque ink shows
+`1 - p * (1 - p)` of it, at least three quarters at mid-fade, and a pixel
+inked in one text only shows that text's opacity. `TextCrossfadeTests`
+checks the opacities in stopped time, reading each layer's presented
+opacity times its ancestors' and their masks' alpha: a whole-line rewrite,
+a kept first line with the next one rewritten, an append, a second change
+halfway through (three hosts, as a list shows revisions), and a bitmap
+applied while the text fades in. With the fix reversed, the changed point
+read old `(1 - p) * p` exactly (0.25 at `p = 0.5`) and the tests failed.
+
+Not modeled: a ghost's mask keeps the old size while the ghost follows the
+new one; its bands reach far past both, so only their `limit` (both sizes
+and 40 points around) bounds them. `replica(of:)`, which keeps a node that
+leaves while its text fades in, copies the bitmap but not the reveal mask,
+so such a leaving text shows whole as it fades out (as before this
+change).
+
 ## The keyboard's viewport profile at `926e692`
 
 `Proofs/UltraProofs/List/Profile.lean` maps `926e692`'s clamp, with line

@@ -132,20 +132,24 @@ extension UltraNode {
             ViewPropsApplier.apply(props, previous: entry.kind == .mount ? nil : appliedProps, to: view)
             appliedProps = props
         }
+        // While parts of a text fade in, its bitmap is on a sublayer.
         switch entry.contents {
         case .set(let contents)?:
-            view.layer.contents = contents.cgImage
-            view.layer.contentsScale = contents.scale
+            let drawn = NodeTransitionAnimator.contentsLayer(of: view.layer)
+            drawn.contents = contents.cgImage
+            drawn.contentsScale = contents.scale
             if appliedContents?.placement != contents.placement || entry.kind == .mount {
                 contents.placement.apply(to: view, size: contents.size)
+                drawn.contentsGravity = view.layer.contentsGravity
+                drawn.contentsCenter = view.layer.contentsCenter
             }
             appliedContents = contents
         case .clear?:
-            view.layer.contents = nil
+            NodeTransitionAnimator.contentsLayer(of: view.layer).contents = nil
             appliedContents = nil
         case nil:
             if entry.kind == .mount {
-                view.layer.contents = nil
+                NodeTransitionAnimator.contentsLayer(of: view.layer).contents = nil
                 appliedContents = nil
             }
         }
