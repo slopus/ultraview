@@ -9,9 +9,14 @@ import UltraCore
 private final class SwipeLog {
     var performed: [String] = []
     var rows: [SwipeRow] = []
+    /// How much a delete resizes the row before the deleted one in the same pass.
+    var resizesPrevious = 0.0
     weak var list: UltraListView?
     func delete(_ identity: String) {
         performed.append("delete:\(identity)")
+        if let index = rows.firstIndex(where: { $0.identity == identity }), index > 0, resizesPrevious != 0 {
+            rows[index - 1].height += resizesPrevious; rows[index - 1].revision += 1
+        }
         rows.removeAll { $0.identity == identity }
         list?.applyChanges(items: rows)
     }
@@ -217,7 +222,20 @@ private final class SwipeFixture {
 
     @Test(arguments: configurations)
     func fullSwipeDeleteKeepsNeighboursAgainstTheCollapsingRow(mode: ScrollEngineMode, inverted: Bool) async throws {
+        try await checkFullSwipeDelete(mode: mode, inverted: inverted, resizesPrevious: 0)
+    }
+
+    /// A chat delete can change the look, and so the height, of the message
+    /// before it in the same pass: both neighbours then move.
+    @Test(arguments: configurations)
+    func fullSwipeDeleteThatResizesTheRowBeforeKeepsTheSeams(mode: ScrollEngineMode, inverted: Bool) async throws {
+        try await checkFullSwipeDelete(mode: mode, inverted: inverted, resizesPrevious: 5)
+        try await checkFullSwipeDelete(mode: mode, inverted: inverted, resizesPrevious: -5)
+    }
+
+    private func checkFullSwipeDelete(mode: ScrollEngineMode, inverted: Bool, resizesPrevious: Double) async throws {
         let fixture = SwipeFixture(mode: mode, inverted: inverted)
+        fixture.log.resizesPrevious = resizesPrevious
         let controller = fixture.controller, list = fixture.list
         let ghost = try #require(fixture.view("r3"))
         let space = list.contentView.layer
@@ -251,11 +269,12 @@ private final class SwipeFixture {
             }
             frames += 1
         }
+        let label = "\(mode) inverted \(inverted) resizing \(resizesPrevious)"
         #expect(frames > 20)
         #expect(straddled > 15, "the collapsing row was seen between its neighbours")
-        #expect(maximumSeam <= 0.5, "\(mode) inverted \(inverted): \(worst)")
-        #expect(maximumDrift <= 0.5, "\(mode) inverted \(inverted)")
-        #expect(maximumDetach <= 0.5, "\(mode) inverted \(inverted)")
+        #expect(maximumSeam <= 0.5, "\(label): \(worst)")
+        #expect(maximumDrift <= 0.5, "\(label)")
+        #expect(maximumDetach <= 0.5, "\(label)")
         await fixture.frames(0.3) { _ in }
         #expect(ghost.superview == nil)
         #expect(controller.revealedIdentity == nil)

@@ -2007,6 +2007,34 @@ definition changes, and `Proofs/UltraProofs` is unchanged.
 - a row whose first-show appearance is still to play isn't premounted, and
   the appearance plays once the row is shown.
 
+## A swiped row's collapse edge (the commit after `f478507`)
+
+`ListSwipeController.collapse` (SwipeActions.swift:457, called from
+`reconcile` at :430) keeps the edge the deleted row's departing block is
+welded by (:468), read through `UltraListView.departureEdge(forRowIdentity:)`
+(UltraListView.swift:252-256), and falls back to its neighbours' motion only
+while the block has no witness. Before, a delete that also resized the row
+before it could weld the block by its bottom while the collapse kept the
+top, so the shrinking row rode its block over the row above. `reconcile`
+runs after `updateGhosts` in the same pass, so the edge is linked by then.
+The lookup reads the ledger without changing it, and the collapse touches
+neither the registry (`C`, `cstep`) nor the ledger (`Op`, `run`), so the
+swipe and departure theorems hold as before; which edge a block is welded
+by stays the list's unmodeled choice (see the departures section).
+
+The new lines move SwipeActions.swift (the same file at `4a99653` and
+`f478507`) from :454 on by 1 and from :467 on by 2, and UltraListView.swift
+lines from :252 on at `f478507` by 5. Every UltraListView.swift line the
+premount section above cites is past :252, so each is 5 lower (the far-jump
+hold's guard is now :547), and for the rows that cite `1fd22d3`, lines from
+231 on move by 5 more than that section lists. The rows that cite
+SwipeActions.swift at `a489e36` and UltraListView.swift at older commits
+stay as they are. SHA-256: `UltraListView.swift`
+`8b5905c1b966d590135347ac4dd12b3dd297059fb773538d8fe18a195c7aeeb7`,
+`SwipeActions.swift`
+`97d76657f55d74af7530e66612316bb78aac14d28293be8bd2eca59eec7127ff`.
+`Proofs/UltraProofs` is unchanged.
+
 ## Theorems
 
 **Correctness**

@@ -427,7 +427,7 @@ public final class ListSwipeController: NSObject, UIGestureRecognizerDelegate {
                 // Deleted: the departing view keeps its buttons and collapses with the row.
                 reveals.removeValue(forKey: identity); registry.remove(identity)
                 if tracking?.identity == identity { tracking = nil }
-                collapse(view)
+                collapse(view, identity: identity)
                 continue
             }
             guard let current = currentRow(identity), current.view === view else {
@@ -451,9 +451,10 @@ public final class ListSwipeController: NSObject, UIGestureRecognizerDelegate {
         updateCustomActions()
     }
     /// A revealed row that is deleted shrinks to nothing on its fade's timing,
-    /// keeping the edge whose neighbour stays still, so the rows sliding into
-    /// its place stay against it.
-    private func collapse(_ view: ListRowView) {
+    /// keeping the edge its departing block is welded by, so the rows sliding
+    /// into its place stay against it. Without a weld it keeps the edge whose
+    /// neighbour stays still.
+    private func collapse(_ view: ListRowView, identity: String) {
         guard let list, view.superview != nil, let fade = view.layer.animation(forKey: "ultraview.list.opacity") as? CABasicAnimation else { return }
         let space = list.contentView, ghost = view.convert(view.bounds, to: space)
         let neighbours = list.loadedIndexRange.compactMap { list.loadedItemView(at: $0) }.map { ($0, $0.convert($0.bounds, to: space)) }
@@ -463,7 +464,8 @@ public final class ListSwipeController: NSObject, UIGestureRecognizerDelegate {
         }
         let below = neighbours.filter { $0.1.minY >= ghost.minY - 0.5 }.min { $0.1.minY < $1.1.minY }
         let above = neighbours.filter { $0.1.maxY <= ghost.maxY + 0.5 }.max { $0.1.maxY < $1.1.maxY }
-        let keepsTop = moving(below) ?? !(moving(above) ?? false)
+        // Both neighbours move when the row before it resizes too, so motion alone can pick the wrong edge.
+        let keepsTop = list.departureEdge(forRowIdentity: identity).map { $0 == .top } ?? moving(below) ?? !(moving(above) ?? false)
         let size = view.bounds.size
         func copy(_ keyPath: String, from: Double, to: Double, additive: Bool) {
             guard let animation = fade.copy() as? CABasicAnimation else { return }

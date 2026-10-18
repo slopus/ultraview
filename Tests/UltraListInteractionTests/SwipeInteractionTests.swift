@@ -289,7 +289,7 @@ final class SwipeInteractionTests: XCTestCase {
             let top = composer.frame.minY - 12
             func visible() throws -> [(String, CGRect)] {
                 try ((probe(app)["rowFrames"] as? [String: [Double]]) ?? [:]).map { ($0.key, CGRect(x: $0.value[0], y: $0.value[1], width: $0.value[2], height: $0.value[3])) }
-                    .filter { $0.1.maxY < top && $0.1.minY > 0 && $0.1.height > 60 }.sorted { $0.1.minY > $1.1.minY }
+                    .filter { $0.1.maxY < top && $0.1.minY > 0 && $0.1.height > 30 }.sorted { $0.1.minY > $1.1.minY }
             }
             // Reply from the leading edge; the row is flipped in the list but not on screen.
             let first = try XCTUnwrap(try visible().first)

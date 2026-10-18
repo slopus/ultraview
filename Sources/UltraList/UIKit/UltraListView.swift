@@ -249,6 +249,11 @@ public final class UltraListView: UltraScrollView {
         return true
     }
     func index(forRowIdentity identity: String) -> Int? { identityIndices[identity] }
+    /// The edge a departing row's block rides its witness by, once it has one.
+    func departureEdge(forRowIdentity identity: String) -> BoundaryEdge? {
+        guard let block = ghostMembers[identity].flatMap({ ghostLedger.blocks[$0] }), block.witness != .unresolved else { return nil }
+        return block.edge
+    }
     public override func handleDragBegin() { holdsPinnedRow = false; scrollToTopGeneration &+= 1; super.handleDragBegin() }
     public func loadedItemView(at index: Int) -> ListRowView? {
         guard items.indices.contains(index) else { return nil }; return views[items[index].identity]
