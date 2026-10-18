@@ -1755,28 +1755,36 @@ Not covered:
   modeled. Callbacks from the list's pass inside the update queue their
   own requests through the same path.
 
-## Scroll to the top (the commit after `d9d9969`)
+## Scroll to the top at `65db16e`
 
-This commit changes `UltraListView.swift` after the pins at `c5743ae`
-(SHA-256 `fe10d6ba25eb58b5dbd5c40735150d9cf69c3a14dedf9f3d3399ac02985bd262`).
+`65db16e` changes `UltraListView.swift` after the pins at `c5743ae`; its
+SHA-256 at `65db16e` is
+`fe10d6ba25eb58b5dbd5c40735150d9cf69c3a14dedf9f3d3399ac02985bd262`.
 It adds `scrollToTop(animated:)`, an ordinary `applyChanges(scrollTo:)` with
 a target that resolves when it applies, and a `didScrollToTop` report that
-polls the list's state. Lines at `c5743ae` move by 5 from :154, by 48 from
-:258, by 50 from :558 and by 53 from :814. The rows below are at this
-commit; no mapped value changes.
+polls the list's state. Lines at `c5743ae` move by 5 from :154, by 46 at
+:258, by 48 from :260, by 50 from :558 and by 53 from :814 (:174, :226,
+:259, :261, :557, :813 and :1396 are the edited lines). The rows below are
+at `65db16e`; no mapped value changes.
 
 | Model | Change |
 | --- | --- |
 | `Ev.touch`, `Ev.dragBegin` | `didTouchDown` (:179) and `handleDragBegin` (:231) also bump `scrollToTopGeneration`, which only cancels a pending `didScrollToTop` report (:289-300) |
 | `Ev.finishViewport` | `finishViewportTransition()` (:308-312) does nothing while the running viewport track is the one recorded as carrying a target's travel (`correctionCarriesTarget`, :301-303); otherwise it is unchanged |
-| `Animation.swiftPass`, `Pass.screen` | the displacing pass records its viewport track's generation when the pass has a target, or when the track it replaces carried one with more than half a point left (:605-607); the replaced values are unchanged |
-| `Insets.cheapSwift`, `Ev.keyboard` | `updateViewportInsets` records its new track only when the old one carried a target with more than half a point left (:864-866); `shift` and the replace are unchanged |
+| `Animation.swiftPass`, `Pass.screen` | the displacing pass records its viewport track's generation when the pass has a target, or when the track it replaces carried one and the correction it shows is more than half a point (:605-607); the replaced values are unchanged |
+| `Insets.cheapSwift`, `Ev.keyboard` | `updateViewportInsets` records its new track only when the old one carried a target and the correction it shows is more than half a point (:864-866); `shift` and the replace are unchanged |
 | `perform`, `apply` (`Deferred`) | unchanged: `performAfterCurrentPass(_:)` (:258-262), and the chat's `applyComposerInsetNow` still reaches the finish (ListChatController.swift:234) |
 
 The record is a track generation (`targetCorrectionGeneration`, :158), so it
 lapses when that track finishes or any writer replaces it, and a writer
-that doesn't record leaves finishing as it was. `promoteCarousel` records
-its own viewport track (:1449). The report reads `pendingTarget` and
+that doesn't record leaves finishing as it was. A stale record never
+matches a later track: `ListAnimationModel.generation` only increases
+(ListAnimation.swift:189, incremented at :209, :221 and :240), and the list never calls
+`AnimationController.reset()` (AnimationController.swift:305-310), the one
+place that starts a new model. `promoteCarousel` records its own viewport
+track whenever it animates (:1449). The half-point test reads the whole
+correction shown, the target's remaining travel together with whatever
+else the track carries. The report reads `pendingTarget` and
 `pendingScroll` (`Readiness`' `S.pending`, `S.retry`) and writes neither.
 
 The no-op leaves the engine as `Ev.finishViewport` does, so
@@ -1790,6 +1798,16 @@ lands; the guard is not modeled. `ScrollToTopTests` and
 `ChatScrollToTopTests` check it in UIKit: no jump at the finish, the scroll
 lands on the top edge, and a correction that starts after the travel still
 finishes at once. `Proofs/UltraProofs` is unchanged.
+
+Not covered: the guard is on `finishViewportTransition()` only. An
+immediate inset change during the travel still replaces the correction with
+none (`updateViewportInsets`, :865, `from: 0` when immediate), so the
+target's remaining travel lands at once, as every running correction did
+before. The chat applies immediate insets from tracking layouts
+(ListChatController.swift:222, :351) and from a layout after typing, which
+sets `keyboardTransition` to `.none` (:463, applied at :195), so a line
+break typed during the travel would land it. This review doesn't establish
+how often that happens.
 
 ## Theorems
 
