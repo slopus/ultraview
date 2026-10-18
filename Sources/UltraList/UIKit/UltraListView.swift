@@ -248,6 +248,13 @@ public final class UltraListView: UltraScrollView {
     public func scrollTo(_ target: ListScrollTarget, transition: ListTransition = .uiKitScroll()) {
         applyChanges(scrollTo: target, transition: transition)
     }
+    /// Runs immediately outside a list pass, or queues the whole update after it.
+    /// Use this when an accessory must share the viewport animation's transaction.
+    public func performAfterCurrentPass(_ update: @escaping @MainActor () -> Void) {
+        if passing {
+            deferred.append { [weak self] in self?.performAfterCurrentPass(update) }
+        } else { update() }
+    }
     /// Lands only the viewport correction at its model value, keeping any engine
     /// flight running. Does nothing when no viewport correction is animating.
     public func finishViewportTransition() {

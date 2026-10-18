@@ -223,6 +223,11 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
         }
     }
     private func applyComposerInset(_ inset: Double, transition: ListTransition, compensatesInsetChange: Bool? = nil, finishesAnimation: Bool = false) {
+        list.performAfterCurrentPass { [weak self] in
+            self?.applyComposerInsetNow(inset, transition: transition, compensatesInsetChange: compensatesInsetChange, finishesAnimation: finishesAnimation)
+        }
+    }
+    private func applyComposerInsetNow(_ inset: Double, transition: ListTransition, compensatesInsetChange: Bool?, finishesAnimation: Bool) {
         guard abs(inset - composerInset) > 0.5 else {
             if finishesAnimation {
                 CATransaction.begin(); CATransaction.setDisableActions(true)
@@ -286,8 +291,16 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
         }
         let animation = template.copy() as! CAPropertyAnimation
         animation.keyPath = path
-        if let keyframes = animation as? CAKeyframeAnimation, let curve = transition.viewportCurve {
-            keyframes.values = curve.progress.map { displacement * (1 - $0) }
+        if let keyframes = animation as? CAKeyframeAnimation {
+            if let curve = transition.viewportCurve {
+                keyframes.values = curve.progress.map { displacement * (1 - $0) }
+            } else if let values = keyframes.values as? [Double], let first = values.first, let last = values.last, abs(first - last) > 1e-6 {
+                keyframes.values = values.map { displacement * ($0 - last) / (first - last) }
+            } else {
+                keyframes.values = (0...480).map { step in
+                    displacement * (1 - transition.curve.value(at: Double(step) / 480, duration: transition.duration))
+                }
+            }
         } else if let basic = animation as? CABasicAnimation {
             basic.fromValue = displacement; basic.toValue = 0
         }

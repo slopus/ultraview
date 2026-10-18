@@ -97,6 +97,13 @@ stale retries. Cache completions outside the loaded frontier avoid a full pass.
 transition in one transaction. Reentrant calls retain all their arguments and
 run later in FIFO order. Dirty callbacks coalesce independently.
 
+`performAfterCurrentPass(_:)` runs an update immediately when the list is idle,
+or queues the whole closure after the running pass. Use it to update an
+accessory and the list in one transaction. Updating the accessory first and
+then calling a deferred `applyChanges` can copy the previous pass's viewport
+animation. The chat queues its complete inset update this way and scales any
+copied keyframes to the accessory's own displacement.
+
 A collection update first prepares nearby asynchronous rows while retaining its
 transition and anchor. The displayed collection stays coherent until that pass
 can apply; a newer complete collection supersedes a pending one. The list-level
