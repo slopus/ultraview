@@ -74,12 +74,30 @@ doesn't. The text's measurement includes it, off the main thread.
 
 Simulator tests (`NodeTransitionTests`) pause a host's time and read the
 presentation tree at points along one timing: a box with fixed margins in a
-growing row keeps them, and the text inside keeps its padding. In the Chat
-demo with bubbles on a development branch, a keyboard-up run (Stream, then
-Send at 0.5 s and 1.5 s) found no clipped bubble frame in any engine, where
-the card rows (`animatesContent` off) clip a growing card's bottom by up to
-16 pt for about 350 ms on every growth. That demo, its probe and its timings
-land separately.
+growing row keeps them, and the text inside keeps its padding.
+
+The Chat demo shows its conversation as bubbles (`ChatBubbles.swift`); chaos
+runs and `-chatCards YES` keep the card rows. A reply scales its bubble out
+of the tail corner and grows word by word, its time sliding along the last
+line; a sent bubble grows out of the text field; an edit resizes the bubble
+with its corners and crossfades the text. `-chatBubbleProbe YES` samples
+every display frame of sends, streams, edits and sends during a stream with
+the keyboard up, in each engine, light and dark and at the largest text
+size. It checks that each bubble keeps its padding to its row, the time its
+inset to the bubble's corner and the text its offset, that no frame is blank
+or clipped, and that a sent bubble's first frame is at the field, allowing
+the distance its own motion covers in the frames it had run. A send merged
+with a stream's update rides that update's spring, which leaves the field at
+speed, and a main thread busy with the send can miss the first frame; both
+stay within that allowance. In the simulator every check held in all three
+engines, the main thread did no layout, text layout or drawing, and Debug
+main-thread turns stayed under 8 ms at the 99th percentile. The card rows
+(`animatesContent` off) clip a growing card's bottom by up to 16 pt for about
+350 ms on every growth. `ChatBubbleScreenTests` record the screen without the
+probe and check the same motions in pixels: bubbles hug their text, a sent
+bubble rises from the field without a blank screen, a streamed reply's time
+keeps its place on the bubble's edge, and an edited bubble keeps its corner
+radius while its text crossfades.
 
 The preload window defaults to 160 points beyond the viewport. The list requests
 up to 80 nearby asynchronous measurements, with the predicted direction first.

@@ -29,12 +29,16 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
     private var pendingKeyboardResolution: KeyboardInsetGesture.Resolution?
     private var keyboardResolutionGeneration: UInt64 = 0
     private var isTrackingKeyboard: Bool { keyboardGesture.isTracking || (list.isTracking && !keyboardDragHasEnded) }
-    private var rows: [DemoListRow] = []
     private var swipeProbe: ListSwipeProbe?
+    private var rows: [any ListRow] = []
+    /// The conversation as bubbles. Chaos runs keep the card rows they mutate.
+    private var thread: ChatThread?
+    /// The sent draft as it looked, until its bubble takes its place.
+    private var draftSnapshot: UIView?
     private var nextID = 100
     private var streaming: Task<Void, Never>?
     private let monitor = ListFrameMonitor(name: "chat")
-    var chaosRows: [DemoListRow] { get { rows } set { rows = newValue } }
+    var chaosRows: [DemoListRow] { get { rows.compactMap { $0 as? DemoListRow } } set { rows = newValue } }
     private var composerInset = 0.0
     private var hostProbe: Bool { UserDefaults.standard.bool(forKey: "listHostProbe") }
     init(mode: ScrollEngineMode) { list = UltraListView(engineMode: mode); super.init(nibName: nil, bundle: nil) }
@@ -44,14 +48,30 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
         list.contentView.transform = .init(scaleX: 1, y: -1)
         list.keyboardDismissMode = .interactive
         list.accessibilityIdentifier = "chatList"
-        rows = (0..<60).map { index -> DemoListRow in
-            let title = index % 2 == 0 ? "You" : "Assistant"
-            let body = index == 0 ? "Tap Stream to watch this reply grow while the conversation stays in place." : "Message \(60 - index). The list keeps only the nearby conversation loaded."
-            let height: Double = 92 + Double(index % 3) * 24
-            let tint: UIColor = index % 2 == 0 ? .systemIndigo : .systemTeal
-            var row = DemoListRow(identity: "message-\(index)", title: title, body: body, height: height, tint: tint, inverted: true)
-            if hostProbe { row.extraAttachments = headers(group: index / 5, sender: title) }
-            return withSwipeActions(row)
+        // Chaos runs mutate card rows; `-chatCards YES` shows them too.
+        if UserDefaults.standard.string(forKey: "listChaos") == nil, !UserDefaults.standard.bool(forKey: "chatCards") {
+            let thread = ChatThread(seeded: 60)
+            if hostProbe {
+                thread.attachments = { [weak self] message, _ in
+                    // Seeded messages keep their groups as new ones arrive.
+                    let group = Int(message.id.dropFirst("message-".count)).map { $0 / 5 } ?? -1
+                    return self?.headers(group: group, sender: message.outgoing ? "You" : "Assistant") ?? [:]
+                }
+            }
+            thread.onTap = { [weak self] id in self?.edit(id) }
+            thread.swipeActions = { [weak self] id in self?.swipeActions(for: id) ?? (leading: [], trailing: []) }
+            self.thread = thread
+            rows = thread.rows
+        } else {
+            rows = (0..<60).map { index -> DemoListRow in
+                let title = index % 2 == 0 ? "You" : "Assistant"
+                let body = index == 0 ? "Tap Stream to watch this reply grow while the conversation stays in place." : "Message \(60 - index). The list keeps only the nearby conversation loaded."
+                let height: Double = 92 + Double(index % 3) * 24
+                let tint: UIColor = index % 2 == 0 ? .systemIndigo : .systemTeal
+                var row = DemoListRow(identity: "message-\(index)", title: title, body: body, height: height, tint: tint, inverted: true)
+                if hostProbe { row.extraAttachments = headers(group: index / 5, sender: title) }
+                return withSwipeActions(row)
+            }
         }
         composer.accessibilityIdentifier = "composer"; composer.accessibilityLabel = "Message"
         composer.delegate = self; composer.font = .preferredFont(forTextStyle: .body)
@@ -146,6 +166,7 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
         ListComposerTimingProbe.startIfRequested(chat: self)
         ListComposerMotionProbe.startIfRequested(chat: self)
         ListComposerKeystrokeProbe.startIfRequested(chat: self)
+        ChatBubbleProbe.startIfRequested(chat: self)
         if UserDefaults.standard.bool(forKey: "listProbe") {
             Task { [weak self] in
                 let delay = UserDefaults.standard.double(forKey: "listProbeDelay")
@@ -458,6 +479,8 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
         keyboardTransition?.viewportCurve = nil
     }
     func textViewDidChange(_ textView: UITextView) {
+        // A new draft replaces the sent one's picture at once.
+        draftSnapshot?.removeFromSuperview(); draftSnapshot = nil
         waitsForSentCollection = false; pendingComposerHeight = nil
         if !isTrackingKeyboard { followsComposer = true }
         keyboardTransition = ListTransition.none
@@ -536,59 +559,148 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
     /// Reply from the leading edge; Delete, also by a full swipe, from the trailing edge.
     private func withSwipeActions(_ row: DemoListRow) -> DemoListRow {
         var row = row
-        let identity = row.identity
-        row.leadingSwipeActions = [ListSwipeAction(title: "Reply", image: UIImage(systemName: "arrowshape.turn.up.left"), color: .systemBlue) { [weak self] in self?.reply(to: identity) }]
-        row.trailingSwipeActions = [ListSwipeAction(title: "Delete", image: UIImage(systemName: "trash"), isDestructive: true) { [weak self] in self?.deleteMessage(identity) }]
+        (row.leadingSwipeActions, row.trailingSwipeActions) = swipeActions(for: row.identity)
         return row
     }
+    private func swipeActions(for identity: String) -> (leading: [ListSwipeAction], trailing: [ListSwipeAction]) {
+        ([ListSwipeAction(title: "Reply", image: UIImage(systemName: "arrowshape.turn.up.left"), color: .systemBlue) { [weak self] in self?.reply(to: identity) }],
+         [ListSwipeAction(title: "Delete", image: UIImage(systemName: "trash"), isDestructive: true) { [weak self] in self?.deleteMessage(identity) }])
+    }
     private func reply(to identity: String) {
-        guard let row = rows.first(where: { $0.identity == identity }) else { return }
+        let sender: String
+        if let thread { guard let index = thread.index(of: identity) else { return }; sender = thread.messages[index].outgoing ? "You" : "Assistant" }
+        else { guard let row = chaosRows.first(where: { $0.identity == identity }) else { return }; sender = row.title }
         swipeProbe?.record("reply:\(identity)")
-        composer.text = "Reply to \(row.title): "; updateComposerHeight(animated: true)
+        composer.text = "Reply to \(sender): "; updateComposerHeight(animated: true)
     }
     private func deleteMessage(_ identity: String) {
         guard let index = rows.firstIndex(where: { $0.identity == identity }) else { return }
         swipeProbe?.willRemove(identity, action: "delete")
-        rows.remove(at: index)
+        if let thread { thread.remove(identity); rows = thread.rows } else { rows.remove(at: index) }
         list.applyChanges(items: rows)
     }
     @objc private func sendMessage() {
         followsComposer = true
         nextID += 1
         let body = monitor.measureAction("send-read-composer") { let text = composer.text ?? ""; return text.isEmpty ? "A new message" : text }
-        if let pinned = rows.firstIndex(where: \.pinsToBottomEdge) { rows[pinned].pinsToBottomEdge = false }
-        var row = DemoListRow(identity: "sent-\(nextID)", title: "You", body: body, height: 100, tint: .systemIndigo, inverted: true)
-        if hostProbe { row.extraAttachments = headers(group: -1, sender: "You") }
-        rows.insert(withSwipeActions(row), at: 0)
+        let transition: ListTransition
+        if let thread {
+            thread.pinnedID = nil
+            // The bubble grows out of the draft where it is now; until the
+            // bubble shows, a snapshot keeps the draft in the field.
+            let source = draftFrames()
+            showDraftSnapshot()
+            let message = ChatMessage(id: "sent-\(nextID)", text: body, outgoing: true, time: ChatThread.now())
+            thread.insert(message, appearance: .growing(from: { [weak self] in
+                self?.draftDidLeave()
+                return source
+            }))
+            rows = thread.rows
+            transition = thread.config.send
+        } else {
+            var cards = chaosRows
+            if let pinned = cards.firstIndex(where: \.pinsToBottomEdge) { cards[pinned].pinsToBottomEdge = false }
+            var row = DemoListRow(identity: "sent-\(nextID)", title: "You", body: body, height: 100, tint: .systemIndigo, inverted: true)
+            if hostProbe { row.extraAttachments = headers(group: -1, sender: "You") }
+            cards.insert(withSwipeActions(row), at: 0)
+            rows = cards
+            transition = .easeInOut(0.3)
+        }
         // Keep the old bar height until the asynchronously prepared collection
         // applies, then start its shrink alongside the list's viewport track.
         waitsForSentCollection = true
         monitor.measureAction("send-clear-composer") { composer.text = ""; updateComposerHeight() }
         let singleLine = max(44, ceil((composer.font?.lineHeight ?? 21) + composer.textContainerInset.top + composer.textContainerInset.bottom))
         let inset = max(keyboardHeight, view.safeAreaInsets.bottom) + singleLine + 8
-        monitor.measureAction("send-apply-list") { list.applyChanges(items: rows, newInsets: .init(top: inset), scrollTo: .init(index: 0), animatesInsertions: false, transition: .easeInOut(0.3)) }
+        monitor.measureAction("send-apply-list") { list.applyChanges(items: rows, newInsets: .init(top: inset), scrollTo: .init(index: 0), animatesInsertions: false, transition: transition) }
     }
     @objc private func beginStreaming() {
         followsComposer = true
         streaming?.cancel()
         nextID += 1
         let id = "stream-\(nextID)"
-        var row = DemoListRow(identity: id, title: "Assistant · streaming", body: "A reply", height: hostProbe ? 420 : 84, tint: .systemTeal, inverted: true, pinsToBottomEdge: hostProbe)
-        if hostProbe { row.extraAttachments = headers(group: -1, sender: "Assistant") }
-        rows.insert(withSwipeActions(row), at: 0)
+        let transition: ListTransition, interval: Duration
+        if let thread {
+            if hostProbe { thread.pinnedID = id }
+            let appearance = NodeAppearance(key: "bubble", scale: thread.config.appearScale, anchor: CGPoint(x: 0, y: 1))
+            thread.insert(ChatMessage(id: id, text: ChatStreamScript.opening, outgoing: false, time: ChatThread.now()), appearance: .appearing([appearance]))
+            rows = thread.rows
+            transition = thread.config.incoming; interval = thread.config.streamInterval
+        } else {
+            var cards = chaosRows
+            var row = DemoListRow(identity: id, title: "Assistant · streaming", body: "A reply", height: hostProbe ? 420 : 84, tint: .systemTeal, inverted: true, pinsToBottomEdge: hostProbe)
+            if hostProbe { row.extraAttachments = headers(group: -1, sender: "Assistant") }
+            cards.insert(withSwipeActions(row), at: 0)
+            rows = cards
+            transition = .easeInOut(0.3); interval = .milliseconds(100)
+        }
         let visibleHeight = max(0, list.bounds.height - composerInset)
         let target = hostProbe ? ListScrollTarget(index: 0, resolve: { height, _ in visibleHeight + max(0, height - visibleHeight / 2) - height }) : ListScrollTarget(index: 0)
-        list.applyChanges(items: rows, scrollTo: target, transition: .easeInOut(0.3))
+        list.applyChanges(items: rows, scrollTo: target, transition: transition)
         streaming = Task { [weak self] in
-            for token in 1...40 {
-                try? await Task.sleep(for: .milliseconds(100))
-                guard !Task.isCancelled, let self, let index = rows.firstIndex(where: { $0.identity == id }) else { return }
-                rows[index].revision += 1
-                rows[index].body += " \(token % 5 == 0 ? "rendered smoothly." : "another word")"
-                if token % 4 == 0 { rows[index].height += 20 }
-                list.applyChanges(items: rows, anchorMode: .preserveVisibleContent, transition: .easeInOut(0.2))
+            for token in 1...ChatStreamScript.tokenCount {
+                try? await Task.sleep(for: interval)
+                guard !Task.isCancelled, let self, rows.contains(where: { $0.identity == id }) else { return }
+                if let thread {
+                    let started = CACurrentMediaTime()
+                    defer { MainThreadMonitor.shared.note("chat token \((CACurrentMediaTime() - started) * 1000) ms") }
+                    thread.update(id) { $0.text += ChatStreamScript.token(token) }
+                    rows = thread.rows
+                    list.applyChanges(items: rows, anchorMode: .preserveVisibleContent, transition: thread.config.growth)
+                } else {
+                    var cards = chaosRows
+                    guard let index = cards.firstIndex(where: { $0.identity == id }) else { return }
+                    cards[index].revision += 1
+                    cards[index].body += " \(token % 5 == 0 ? "rendered smoothly." : "another word")"
+                    if token % 4 == 0 { cards[index].height += 20 }
+                    rows = cards
+                    list.applyChanges(items: rows, anchorMode: .preserveVisibleContent, transition: .easeInOut(0.2))
+                }
             }
         }
+    }
+    /// A tapped bubble swaps in its edited text.
+    func edit(_ id: String) {
+        guard let thread else { return }
+        thread.toggleEdit(id)
+        rows = thread.rows
+        list.applyChanges(items: rows, transition: thread.config.growth)
+    }
+    /// The draft's field and its first line, in window coordinates.
+    private func draftFrames() -> [(key: String, frame: CGRect)] {
+        let inset = composer.textContainerInset, padding = composer.textContainer.lineFragmentPadding
+        let start = composer.caretRect(for: composer.beginningOfDocument)
+        let width = composer.bounds.width - inset.left - inset.right - 2 * padding
+        let height = max(start.height, composer.contentSize.height - inset.top - inset.bottom)
+        let text = CGRect(x: start.minX, y: start.minY, width: max(1, width), height: height)
+        return [("bubble", composer.convert(composer.bounds, to: nil)), ("text", composer.convert(text, to: nil))]
+    }
+    private func showDraftSnapshot() {
+        draftSnapshot?.removeFromSuperview()
+        guard let snapshot = composer.snapshotView(afterScreenUpdates: false) else { return }
+        snapshot.frame = composer.convert(composer.bounds, to: view)
+        snapshot.isUserInteractionEnabled = false
+        view.addSubview(snapshot)
+        draftSnapshot = snapshot
+        // A bubble that never shows doesn't leave the draft behind.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak snapshot] in snapshot?.removeFromSuperview() }
+    }
+    /// The sent bubble shows over the field: the field steps aside and
+    /// returns as the bubble leaves it.
+    private func draftDidLeave() {
+        draftSnapshot?.removeFromSuperview(); draftSnapshot = nil
+        // A new draft already in the field stays as it is.
+        let duration = (thread?.config.send.duration ?? 0.3) * list.animationDurationScale
+        guard duration > 0, composer.text.isEmpty else { return }
+        let reveal = CAMediaTimingFunction(name: .easeIn)
+        func fade(_ layer: CALayer, _ keyPath: String, from: Any) {
+            let animation = CABasicAnimation(keyPath: keyPath)
+            animation.fromValue = from; animation.duration = duration; animation.timingFunction = reveal
+            layer.add(animation, forKey: "chat.send.\(keyPath)")
+        }
+        fade(composer.layer, "backgroundColor", from: UIColor.clear.cgColor)
+        fade(composer.layer, "borderColor", from: UIColor.clear.cgColor)
+        fade(placeholder.layer, "opacity", from: 0)
     }
 }
 

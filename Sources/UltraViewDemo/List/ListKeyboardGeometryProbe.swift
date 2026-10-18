@@ -76,9 +76,21 @@ final class ListKeyboardGeometryProbe: NSObject {
         if insetDurations.count > 512 { insetDurations.removeFirst() }
     }
     func recordKeyboardTransition(_ transition: ListTransition) { keyboardTransition = transition }
+    /// Settled heights of rows seen loaded, for rows that don't declare one
+    /// (the chat's bubbles are measured).
+    private var seenHeights: [String: Double] = [:]
+    private func rememberHeights() {
+        guard let list else { return }
+        for index in list.loadedIndexRange {
+            if let height = list.settledFrame(at: index)?.height { seenHeights[list.items[index].identity] = Double(height) }
+        }
+    }
     private func position() -> Double {
+        rememberHeights()
         guard let list, let first = list.loadedIndexRange.first, let frame = list.settledFrame(at: first) else { return 0 }
-        let prefix = list.items.prefix(first).reduce(0.0) { total, item in total + ((item as? DemoListRow)?.height ?? 0) }
+        let prefix = list.items.prefix(first).reduce(0.0) { total, item in
+            total + ((item as? any ListProbeDeclaredHeight)?.declaredHeight ?? seenHeights[item.identity] ?? 0)
+        }
         return prefix - frame.minY
     }
     private func input(_ event: GestureRecording.Event) {
@@ -166,6 +178,7 @@ final class ListKeyboardGeometryProbe: NSObject {
         guard let owner, let composer, let list, owner.window != nil else { return }
         let started = CACurrentMediaTime()
         defer { MainThreadMonitor.shared.note("keyboard probe sample \((CACurrentMediaTime() - started) * 1000) ms") }
+        rememberHeights()
         let keyboardY = (marker.layer.presentation() ?? marker.layer).frame.minY
         let destination = owner.layer.presentation() ?? owner.layer
         let composerLayer = composer.layer.presentation() ?? composer.layer

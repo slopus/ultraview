@@ -1876,6 +1876,22 @@ UltraListView.swift:208) still replaces the correction with none, so a
 rotation or appearance change during the travel lands it, along with
 everything else that pass relays out.
 
+## The bubble chat (the commit after `1fd22d3`)
+
+The chat shows bubbles (`ChatBubbles.swift`) unless a chaos run or
+`-chatCards YES` asks for card rows. No mapped behaviour changes: every
+keyboard, inset, drag and momentum function is untouched, and the
+`Ev.explicit` writes of `followsComposer` stay in `textViewDidChange` and
+at the top of `sendMessage`, which still inserts the sent row with the pass
+alone (one `applyChanges`, no inserted-block animation). The edits add lines,
+so the rows above that cite `ListChatController.swift` at `c5743ae`,
+`65db16e` and `c06d876` move: lines 1-31 stay, 33-46 move by 4, 55-148 by
+20, 149-460 by 21 (the keyboard functions), 461-538 by 23 (`textViewDidChange`
+at :485), and `sendMessage`'s `followsComposer` write is at :583.
+`ListChatController.swift` here has SHA-256
+`4e374d5116195a0ce7767fb0f508012f4834ec89f262818fcf7cb30fc9892998`.
+`Proofs/UltraProofs` is unchanged.
+
 ## Theorems
 
 **Correctness**
