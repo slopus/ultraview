@@ -754,9 +754,9 @@ window (the anchor staying put, the pinned boundary) is the choice's, which
 the Swift's intent. UIKit playback (that installed clocks are the model's)
 and generation callbacks are hypotheses, checked by the tests above.
 
-### Mount continuation review based on `cde2528` and the follow-up below
+### Mount continuation at `cde2528`, `ec6b5ae`, `0abfaac` and `3ffd162`
 
-The follow-up adds `PositionSource.continuation` to the same additive sum.
+`cde2528` adds `PositionSource.continuation` to the same additive sum.
 The `ListAnimationModel.value`, `positionLayerValue`, generation replacement
 and `AnimationTrack.residual` rows above were rechecked: their algorithms are
 unchanged. `superpose` still describes the sum of independent clocks, and
@@ -771,10 +771,15 @@ necessary height is unknown. Its exact-value Linux tests cover both directions,
 repeated index differences across move boundaries, reserves, placement, and
 unknown or distant bands. This helper has no Lean refinement proof.
 
-The follow-up source pins are `UltraListView.swift` SHA-256
+Source pins at `3ffd162` (SHA-256): `UltraListView.swift`
 `7496a1ca5c38bf8a4fc18270c119b5924be5d2805e84ccc69349ead02fb5e4d7` and
-`AnimationController.swift` SHA-256
-`79a898b507478a4a989f8b502382c5f6c9ea1f453f371f82381db536e96880b7`.
+`AnimationController.swift`
+`79a898b507478a4a989f8b502382c5f6c9ea1f453f371f82381db536e96880b7`, with
+the UIKit suites that check what Lean doesn't,
+`AnimationClockBoundaryTests.swift`
+`8237737afeb4cbade1f5a6d978bcf43e1cc3a7c8356bdc5b261e98bc41bf22ea` and
+`OffscreenMotionTests.swift`
+`9c795b8117b27b082c6e5de804f5ca44abdad8570dbda14a7efcae1fd7f1da69`.
 `UltraListView.mountMotion` saves the latest `SizePositionGeometry` and keeps
 the source heights presented when the structural pass began. Both band orders
 use those frozen heights, including a source crossing their interval in a move.
@@ -792,7 +797,7 @@ uses a fresh transition. This is position continuity, not a velocity guarantee.
 Capturing the origin before detaching its layer is part of the UIKit contract.
 These installation, fallback and bounded-history choices remain outside Lean.
 
-The clock-boundary follow-up checks the installed animation's generation before
+The clock-boundary follow-up (`0abfaac`) checks the installed animation's generation before
 reading its native origin. After incoming rows finish installing their clocks,
 the structural witness prefers an installed continuation, then a participant's
 own position clock, before the pass-time fallback. If a carry has only follower
@@ -804,7 +809,7 @@ the reconstruction when there is no continuation, height, layout or carry.
 The additive-sum and height-coefficient model rows above remain unchanged;
 neither these UIKit guards nor their execution cost have a Lean refinement.
 
-The origin follow-up checks a delayed native commit when deleting the last
+The origin follow-up (`3ffd162`) checks a delayed native commit when deleting the last
 loaded row: incoming rows can replace their own track with a continuation, so
 the witness is selected after that replacement. Fresh joins undo the existing
 duration and playback scaling before `replace` applies it once. UIKit tests
@@ -813,6 +818,18 @@ scale and linear or damped-spring positions at scale 2. The row-by-row restart
 policy remains: a later structural pass can place one row's continuation on a
 new clock while an unaffected neighbour retains its old clock, delaying gap
 closure across multiple mutation boundaries. This policy is outside Lean.
+
+Where the models touch this code, lines at `3ffd162`:
+
+| Model | Swift at `3ffd162` |
+| --- | --- |
+| `superpose`: one more term in the sum | `PositionSource.continuation` (ListAnimation.swift:168, keyed `ultraview.list.continuation` at :182), installed with the followers by `setPositionLayers` (AnimationController.swift:204-218; UltraListView.swift:628-630, :932, :951-955) |
+| a copied track on the same clock (`progress_timing`) | `inheritPosition` (AnimationController.swift:160-172): the reference's own track's `from`, `to`, start and transition, installed with the reference's origin |
+| the continuation term's clock | the record's clock (UltraListView.swift:682), with its origin read from the witness's installed animation only when the generation matches (`resolveMountContinuation` :891-898, `clockOrigin` AnimationController.swift:151-159, `animationOrigin` :359-366); the witness is chosen after incoming rows install (UltraListView.swift:700-714) |
+| `ListContent.joinStart` with target 0; `join_exact`, `join_remap` | `joinPosition`'s own-track branch (AnimationController.swift:173-195): `remaining` is `1 - p` on the own clock, and `from = residual / remaining` on the same start and transition is `joinStart residual 0 p`, so the joined track shows the carried view's presented displacement at the join and reaches 0 at the old deadline. The fresh-transition branches (:196-202) are outside the models |
+
+No theorem statement or hypothesis changed with these four commits; none of
+them touches `Proofs/UltraProofs`.
 
 ## Pending scroll targets and readiness holds
 
@@ -1005,28 +1022,30 @@ row's edge at every frame. A `Track` is one scalar of a frame (a
 with one progress); an edge in row coordinates is a sum of such scalars on
 one timing, which is again a track on it. (First mapped at `44f8a0c`; the
 per-axis retiming and the moved content are `163e3f0`'s, the late join is
-`4f3d0fa`'s, and line numbers are as of `4f3d0fa`.)
+`4f3d0fa`'s, and line numbers are as of `3ffd162`, where the mapped code
+is unchanged apart from `237be64`'s early return for appearances, covered
+in the viewport profile's section.)
 
-| Model (`Proofs/UltraProofs/List/Content.lean`) | Swift at `4f3d0fa` |
+| Model (`Proofs/UltraProofs/List/Content.lean`) | Swift at `3ffd162` |
 | --- | --- |
 | a `Track`'s `start`, `transition` | a `CABasicAnimation`'s begin time, duration, speed and curve or spring, held by `NodeAnimationTiming` (NodeTransitionAnimator.swift:11) and copied by `animation(_:from:to:)` (:104) |
 | `Shared` | `NodeAnimationTiming.isTiming(of:)` (NodeTransitionAnimator.swift:81): same begin (within 1e-6), duration, speed, offset, and curve or spring |
-| a new timing at `t0` | `NodeRowLayer.add` (NodeRowTransition.swift:21-31) reporting the list's height or width animation to `NodeRowMotion.rowDidAnimate` (:142-156), which takes its timing only when `beginTime == 0` (added in this transaction, so it begins at the commit) |
-| `retime`, `retimes` | `NodeTransitionAnimator.retime(root:_:axis:)` (NodeTransitionAnimator.swift:348-367), called through `retimeTransitions` from `rowDidAnimate` (NodeRowTransition.swift:148-155): every transition animation under the root not on the timing restarts toward its `toValue`; with an axis, x or y key paths of the other axis are skipped (:353) |
+| a new timing at `t0` | `NodeRowLayer.add` (NodeRowTransition.swift:21-31) reporting the list's height or width animation to `NodeRowMotion.rowDidAnimate` (:148-162), which takes its timing only when `beginTime == 0` (added in this transaction, so it begins at the commit) |
+| `retime`, `retimes` | `NodeTransitionAnimator.retime(root:_:axis:)` (NodeTransitionAnimator.swift:348-367), called through `retimeTransitions` from `rowDidAnimate` (NodeRowTransition.swift:154-161): every transition animation under the root not on the timing restarts toward its `toValue`; with an axis, x or y key paths of the other axis are skipped (:353) |
 | `retime`'s `tr.value C t0` | the start value: the presentation layer's value (:357-358); `retime_unstarted`: an animation with `beginTime == 0` has not started and restarts from `fromValue` (:355-356) |
 | `retime_same` | the `!timing.isTiming(of: running)` skip (:352) |
-| the row's track restarted from its presented value | `ListAnimationModel.transition`/`retime` (ListAnimation.swift:222, :234) with the height resumed from the row's presentation captured at the pass's start (`capturePositions`, AnimationController.swift:44-57, `resumeValue` :204-205) |
+| the row's track restarted from its presented value | `ListAnimationModel.transition` (ListAnimation.swift:247; the controller has not called `retime` since `460d78f`) with the height resumed from the row's presentation captured at the pass's start (`capturePositions`, AnimationController.swift:44-57, `resumeValue` :269-270) |
 | a track that continues unchanged | `value(...)`'s carrier copy (NodeTransitionAnimator.swift:441-456): a new tree's layer takes the old layer's running animation when it ends at the same value |
-| `Axis`, `onAxis` | `TransitionAxis(keyPath:)` (LayoutTransition.swift:236-248): `position.x`, `bounds.size.width`, `bounds.origin.x` horizontal, the `y` and height paths vertical, anything else none; `rowDidAnimate` takes the axis from the row animation's key path (NodeRowTransition.swift:152), and `retime` skips key paths of the other axis (NodeTransitionAnimator.swift:353), so each axis's key paths see only its own row animation's retimings |
+| `Axis`, `onAxis` | `TransitionAxis(keyPath:)` (LayoutTransition.swift:236-248): `position.x`, `bounds.size.width`, `bounds.origin.x` horizontal, the `y` and height paths vertical, anything else none; `rowDidAnimate` takes the axis from the row animation's key path (NodeRowTransition.swift:158), and `retime` skips key paths of the other axis (NodeTransitionAnimator.swift:353), so each axis's key paths see only its own row animation's retimings |
 | `axes_keep` | the two filters together: x and y insets each through `retimes_keep` on their own row animation |
 | `shift` | `TransitionShift.start(from:to:target:)` (LayoutTransition.swift:254-259), `from + (target - to)`, applied by `NodeTransitionAnimator.shift(root:from:)` (NodeTransitionAnimator.swift:373-396): a copy of the old view's running animation (same begin, duration, speed and curve) on the matching new view, from that start to the new model value |
-| content replaced with no timing | `NodeRowMotion.show`'s `else` branch (NodeRowTransition.swift:116-122): `replacementTiming()` is `nil` (an immediate pass, or one whose time is up), so `NodeHostView.continueTransitions(from:)` (NodeHostView.swift:317-322) calls `shift` |
-| the row's moved track | `ListAnimationModel.transition`'s immediate branch (ListAnimation.swift:212-219): `from + new - to`, same start and transition, which is `shift` of the row's height |
+| content replaced with no timing | `NodeRowMotion.show`'s `else` branch (NodeRowTransition.swift:122-128): `replacementTiming()` is `nil` (an immediate pass, or one whose time is up), so `NodeHostView.continueTransitions(from:)` (NodeHostView.swift:317-322) calls `shift` |
+| the row's moved track | `ListAnimationModel.transition`'s immediate branch (ListAnimation.swift:236-244): `from + new - to`, same start and transition, which is `shift` of the row's height |
 | `joinStart` | `TransitionJoin.start(shown:to:progress:)` (LayoutTransition.swift:264-271), applied to every numeric `from`/`to` pair a joined timing builds (`animation(_:from:to:)`, NodeTransitionAnimator.swift:109-111; `joinProgress` :14-16, set by `joined(at:)` :51-56, which clamps it to `[0, 0.999]`) |
-| the join's `p` (`valueProgress_eq`) | `NodeRowMotion.progress(of:on:)` (NodeRowTransition.swift:187-192): `(shown - from) / (to - from)` of the row's running height animation on its own key path, read from the presentation; `nil` when the row moves less than half a point or has no presentation |
-| `join_remap`, `join_within` with `Curves.Bounded` and forward progress | `replacementTiming`'s join (NodeRowTransition.swift:169-175): the row's own timing joined at `p` when `staysWithinItsEnds` (NodeTransitionAnimator.swift:59-79) and `p < 0.98` |
+| the join's `p` (`valueProgress_eq`) | `NodeRowMotion.progress(of:on:)` (NodeRowTransition.swift:193-198): `(shown - from) / (to - from)` of the row's running height animation on its own key path, read from the presentation; `nil` when the row moves less than half a point or has no presentation |
+| `join_remap`, `join_within` with `Curves.Bounded` and forward progress | `replacementTiming`'s join (NodeRowTransition.swift:175-181): the row's own timing joined at `p` when `staysWithinItsEnds` (NodeTransitionAnimator.swift:59-79) and `p < 0.98` |
 | `bezier_mono`, `bezier_bounded`, `solved_mono` | `staysWithinItsEnds` for a basic animation: control points 1 and 2 with `y` in `[0, 1]` (no timing function is linear) |
-| `catchup_ends` | otherwise (:176): a 0.15 s ease-out of its own, from the content as shown (`s`) to its layout (`T`) |
+| `catchup_ends` | otherwise (:182): a 0.15 s ease-out of its own, from the content as shown (`s`) to its layout (`T`) |
 
 - `edge_lerp`, `edge_constant`: on one timing, a child edge minus the row
   edge is `(1 - p) * d0 + p * d1`; equal end differences make it constant.
@@ -1057,7 +1076,7 @@ animation was copied (`shownKey`, :359-360), else `fromValue`; the model
 assumes that is the value at `t0`. Not covered:
 
 - content that arrives after its pass (`replacementTiming`,
-  NodeRowTransition.swift:160-184) joins the running height animation at its
+  NodeRowTransition.swift:166-190) joins the running height animation at its
   phase. Before `4f3d0fa` it started from the old tree's snapshot:
   `edge_lerp` holds (one progress), but
   its start inset is the snapshot's, not the row's at the animation's begin,
@@ -1329,48 +1348,52 @@ drag in the waiting state replaces the gesture (`begin_fresh`), which drops
 the waiting return as well; the new snapshot starts from the displaced
 inset.
 
-**The follow-up at `44e5d85`, lines as of `843e14a`.** The rows below replace
+**The follow-up at `44e5d85`, lines as of `3ffd162`.** The rows below replace
 the `f683c2f` table's for the files it changed.
 
-| Model (`Proofs/UltraProofs/List/Return.lean`) | Swift at `843e14a` |
+| Model (`Proofs/UltraProofs/List/Return.lean`) | Swift at `3ffd162` |
 | --- | --- |
 | `G` | `KeyboardInsetGesture.Gesture` (KeyboardInsetGesture.swift:8-14); `released` is `awaitsOutcome` (:17) |
 | `Ev.begin` | `begin` (:20-25) |
 | `Ev.resume` | `resumeTracking(inset:)` (:26-32): only while `awaitsOutcome`; keeps the snapshot, sets the latest inset, clears the target |
-| `Ev.track`, `matchesTarget` | `track` (:33-38), from `keyboardDragChanged` (ListChatController.swift:319-324), reached from `keyboardTrackingLayout` (:208-224) only while `keyboardInputIsTracking` (:201-207: the native pan began or changed with a touch on it, else the list tracking and dragging) |
-| `Ev.release` | `end` (KeyboardInsetGesture.swift:39-43) from `keyboardDragEnded` (ListChatController.swift:325-330) |
-| `Ev.outcome` | `keyboardOutcome` (KeyboardInsetGesture.swift:44-49) with the finger down: a notification with a duration (ListChatController.swift:394-395), or an animated or input-inactive layout with a conclusive guide (:211-216) |
-| `Ev.layout` | after the release: the `awaitsOutcome` branch of `viewDidLayoutSubviews` (:192-193) into `keyboardGuideChanged` (:331-337), and a notification with the finger up |
-| `dragBegin` | `keyboardDragBegan` (:303-318): the waiting slot applied first (:304-307), a waiting gesture resolved at the drag's height when conclusive (:308-310), then `resumeTracking(inset: composerInset)`, else `begin` (:314-317) |
-| `resolve`'s shift | `resolveKeyboardGesture` (:359-380): `.returned` applies the start inset with `compensatesInsetChange: true` on `easeInOut(duration * remaining / full height)` (:364-373) |
-| `Slot`, `SEv.defer`, `SEv.flush` | `finishKeyboardGesture` (:338-351): with no timing, `pendingKeyboardResolution` and a main-queue turn applying it on `.keyboard(0.25)`; a notification with a duration takes it (:396-399), a drag's begin applies it (:304-307); layouts apply no inset while it waits (:194, :221) |
+| `Ev.track`, `matchesTarget` | `track` (:33-38), from `keyboardDragChanged` (ListChatController.swift:334-339), reached from `keyboardTrackingLayout` (:208-224) only while `keyboardInputIsTracking` (:201-207: the native pan began or changed with a touch on it, else the list tracking and dragging) |
+| `Ev.release` | `end` (KeyboardInsetGesture.swift:39-43) from `keyboardDragEnded` (ListChatController.swift:340-345) |
+| `Ev.outcome` | `keyboardOutcome` (KeyboardInsetGesture.swift:44-49) with the finger down: a notification with a duration (ListChatController.swift:409-410), or an animated or input-inactive layout with a conclusive guide (:211-216) |
+| `Ev.layout` | after the release: the `awaitsOutcome` branch of `viewDidLayoutSubviews` (:192-193) into `keyboardGuideChanged` (:346-352), and a notification with the finger up |
+| `dragBegin` | `keyboardDragBegan` (:318-333): the waiting slot applied first (:319-322), a waiting gesture resolved at the drag's height when conclusive (:323-325), then `resumeTracking(inset: composerInset)`, else `begin` (:329-332) |
+| `resolve`'s shift | `resolveKeyboardGesture` (:374-395): `.returned` applies the start inset with `compensatesInsetChange: true` on `easeInOut(duration * remaining / full height)` (:379-388) |
+| `Slot`, `SEv.defer`, `SEv.flush` | `finishKeyboardGesture` (:353-366): with no timing, `pendingKeyboardResolution` and a main-queue turn applying it on `.keyboard(0.25)`; a notification with a duration takes it (:411-414), a drag's begin applies it (:319-322); layouts apply no inset while it waits (:194, :221) |
 
 - `touch_loses` was the gap at `f683c2f`. At `44e5d85` a resolution while a
   touch is down applies: `keyboardFrameChanged` applies it before returning
-  (:401-404), and `keyboardTrackingLayout` passes it to
+  (:431-434), and `keyboardTrackingLayout` passes it to
   `finishKeyboardGesture` (:213-216); while the gesture waits no layout
   applies the bar's inset (:221). The run is plain `step`, so `resolution`,
   `at_most_once` and `resume_resolution` describe it.
 - Momentum: the model's `tracking` is a drag in progress. A return applied
-  under a touch that has not become a drag compensates (forced, :373); the
+  under a touch that has not become a drag compensates (forced, :388); the
   engine's `shift` moves the axis' offset, anchor and proposed offset
   together (ScrollMath.swift:84), so a drag that then begins starts where
   the content is. Resolutions never apply during a drag: the gesture is
   tracking then, and `keyboardOutcome` only records a target.
-- Finishing: `finishViewportTransition()` (UltraListView.swift:225-229) is
+- Finishing: `finishViewportTransition()` (UltraListView.swift:253-257) is
   `Ev.finishViewport` (`finish_keeps_engine`). `applyComposerInset`'s
   `finishesAnimation` (ListChatController.swift:225-231) removes the bar's
   animations and finishes the viewport track in one transaction, as an
   immediate inset change does (`list.applyChanges(..., .none)` with
-  `removeComposerAnimations`, :248-258): `finish_together`. It runs for a
-  notification whose begin and end frames are already off screen (:287-298)
-  and on `didHide` (:300-302).
+  `removeComposerAnimations`, :248-259): `finish_together`. It runs for a
+  notification whose begin and end frames are already off screen (:300-313)
+  and on `didHide` (:315-317).
 - Lockstep: `applyComposerInset` copies the viewport animation onto the
-  bar's position and height (:249-256, `animateComposerProperty`
-  :274-285), the same begin, duration, speed and curve, so
-  `ListPass.lockstep_iff` applies; the bar's start includes the residual of
-  its running animation (`composerAnimationResidual`, :266-273), read from
-  the same curve.
+  bar's position and height (:249-255, `animateComposerProperty`
+  :282-299), the same begin, duration and speed. A basic animation keeps
+  its curve and goes from the bar's displacement to 0; a keyframe one (the
+  keyboard's profile, below) takes the viewport's progress samples as
+  `displacement · (1 - p)` (:289-290). Either way the bar and the viewport
+  are on one progress, so `ListPass.lockstep_iff` applies; the bar's start
+  includes the residual of its running animation
+  (`composerAnimationResidual`, :267-281), read from the same curve or by
+  the same linear interpolation of its values (:274-277).
 
 What the follow-up's models say: `Ev.resume` keeps the first drag's start
 inset, starting height and resting height, records the current inset as
@@ -1386,25 +1409,25 @@ from `composerInset`, which nothing changes while the gesture waits
 `slot_once`: every resolution waiting a turn for its timing is applied
 exactly once, in order; `begin_flushes`: none waits past the next drag.
 
-Momentum rows at `843e14a` (the section at `b896af1` maps the earlier
+Momentum rows at `3ffd162` (the section at `b896af1` maps the earlier
 controller; `f683c2f`'s rows are superseded): `Ev.dragBegin` is
 `willBeginDragging` (ListChatController.swift:111-116), `Ev.drag` the
 `onUserScrollDelta` guard (:117-120), the layout check (:184) and a tracked
-sample's (:322), `Ev.release` `didEndDragging` (:121-125), `Ev.keyboard`
-`keyboardFrameChanged` (:381-413, a growing overlap with the finger up at
-:386) and `applyComposerInset`'s `compensatesInsetChange` (:247: the
+sample's (:337), `Ev.release` `didEndDragging` (:121-125), `Ev.keyboard`
+`keyboardFrameChanged` (:396-446, a growing overlap with the finger up at
+:402) and `applyComposerInset`'s `compensatesInsetChange` (:247: the
 caller's, else `!isTrackingKeyboard && followsComposer`), and `Ev.explicit`
-the hide button (:137), `textViewDidChange` (:416), `sendMessage` (:510)
-and a resolved return (:367, applied with compensation forced on, :373). A
-resolved dismissal (:377) turns compensation off and applies uncompensated
-(:378), as the release does. `isTrackingKeyboard` (:31) is the gesture's
+the hide button (:137), `textViewDidChange` (:449), `sendMessage` (:543)
+and a resolved return (:382, applied with compensation forced on, :388). A
+resolved dismissal (:392) turns compensation off and applies uncompensated
+(:393), as the release does. `isTrackingKeyboard` (:31) is the gesture's
 own tracking or the list's touch before `didEndDragging`. While a drag runs
 every inset goes in uncompensated, so `tracking_never_writes` holds; a
 return applied under a touch that has not become a drag is the one
 compensated write with the finger down (above).
 
-**Finishing the viewport track at `44e5d85`** (lines as of `843e14a`).
-`UltraListView.finishViewportTransition()` (UltraListView.swift:225-229)
+**Finishing the viewport track at `44e5d85`** (lines as of `3ffd162`).
+`UltraListView.finishViewportTransition()` (UltraListView.swift:253-257)
 replaces a running viewport track with one from 0 to 0 at once, re-renders
 attachments and reports visibility, and makes no engine call; with no
 track it does nothing. It is `Ev.finishViewport`: `finish_keeps_engine`
@@ -1413,16 +1436,16 @@ track it does nothing. It is `Ev.finishViewport`: `finish_keeps_engine`
 calls it from `applyComposerInset`'s `finishesAnimation` (ListChatController.swift:225-231)
 in the same transaction that removes the bar's animations, for a
 notification whose begin and end frames are already off screen
-(:287-298) and on `didHide` (:300-302): `ListPass.finish_together`
+(:300-313) and on `didHide` (:315-317): `ListPass.finish_together`
 (landing both in one turn keeps their distance). `finish_alone`: landing
 one leaves the gap off by `Δ (1 - q)`, the 90 points the bar's clock left
 before, with the same-inset guard.
 
 A running hide interrupted by that zero-duration notification lands at
-once. `keyboardFrameChanged` with `finishesHide` (ListChatController.swift:381-383)
+once. `keyboardFrameChanged` with `finishesHide` (ListChatController.swift:396-399)
 takes duration 0 and calls `applyComposerInset` with `.none`: if the
 inset changes, the list's immediate inset change removes the viewport track
-and `removeComposerAnimations` the bar's (:248, :255-256); if it doesn't,
+and `removeComposerAnimations` the bar's (:248, :256-257); if it doesn't,
 `finishesAnimation` removes both (:226-230). Either way, in one
 transaction: `interrupt_lands` (bar and content on their settled values,
 so the bar is at the final inset) and `interrupt_keeps_gap` (the bar's
@@ -1485,15 +1508,26 @@ the same invariants in stopped time at six points of a resize, in height and
 in width: card edges on the row's less the inset, title at the card's
 padding, radius 16 with no bitmap, one revision shown.
 
-## The keyboard's viewport profile (for the chat's next change)
+## The keyboard's viewport profile at `926e692`
 
-`Proofs/UltraProofs/List/Profile.lean` covers agfv's coming change, as
-reviewed in its prototype on `44e5d85`: the composer's inset follows
-the keyboard's overlap clamped to the resting edge, `max(resting, height)`
-(`KeyboardViewportMotion.height(at:)`), and the viewport correction follows
-the same clamped height through a sampled progress profile
-(`ViewportCurve`, `viewportCurve(physicalProgress:)`), which the bar's
-animation copies. It is not yet mapped to Swift.
+`Proofs/UltraProofs/List/Profile.lean` maps `926e692`'s clamp, with line
+numbers as of `3ffd162`. The keyboard travels farther than the chat's
+occlusion (the tab bar sits below the chat), so the composer's inset follows
+the keyboard's overlap clamped at the resting edge, `max(resting, height)`,
+and the viewport correction follows that clamped height through a sampled
+progress profile, which the bar's animation copies.
+
+| Model (`Proofs/UltraProofs/List/Profile.lean`) | Swift at `3ffd162` |
+| --- | --- |
+| `height r b e φ`, `max r (b + (e - b) φ)` | `KeyboardViewportMotion.height(at:)` (KeyboardViewportMotion.swift:10-12): `r` is the safe-area bottom, `b` and `e` the keyboard's signed overlaps with the chat from the notification's begin and end frames (ListChatController.swift:308-313, :417-418), `φ` the keyboard's physical progress |
+| `prog r b e φ` | `viewportCurve(physicalProgress:)` (KeyboardViewportMotion.swift:14-20): `(height(φ) - height(0)) / (height(1) - height(0))` per sample. It returns `nil` (no profile, the ordinary curve) when the clamped travel is at most half a point, which gives the theorems' `height r b e 1 - height r b e 0 ≠ 0`, or when the samples don't start at 0 and end at 1 |
+| the samples `φ_k` | `keyboardFrameChanged` (ListChatController.swift:415-427): 481 values of `ListCurve.keyboardSpring` at `k / 480`, the last set to 1; only for a curve-7 notification with a duration, the finger up, and no gesture outcome pending |
+| `interp f0 f1 t` between samples | `ViewportCurve.value(at:)` (ListAnimation.swift:81-85): the phase scaled to `count - 1` even segments, linear between neighbouring samples. The compiled `CAKeyframeAnimation` (AnimationController.swift:376-382) has values `from + (to - from) p_k`, `.linear` calculation, no key times (so they are even) and no timing function, the same function on the same clock. The bar's residual reads its own values the same way (ListChatController.swift:274-277) |
+| `Curves.start`; `Track.progress` 1 from the deadline | `ViewportCurve`'s precondition (ListAnimation.swift:78): first sample 0, last 1, all finite |
+| the profile's hull as a `Curves.Bounded` curve's bounds | `progressBounds` (:86), which `AnimationTrack.valueBounds` uses for the coverage read (:143-148) |
+| the viewport's offset only | `replace` gives a track the profile only for `(.viewport, .viewportOffset)` (:224-225), and `applyChanges` clears it unless the call changes nothing but the insets (UltraListView.swift:264-267). The immediate branch of `transition` (ListAnimation.swift:241-242), `residual` (:159-162) and `scaled(by:)` (:113-115) keep a track's profile |
+| the bar on the viewport's progress | `animateComposerProperty` (ListChatController.swift:282-299) copies the keyframe animation (same begin, duration and speed) and sets its values to `displacement · (1 - p_k)` (:289-290) |
+| one notification's profile | `keyboardTransition?.viewportCurve = nil` (:445): later layouts and gestures use the ordinary keyboard clock. A layout inside the notification's animation block (`viewDidLayoutSubviews`, :195) applies the same inset with the same transition, so the profile is applied once either way |
 
 - `profile_exact`: at every sample the viewport and the bar are on the
   clamped keyboard edge. `profile_unit`, `profile_mono`: with the
@@ -1502,38 +1536,59 @@ animation copies. It is not yet mapped to Swift.
   and its samples' hull (`ViewportCurve.progressBounds`) is the coverage
   read's range.
 - `kink_bound`, `kink_bound_down`: between samples the interpolated clamp is
-  never below the clamp of the keyboard's interpolated edge and above it by
-  at most a quarter of that segment's travel, only in the segment where the
-  keyboard crosses the resting edge. With 480 samples over a 335-point
-  keyboard that is well under a point.
+  never below the clamp of the keyboard's interpolated edge, in either
+  direction, and is above it by at most a quarter of that segment's
+  travel, only in the segment where the keyboard crosses the resting edge.
+  A 335-point keyboard over 480 segments moves 0.7 points per segment on
+  average, so the bound is under a point unless the crossing segment
+  covers 4 points or more.
 
-What the prototype keeps, checked against the models: `ViewportCurve`'s
-precondition puts the first sample at 0 (`Curves.start`) and the last at 1
-(`Track.progress` is 1 from the deadline, so no jump at the end); the
-compiled `CAKeyframeAnimation` uses the samples' values, linear calculation,
-even key times and no timing functions, which is the Swift's
-`ViewportCurve.value` exactly, so attachments read what is shown; only the
-viewport's offset track takes the profile, and only on an inset-only pass
-(every other `applyChanges` path drops it), so the sync theorems relating
-rows and the viewport (one progress) are unchanged, and rows all move with
-the viewport, so relations among them don't depend on its curve
-(`common_mode_cancels`). The bar copies the keyframe animation (same begin,
-duration, speed, values profile), so `ListPass.lockstep_iff` applies.
-Appearances of node rows revealed by a viewport moving on samples land at
-their final state (`237be64`: `appearanceTiming` returns nil when
-`NodeRowMotion.viewportMovesOnSamples(above:since:)`, NodeRowTransition.swift:202-205
-and :226-240, finds a non-basic viewport animation added this turn), and a
-`.growing` appearance, whose start is in window coordinates outside the
-list, lands while such a viewport animation still runs at all (:291). The first
-is safe on any clock: within the content the viewport's motion is common
-(`common_mode_cancels`). The second is the relation to outside content
-that would need the viewport's own progress (`lockstep_iff`), so landing
-it is the choice that keeps it. Assumed, not proved: the
-keyboard's sampled progress (from the reported duration and the fitted
-keyboard spring) stays in `[0, 1]` and moves forward, as a critically
-damped spring from rest does. The helper requires the physical progress
-to start at 0 and end at 1 (at the notification's deadline) rather than
-overwriting the end samples, so the profile's ends are the computed ones.
+What the Swift keeps, checked against the models: only the viewport's
+offset track takes the profile, and only on an inset-only pass, so the sync
+theorems relating rows and the viewport (one progress) are unchanged, and
+rows all move with the viewport, so relations among them don't depend on
+its curve (`common_mode_cancels`). The bar's keyframes and the viewport's
+share the samples, the key times and the clock, so `ListPass.lockstep_iff`
+applies. Appearances of node rows revealed by a viewport moving on samples
+land at their final state (`237be64`: `appearanceTiming` returns nil when
+`NodeRowMotion.viewportMovesOnSamples(above:since:)`,
+NodeRowTransition.swift:202-205 and :226-240, finds a non-basic viewport
+animation added this turn), and a `.growing` appearance, whose start is in
+window coordinates outside the list, lands while such a viewport animation
+still runs at all (:291). The first is safe on any clock: within the
+content the viewport's motion is common (`common_mode_cancels`). The second
+is the relation to outside content that would need the viewport's own
+progress (`lockstep_iff`), so landing it is the choice that keeps it.
+
+Assumed, not proved: the samples are in `[0, 1]` and never go back.
+`keyboardSpring` (ListAnimation.swift:36-37) has stiffness 555.027 and
+damping 47.118, within 0.001 of critical: it rises from exactly 0 and its
+first overshoot is more than two minutes away, so over a keyboard's duration
+it stays below 1, and the caller's last sample of 1 is above the one before.
+That the floating-point samples keep this order is the hypothesis.
+
+Outside the model:
+
+- `926e692` records an open value error: 2-3 isolated frames per engine where
+  the bar and the keyboard differ by 1.8-2.9 points for 13-18 ms, on show at
+  the first frame crossing the chat's bottom and on hide near peak
+  acceleration. The models fix the sampled values and their interpolation.
+  Between samples the chord never puts the inset below the clamp of the
+  keyboard's interpolated edge, and differs from it only in the crossing
+  segment, by at most a quarter of that segment's travel (above). That is the commit's own reading: the
+  chord would advance the bar at the kink, so it can't explain a trailing
+  frame. Whether Core Animation plays the keyframes on the same clock and
+  frame phase as the system's keyboard animation, and whether
+  `keyboardSpring` is the keyboard's actual curve, are not modeled; the
+  error is in that part.
+- If the list defers the inset (a call inside a pass,
+  UltraListView.swift:269-272), the bar copies the animation still
+  installed from the earlier pass, as it did before `926e692`. With a
+  keyframe animation there and a transition without a profile, neither
+  branch of `animateComposerProperty` (ListChatController.swift:289-293)
+  sets the values, so the bar would take the viewport's offset values. This
+  review doesn't establish whether the chat can apply an inset inside a
+  list pass.
 
 ## Theorems
 
