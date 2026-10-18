@@ -43,8 +43,11 @@ fileprivate final class PreparedNodeContent: DisplayPreparedContent {
             target = NodeHostView(rootNode: root)
             staged = target
         }
-        let size = CGSize(width: width, height: size.height), environment = environment
+        let measuredSize = CGSize(width: width, height: size.height), environment = environment
         let drawing = Task { [weak self] in
+            // A checked-out host can have an imposed size, as in a horizontal
+            // row. Read its model bounds when drawing starts, after any checkout.
+            let size = self?.host === target ? target.bounds.size : measuredSize
             await target.prepareContent(size: size, environment: environment)
             self?.drawing = nil
         }

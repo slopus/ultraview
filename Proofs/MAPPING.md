@@ -498,18 +498,46 @@ came to show the row soon, is drawn ahead later through
 
 | Model (`Proofs/UltraProofs/List/Hosts.lean`) | Swift |
 | --- | --- |
-| `S.stage` | `PreparedNodeContent.drawAhead()` (NodeRow.swift:36-53) makes a host only when `host ?? staged` is `nil` (:42-45): only while `host` reads `nil` (no view keeps a host of the root, so the root has no renderer: a host's renderer detaches when it deallocates, and `host` is weak), and only when nothing is staged; a `NodeHostView` for the root, kept in `staged`. When a kept or staged host exists and its content is incomplete (`isContentComplete` false), it draws into that host (:38-41) and makes none: no model operation (see "Cold rows and target ownership" below). Called from `NodeRow.prepare` (:113-129) for a live identity, an appearance still to show, or `showsSoon` (:123-126); from `UltraListView.showSoon` (UltraListView.swift:1658-1661) for a stored preparation the list will show soon, called for a mutation's nearest requests, or only for the physical rows an identity target's projection requires (:1572-1573), a request with the hint (:1678) and prepared rows ahead of a scroll, queued by the scroll turn (:1756-1757, `drawAheadLater` :1662-1666) and drawn about a millisecond's worth per later main-queue turn (`drainDrawAhead` :1668-1672); before a running preparation is stored, when the list came to show it soon meanwhile (:1686-1688), which stores only while its ticket is current (:1690-1697); and from `awaitPreparedDisplay` (:1611-1626, also through `awaitProjectedDisplay` :1601-1609) for a stored preparation of a projected on-screen row whose content is not display-prepared |
-| `S.start` | `NodeRowView.start` (NodeRow.swift:251) with `checkout(owner:)` (:54-65): the live host, else `staged`, else a new `NodeHostView` (:60), and `staged = nil` (:62). Under `accept`'s and the queued candidate's guard (:288-298, :246-249) |
-| `S.reveal` | `showPreparedHost(_:)` (NodeRow.swift:190), with the pass-end wait (:215-221) and `passDidEnd` (:303-308) |
+| `S.stage` | `PreparedNodeContent.drawAhead()` (NodeRow.swift:36-56) makes a host only when `host ?? staged` is `nil` (:42-45): only while `host` reads `nil` (no view keeps a host of the root, so the root has no renderer: a host's renderer detaches when it deallocates, and `host` is weak), and only when nothing is staged; a `NodeHostView` for the root, kept in `staged`. When a kept or staged host exists and its content is incomplete (`isContentComplete` false), it draws into that host (:38-41) and makes none: no model operation (see "Cold rows and target ownership" below). Called from `NodeRow.prepare` (:116-132) for a live identity, an appearance still to show, or `showsSoon` (:126-129); from `UltraListView.showSoon` (UltraListView.swift:1658-1661) for a stored preparation the list will show soon, called for a mutation's nearest requests, or only for the physical rows an identity target's projection requires (:1572-1573), a request with the hint (:1678) and prepared rows ahead of a scroll, queued by the scroll turn (:1756-1757, `drawAheadLater` :1662-1666) and drawn about a millisecond's worth per later main-queue turn (`drainDrawAhead` :1668-1672); before a running preparation is stored, when the list came to show it soon meanwhile (:1686-1688), which stores only while its ticket is current (:1690-1697); and from `awaitPreparedDisplay` (:1611-1626, also through `awaitProjectedDisplay` :1601-1609) for a stored preparation of a projected on-screen row whose content is not display-prepared |
+| `S.start` | `NodeRowView.start` (NodeRow.swift:254) with `checkout(owner:)` (:57-68): the live host, else `staged`, else a new `NodeHostView` (:63), and `staged = nil` (:65). Under `accept`'s and the queued candidate's guard (:291-301, :249-252) |
+| `S.reveal` | `showPreparedHost(_:)` (NodeRow.swift:193), with the pass-end wait (:218-224) and `passDidEnd` (:306-311) |
 | `S.drop`, `sweep_never_drops_hosted` | `hasLiveHost` false at UltraListView.swift:1702 and in `sweepPreparations` (:1775-1787) |
+| `S.stage`, size follow-up after `fda45e5` | `PreparedNodeContent.drawAhead` (NodeRow.swift:36-56) keeps the same host-creation guard. At task start (:50), a checked-out host draws at its current model bounds; a new or staged host uses the measured size. Size is outside `Hosts`, so drawing into an existing host still makes no model step |
+
+The size follow-up pins `NodeRow.swift` SHA-256
+`ad30ea587bf4230941751cc872069521a4ec4a2e00d51c62f06cea674a036d63`.
+The table uses the updated NodeRow lines. Reading bounds inside the
+drawing task also handles a staged host checked out before that task starts.
+Bounds are model geometry, including an animation's endpoint; presentation
+geometry is not read. The host-ownership theorems and preparation queue's
+awaited-key hypotheses are unchanged. `PreparedHostGeometryTests` checks
+redraws at an imposed size for vertical and horizontal rows, with and without
+content animation, in every engine. `CarouselReadinessTests` also checks
+the card and host geometry after a far return. These are runtime checks;
+the Lean models contain no sizes or UIKit rendering.
+The direct checks prepare one tree at its intrinsic 92-point height, check out
+that exact content into a 160-point host, and record every subsequent draw
+commit. Their minimum fill must be 136 points; an intrinsic redraw produces
+68 points even if a later layout repairs it. The unchanged baseline's twelve
+control cases each record `[136, 68, 136]` and fail only that fill assertion.
+
+A staged host is complete at its measured size. A horizontal row can impose
+a different height at checkout, which requests another commit. Its row view
+then reports readiness for that displayed host. The inner preparation wait
+can accept the staged bitmap before this resize; the outer carousel's
+readiness check waits for its visible card views. The model does not prove that
+checkout reuses a bitmap at the final cross size.
 
 A staging after the preparation is stored is a separate step in the model
 (the model allows `stage` between any others); a `drawAhead` that finds a
 host kept makes no host (it returns, or draws into that host when its
 content is incomplete), so a checkout racing it keeps `staged_unkept`. The
-drawing task holds the staged host until `prepareContent` returns, as
+drawing task holds its target, staged or kept, until `prepareContent` returns, as
 `prepare` did: while it does, the host is alive and `host` (weak) is not
-`nil` once it is checked out, so no second host is made. Which rows count as
+`nil` once it is checked out, so no second host is made. If its row releases
+it meanwhile, this task remains a holder outside `Hosts`: the converse of
+`weak_iff` need not hold until the task returns or times out, though the
+sweep still retains and a checkout still reuses the live host. Which rows count as
 shown soon (`rowsShownSoon`, about two screens and their preload margins
 around the anchor, alternating sides) and when a stored preparation is drawn
 (only ahead of the scroll's direction, on turns after the scroll's) are
@@ -536,12 +564,12 @@ The premount and collapse mappings above retain their historical citations.
 The current `departureEdge` is at UltraListView.swift:302-305. NodeRow.swift
 lines from :106 on at `f478507` move by 16 and then, with the cold-row
 change, those from :46 on at `02bfb32` by 8, so `showPreparedHost`'s
-appearance condition the premount section cites (:178-179) is at :202-203.
-Current SHA-256, with the uncommitted cold-row change below:
+appearance condition the premount section cites (:178-179) is at :205-206.
+Current SHA-256 after the size follow-up to `fda45e5`:
 `UltraListView.swift`
 `7bdc426ab87598352312a9bf87fb50ca061e31a9cec516c694637ba90500519d`,
 `NodeRow.swift`
-`17b07d550e21e9108759a8e64c3c785b8af3463f58a39c2cfd2dac7a97fa408a`,
+`ad30ea587bf4230941751cc872069521a4ec4a2e00d51c62f06cea674a036d63`,
 `ListRow.swift`
 `749c1d9a12ece7acc6ed96413f0468f8125515d2dc86f7075e3ffb76a4ad1fc3`,
 and the new `WindowProjection.swift`

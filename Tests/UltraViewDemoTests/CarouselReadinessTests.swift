@@ -148,5 +148,42 @@ private final class ReadyCardView: ListRowView {
         let shown = try #require(atTop)
         #expect(shown.count >= 2 && shown.allSatisfy { $0 }, "\(shown) after \(waited) s")
     }
+
+    @Test(arguments: ScrollEngineMode.allCases)
+    func aFarReturnKeepsTheCarouselCardsAtTheRowsHeight(mode: ScrollEngineMode) async throws {
+        let list = UltraListView(engineMode: mode)
+        let window = makeWindow(); window.frame = .init(x: 0, y: 0, width: 390, height: 700)
+        list.frame = window.bounds; window.addSubview(list); window.isHidden = false
+        defer { list.applyChanges(items: [], transition: .none); window.isHidden = true }
+        var rows: [any ListRow] = (0..<5_005).map { feedRow($0) }
+        rows[3] = DemoCarouselRow(identity: "carousel-geometry", mode: mode, count: 40)
+        list.applyChanges(items: rows, transition: .none)
+        for _ in 0..<300 where list.loadedItemView(at: 3)?.isDisplayReady != true { try await Task.sleep(for: .milliseconds(10)) }
+        list.scrollTo(.init(index: 5_000), transition: .none)
+        for _ in 0..<300 where list.loadedItemView(at: 5_000)?.isDisplayReady != true { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(!list.loadedIndexRange.contains(3))
+        list.scrollTo(.init(index: 0), transition: .none)
+        for _ in 0..<300 where list.loadedItemView(at: 3)?.isDisplayReady != true { try await Task.sleep(for: .milliseconds(10)) }
+        let carousel = try #require(list.loadedItemView(at: 3) as? DemoCarouselView)
+        #expect(Double(carousel.bounds.height) == DemoCarouselRow.height)
+        #expect(Double(carousel.horizontal.bounds.height) == DemoCarouselRow.height)
+        // The inner list is transposed: its width is the carousel's height.
+        #expect(Double(carousel.horizontal.list.bounds.width) == DemoCarouselRow.height)
+        let expectedHeight = DemoCarouselRow.height - carousel.horizontal.list.viewportInsets.left - carousel.horizontal.list.viewportInsets.right
+        let cards = carousel.horizontal.list.loadedItemViews
+        #expect(cards.count >= 2)
+        for card in cards {
+            #expect(Double(card.bounds.width) == expectedHeight)
+            var views: [UIView] = [card], found: NodeHostView?
+            while let view = views.popLast() {
+                if let host = view as? NodeHostView { found = host; break }
+                views += view.subviews
+            }
+            let host = try #require(found)
+            for _ in 0..<300 where !host.isContentComplete { try await Task.sleep(for: .milliseconds(5)) }
+            #expect(Double(host.bounds.height) == expectedHeight)
+            #expect(host.view(forTransitionKey: "card").map { Double($0.bounds.height) } == expectedHeight)
+        }
+    }
 }
 #endif
