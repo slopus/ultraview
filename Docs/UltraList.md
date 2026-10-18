@@ -151,6 +151,25 @@ describe finite collection edges after the pass, rather than the preload band.
 `loadedEdgeMargin` can require an edge to enter further into the viewport before
 it is reported.
 
+## Scroll to top
+
+A tap on the status bar scrolls a list to the edge shown at the top: its first
+row, or, when the content is turned upside down as in a chat, its oldest loaded
+row. UIKit offers the tap only to a system scroll view, which the physics
+engines don't have, so every scroll host keeps an empty one that declines the
+system scroll and hands the tap to the host's own engine. The list then runs an
+ordinary `scrollTo` on the `.uiKitScroll()` curve; a fling stops where it is
+shown and the list moves on from there.
+
+UIKit expects one scroll view in a window to accept the tap. Of the hosts that
+allow it, are shown and sit inside no other host, the largest one does; the
+claim follows hosts joining and leaving windows, resizing and hiding.
+Horizontal lists never claim it. Set `scrollsToTop` to `false` to opt a list
+out, use `shouldScrollToTop` to decline a tap, and `didScrollToTop` to learn
+when a scroll to the top landed without being interrupted.
+`scrollToTop(animated:)` does the same from code; the demo calls it when the
+selected tab is tapped again.
+
 ## Attachments
 
 Rows publish attachments by key. Compatible consecutive members form a run.

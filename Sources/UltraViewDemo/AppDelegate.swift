@@ -18,7 +18,7 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
     }
 }
 
-final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
+final class SceneDelegate: UIResponder, UIWindowSceneDelegate, UITabBarControllerDelegate {
     var window: UIWindow?
     private var perfRun: PerfRun?
 
@@ -31,6 +31,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
             MainThreadMonitor.shared.start(phase: "launch")
         }
         let tabs = UITabBarController()
+        tabs.delegate = self
         tabs.viewControllers = DemoScreen.allCases.map { $0.makeController() }
         tabs.selectedIndex = DemoScreen.allCases.firstIndex(of: DemoScreen.initial) ?? 0
         let window = UIWindow(windowScene: scene)
@@ -55,6 +56,22 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
             perfRun = run
             Task { await run.run() }
         }
+    }
+
+    /// Selecting the tab that is already shown scrolls its list to the top,
+    /// as a tap on the status bar does.
+    func tabBarController(_ tabBarController: UITabBarController, shouldSelect viewController: UIViewController) -> Bool {
+        guard viewController === tabBarController.selectedViewController, viewController.isViewLoaded else { return true }
+        var queue = [viewController.view!]
+        while !queue.isEmpty {
+            let view = queue.removeFirst()
+            if let list = view as? UltraScrollView, list.scrollsToTop, list.window != nil {
+                list.scrollToTop(animated: true)
+                break
+            }
+            queue += view.subviews
+        }
+        return true
     }
 
     func sceneWillEnterForeground(_ scene: UIScene) {

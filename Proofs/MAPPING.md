@@ -1755,6 +1755,42 @@ Not covered:
   modeled. Callbacks from the list's pass inside the update queue their
   own requests through the same path.
 
+## Scroll to the top (the commit after `d9d9969`)
+
+This commit changes `UltraListView.swift` after the pins at `c5743ae`
+(SHA-256 `fe10d6ba25eb58b5dbd5c40735150d9cf69c3a14dedf9f3d3399ac02985bd262`).
+It adds `scrollToTop(animated:)`, an ordinary `applyChanges(scrollTo:)` with
+a target that resolves when it applies, and a `didScrollToTop` report that
+polls the list's state. Lines at `c5743ae` move by 5 from :154, by 48 from
+:258, by 50 from :558 and by 53 from :814. The rows below are at this
+commit; no mapped value changes.
+
+| Model | Change |
+| --- | --- |
+| `Ev.touch`, `Ev.dragBegin` | `didTouchDown` (:179) and `handleDragBegin` (:231) also bump `scrollToTopGeneration`, which only cancels a pending `didScrollToTop` report (:289-300) |
+| `Ev.finishViewport` | `finishViewportTransition()` (:308-312) does nothing while the running viewport track is the one recorded as carrying a target's travel (`correctionCarriesTarget`, :301-303); otherwise it is unchanged |
+| `Animation.swiftPass`, `Pass.screen` | the displacing pass records its viewport track's generation when the pass has a target, or when the track it replaces carried one with more than half a point left (:605-607); the replaced values are unchanged |
+| `Insets.cheapSwift`, `Ev.keyboard` | `updateViewportInsets` records its new track only when the old one carried a target with more than half a point left (:864-866); `shift` and the replace are unchanged |
+| `perform`, `apply` (`Deferred`) | unchanged: `performAfterCurrentPass(_:)` (:258-262), and the chat's `applyComposerInsetNow` still reaches the finish (ListChatController.swift:234) |
+
+The record is a track generation (`targetCorrectionGeneration`, :158), so it
+lapses when that track finishes or any writer replaces it, and a writer
+that doesn't record leaves finishing as it was. `promoteCarousel` records
+its own viewport track (:1449). The report reads `pendingTarget` and
+`pendingScroll` (`Readiness`' `S.pending`, `S.retry`) and writes neither.
+
+The no-op leaves the engine as `Ev.finishViewport` does, so
+`finish_keeps_engine`, `run_keeps_velocity` and `dismissed_never_moved`
+still describe it. `ListPass.finish_together` doesn't apply while a target
+travels: a scroll pass puts the viewport on its own curve, so content and
+bar are no longer in lockstep, and when the keyboard reports it has hidden
+the chat lands the bar while the content scrolls on (`finish_alone`'s gap,
+here the rest of the scroll). The Lean model's `Ev.finishViewport` always
+lands; the guard is not modeled. `ScrollToTopTests` and
+`ChatScrollToTopTests` check it in UIKit: no jump at the finish, the scroll
+lands on the top edge, and a correction that starts after the travel still
+finishes at once. `Proofs/UltraProofs` is unchanged.
+
 ## Theorems
 
 **Correctness**

@@ -26,6 +26,21 @@ open class UltraScrollView: UIView {
         get { engine.onInput }
         set { engine.onInput = newValue }
     }
+    /// Whether a tap on the status bar scrolls to the top. Of the hosts in a
+    /// window that allow it, only the largest one not inside another host
+    /// answers; a horizontal list never does.
+    public var scrollsToTop = true {
+        didSet { if scrollsToTop != oldValue { ScrollToTopClaims.update(in: window) } }
+    }
+    /// Asked before a status bar tap scrolls to the top; `false` ignores the tap.
+    public var shouldScrollToTop: (() -> Bool)?
+    /// Called once a scroll to the top rests on the top edge, after any
+    /// measurement it waited for, unless a touch, a drag or another scroll
+    /// to the top interrupted it.
+    public var didScrollToTop: (() -> Void)?
+    private lazy var scrollToTopProxy = ScrollToTopProxy(owner: self)
+    private weak var claimedWindow: UIWindow?
+    private var claimedSize = CGSize.zero
     public var contentHeight: Double = 0 { didSet { updateEdges() } }
     public var contentInsets = ListInsets() { didSet { updateEdges() } }
     public init(engineMode: ScrollEngineMode = .keyframe) {
@@ -38,6 +53,8 @@ open class UltraScrollView: UIView {
         engine.didEndDragging = { [weak self] in self?.didEndDragging?() }
         engine.didEndScrolling = { [weak self] in self?.didEndScrolling?() }
         engine.shouldStopOnRelease = { [weak self] value in self?.shouldStopScrolling?(value) ?? false }
+        insertSubview(scrollToTopProxy, at: 0)
+        ScrollToTopClaims.register(self)
     }
     @available(*, unavailable)
     public required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
@@ -45,6 +62,8 @@ open class UltraScrollView: UIView {
         super.layoutSubviews()
         engine.host.frame = bounds
         keyboardInput?.frame = bounds
+        scrollToTopProxy.frame = bounds
+        if bounds.size != claimedSize { claimedSize = bounds.size; ScrollToTopClaims.update(in: window) }
         updateEdges()
     }
     private func configureKeyboardInput() {
@@ -80,6 +99,27 @@ open class UltraScrollView: UIView {
         super.didMoveToWindow()
         if window == nil { engine.teardown() }
         else { engine.activate() }
+        let previous = claimedWindow
+        claimedWindow = window
+        if window == nil { claimScrollToTop(false) }
+        if previous !== window { ScrollToTopClaims.update(in: previous) }
+        ScrollToTopClaims.update(in: window)
+    }
+    open override var isHidden: Bool {
+        didSet { if isHidden != oldValue { ScrollToTopClaims.update(in: window) } }
+    }
+    func claimScrollToTop(_ claims: Bool) {
+        if scrollToTopProxy.scrollsToTop != claims { scrollToTopProxy.scrollsToTop = claims }
+    }
+    func statusBarTapped() {
+        guard shouldScrollToTop?() ?? true else { return }
+        scrollToTop(animated: true)
+    }
+    /// Scrolls to the top edge. This view has no rows to animate along and
+    /// moves at once; a list animates.
+    open func scrollToTop(animated: Bool = true) {
+        engine.halt(); engine.setOffset(-contentInsets.top); handleScroll(engine.offset)
+        didScrollToTop?()
     }
     open func handleScroll(_ offset: Double) { onScroll?(offset) }
     open func handleDragBegin() { willBeginDragging?() }

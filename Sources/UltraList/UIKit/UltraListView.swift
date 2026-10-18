@@ -151,6 +151,11 @@ public final class UltraListView: UltraScrollView {
     private var mountContinuation: MountContinuation?
     private var mountSizeGeometry: SizePositionGeometry?
     private var pinnedIndex: Int?
+    private var scrollToTopGeneration: UInt64 = 0
+    /// The viewport correction that carries an explicit target's travel,
+    /// which finishing it would land at once. It names the track's
+    /// generation, so it lapses when that track ends or is replaced.
+    private var targetCorrectionGeneration: UInt64?
     let accessibilityCoordinator = ListAccessibility()
     public let swipeActions = ListSwipeController()
 
@@ -171,7 +176,7 @@ public final class UltraListView: UltraScrollView {
             renderAttachments()
             if flight != nil { handleScroll(engine.offset) }
         }
-        engine.didTouchDown = { [weak self] in self?.holdsPinnedRow = false }
+        engine.didTouchDown = { [weak self] in self?.holdsPinnedRow = false; self?.scrollToTopGeneration &+= 1 }
         registerForTraitChanges([UITraitPreferredContentSizeCategory.self, UITraitUserInterfaceStyle.self, UITraitDisplayScale.self, UITraitLayoutDirection.self]) { (view: UltraListView, _: UITraitCollection) in view.setNeedsLayout() }
     }
     public override func layoutSubviews() {
@@ -223,7 +228,7 @@ public final class UltraListView: UltraScrollView {
         return true
     }
     func index(forRowIdentity identity: String) -> Int? { identityIndices[identity] }
-    public override func handleDragBegin() { holdsPinnedRow = false; super.handleDragBegin() }
+    public override func handleDragBegin() { holdsPinnedRow = false; scrollToTopGeneration &+= 1; super.handleDragBegin() }
     public func loadedItemView(at index: Int) -> ListRowView? {
         guard items.indices.contains(index) else { return nil }; return views[items[index].identity]
     }
@@ -255,10 +260,53 @@ public final class UltraListView: UltraScrollView {
             deferred.append { [weak self] in self?.performAfterCurrentPass(update) }
         } else { update() }
     }
+    /// Scrolls to the edge shown at the top: the first row, or the last one
+    /// when the content is turned upside down (a chat's oldest loaded row).
+    /// Momentum stops where it is shown and the list moves on from there.
+    public override func scrollToTop(animated: Bool = true) {
+        guard !items.isEmpty else { return }
+        let inverted = contentView.transform.d < 0
+        let index = inverted ? items.count - 1 : 0
+        // The row's band meets the viewport's edge, so the list lands on its
+        // edge without overscrolling past it. The target resolves when it
+        // applies, which may wait for the row's measurement, so it reads the
+        // insets and reserved space then.
+        let target = ListScrollTarget(index: index) { [weak self] height, _ in
+            guard let self else { return 0 }
+            let reserve = items.indices.contains(index) ? reservedHeights(at: index) : (0, 0)
+            return inverted ? viewport.visibleHeight - height - reserve.1 : reserve.0
+        }
+        holdsPinnedRow = false
+        scrollToTopGeneration &+= 1
+        let transition: ListTransition = animated ? .uiKitScroll() : .immediate
+        scrollTo(target, transition: transition)
+        reportScrollToTop(scrollToTopGeneration, inverted: inverted, after: transition.duration * animations.durationScale, until: CACurrentMediaTime() + 10)
+    }
+    /// Calls `didScrollToTop` once the list rests on the edge shown at the
+    /// top: the target applied, the viewport's transition ended and nothing
+    /// moves. A touch, a drag or a newer scroll to the top cancels the call,
+    /// and so does not getting there by `deadline`.
+    private func reportScrollToTop(_ generation: UInt64, inverted: Bool, after delay: Double, until deadline: Double) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(0, delay)) { [weak self] in
+            guard let self, scrollToTopGeneration == generation, CACurrentMediaTime() < deadline else { return }
+            let edge = inverted ? declaredEdges.maximum.map { _ in declaredEdges.clamped(.greatestFiniteMagnitude) } : declaredEdges.minimum
+            let resting = pendingTarget == nil && pendingScroll == nil && engine.activeFlight == nil && !engine.decelerating && !engine.dragging
+                && abs(animations.value(.viewport, .viewportOffset, at: animations.now)) < 0.5
+            guard resting, let edge, abs(engine.offset - edge) < 0.5 else {
+                reportScrollToTop(generation, inverted: inverted, after: 1.0 / 60, until: deadline); return
+            }
+            didScrollToTop?()
+        }
+    }
+    private var correctionCarriesTarget: Bool {
+        targetCorrectionGeneration != nil && animations.model.tracks[.init(.viewport, .viewportOffset)]?.generation == targetCorrectionGeneration
+    }
     /// Lands only the viewport correction at its model value, keeping any engine
-    /// flight running. Does nothing when no viewport correction is animating.
+    /// flight running. Does nothing when no viewport correction is animating,
+    /// or when it still carries a scroll to a target (`scrollTo`,
+    /// `scrollToTop`), whose travel would otherwise land at once.
     public func finishViewportTransition() {
-        guard animations.model.tracks[.init(.viewport, .viewportOffset)] != nil else { return }
+        guard animations.model.tracks[.init(.viewport, .viewportOffset)] != nil, !correctionCarriesTarget else { return }
         animations.replace(.viewport, .viewportOffset, from: 0, to: 0, at: animations.now, transition: .none)
         renderAttachments(); reportVisibility()
     }
@@ -554,7 +602,9 @@ public final class UltraListView: UltraScrollView {
         engine.shift(by: destination - engine.offset); previousOffset = engine.offset
         if absorbsEdgeChangeIntoOverscroll { engine.reanchorDrag() }
         if displacing {
-            animations.replace(.viewport, .viewportOffset, from: oldOffset + coordinateMap + oldCorrection - engine.offset, to: 0, at: time, transition: transition)
+            let carries = target != nil || correctionCarriesTarget && abs(oldCorrection) > 0.5
+            let generation = animations.replace(.viewport, .viewportOffset, from: oldOffset + coordinateMap + oldCorrection - engine.offset, to: 0, at: time, transition: transition)
+            targetCorrectionGeneration = carries ? generation : nil
         }
         transitionDetachedHorizontalGeometry(at: time, transition: transition)
         resolveAttachments(transition: transition, oldItems: oldItems, oldState: oldAttachmentState, suppressFade: isCarousel && destinationNew)
@@ -810,7 +860,10 @@ public final class UltraListView: UltraScrollView {
         }
         engine.shift(by: shift); previousOffset = engine.offset
         engine.setEdges(declaredEdges)
-        animations.replace(.viewport, .viewportOffset, from: transition.isImmediate ? 0 : oldOffset + correction - engine.offset, to: 0, at: time, transition: transition)
+        // A target's remaining travel rides on the new correction.
+        let carries = correctionCarriesTarget && abs(correction) > 0.5
+        let generation = animations.replace(.viewport, .viewportOffset, from: transition.isImmediate ? 0 : oldOffset + correction - engine.offset, to: 0, at: time, transition: transition)
+        targetCorrectionGeneration = carries ? generation : nil
         CATransaction.commit()
     }
 
@@ -1393,7 +1446,7 @@ public final class UltraListView: UltraScrollView {
             expired.removeFromSuperview()
         }
         animations.replace(.carry(carryID), .opacity, from: 1, to: 1, at: time, transition: transition) { [weak self, weak wrapper] in wrapper?.removeFromSuperview(); self?.animations.unbind(.carry(carryID), removeModel: true) }
-        animations.replace(.viewport, .viewportOffset, from: correction, to: 0, at: time, transition: transition)
+        targetCorrectionGeneration = animations.replace(.viewport, .viewportOffset, from: correction, to: 0, at: time, transition: transition)
     }
     private func oldOriginForStrip(oldBase: Double, window: ListWindow) -> Double { oldBase + window.minY }
 

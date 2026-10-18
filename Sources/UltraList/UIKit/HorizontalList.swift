@@ -22,6 +22,8 @@ public final class HorizontalListView: UIView, UIGestureRecognizerDelegate {
 
     public init(engineMode: ScrollEngineMode = .keyframe) {
         list = UltraListView(engineMode: engineMode)
+        // The status bar's tap scrolls vertically; it belongs to an enclosing list.
+        list.scrollsToTop = false
         super.init(frame: .zero)
         clipsToBounds = true
         addSubview(list)
