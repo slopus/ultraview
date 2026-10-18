@@ -731,6 +731,12 @@ preparations already running without the hint can upgrade through
 turns, with about one millisecond spent starting it each turn. The demo carousel
 reports ready after its visible cards draw, with a 0.3-second fallback.
 
+The first integrated full unit run had one failure in 914 tests: the platform
+engine's carousel jump showed one drawn card after about 19 ms, before its next
+card was placed. Its readiness check accepts a nonempty partial band when every
+placed card is ready. The same test passed alone in all three engines. This
+known gap is accepted for the unfinished integration and remains follow-up work.
+
 Drawing ahead still has a main-thread cost: the prepared hosts' commits can apply
 together. In a three-round alternating simulator comparison against `5b62b9b`,
 6 of 27 probes exceeded the 2 ms p99 bound, compared with 2 of 27 on the base.
