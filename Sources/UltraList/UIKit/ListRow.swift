@@ -119,6 +119,10 @@ public struct ListScrollTarget {
     public var index: Int
     public var forward: Bool?
     public var resolve: (Double, ListRowView?) -> Double
+    enum Edge { case first, last }
+    /// A target at the first or last row goes to the row there when it
+    /// applies, which may not be the one there when it was asked for.
+    var edge: Edge?
     public init(index: Int, forward: Bool? = nil, resolve: @escaping (Double, ListRowView?) -> Double) {
         self.index = index; self.forward = forward; self.resolve = resolve
     }

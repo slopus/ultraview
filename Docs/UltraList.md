@@ -186,7 +186,21 @@ Horizontal lists never claim it. Set `scrollsToTop` to `false` to opt a list
 out, use `shouldScrollToTop` to decline a tap, and `didScrollToTop` to learn
 when a scroll to the top landed without being interrupted.
 `scrollToTop(animated:)` does the same from code; the demo calls it when the
-selected tab is tapped again.
+selected tab is tapped again. A scroll that waits for the edge row's
+measurement goes to the row at that edge when it applies, so a newer message
+or older history arriving meanwhile doesn't leave it a row short.
+
+The claim doesn't follow a view that contains hosts. When the claim is
+decided again, a host inside a hidden view is passed over, but a host inside a
+view faded to zero isn't: only the host's own alpha counts. Nothing decides
+again when an ancestor hides or fades, either. That happens only when a host
+in the window joins or leaves it, resizes, hides or changes `scrollsToTop`.
+So after hiding or fading a container that holds the claiming list, the claim
+stays with that list, and whether UIKit then offers the tap to it or to no one
+hasn't been measured. Set `scrollsToTop` to `false` on the container's lists
+while it is hidden or faded, and back to `true` once it is shown. Setting it
+back while the container is still faded gives the claim back to a list no one
+can see.
 
 ## Attachments
 

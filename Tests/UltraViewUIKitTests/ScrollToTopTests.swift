@@ -41,13 +41,53 @@ private struct HeldRow: ListRow {
     var identity: String
     var revision: UInt64 = 0
     var hold: MeasurementHold?
+    var space: ReservedSpace?
+    var count: MeasureCount?
     var measuresAsynchronously: Bool { true }
+    var attachments: [String: any ListAttachment] { space.map { ["space": $0] } ?? [:] }
     func makeView() -> ListRowView { PlainRowView() }
     func apply(to view: ListRowView, transition: ListTransition) {}
     func measure(width: Double, environment: RenderEnvironment) async -> Double? {
+        await count?.add()
         await hold?.wait()
         return 100
     }
+}
+
+/// Space a row keeps beside it, as a section's header or footer does.
+@MainActor
+private struct ReservedSpace: ListAttachment {
+    var title: String
+    var edge: BoundaryEdge
+    var height: Double
+    var reservesSpace: Bool { true }
+    func makeView() -> ListAttachmentView { ReservedSpaceView(height: height) }
+    func combines(with other: any ListAttachment) -> Bool { (other as? ReservedSpace)?.title == title }
+}
+
+private final class ReservedSpaceView: ListAttachmentView {
+    let height: Double
+    init(height: Double) { self.height = height; super.init(frame: .zero) }
+    @available(*, unavailable) required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+    override func update(width: Double, transition: ListTransition) -> Double { height }
+}
+
+/// A row that comes in at the edge while a scroll to the top waits there.
+enum EdgeArrival: CaseIterable, Sendable {
+    /// Upright: a new first row.
+    case insertedFirst
+    /// Upside down: a newer row, which moves the oldest one's index.
+    case newerInsertedUpsideDown
+    /// Upside down: an older row loaded past the oldest one.
+    case olderAppendedUpsideDown
+    /// Upright, an ordinary `scrollTo` row 0 instead of a scroll to the
+    /// top: a new first row, which the waiting target's index names.
+    case newFirstRowForAnExplicitTarget
+}
+
+private actor MeasureCount {
+    private(set) var value = 0
+    func add() { value += 1 }
 }
 
 private actor MeasurementHold {
@@ -176,6 +216,78 @@ private actor MeasurementHold {
         #expect(abs(frame.minY - 10) < 0.5, "\(mode): first row starts at \(frame.minY)")
         try await Task.sleep(for: .milliseconds(200))
         #expect(landed == 1)
+    }
+
+    /// A scroll to the top that waits for the edge row's measurement goes to
+    /// the row at the edge when it applies, with the space that row reserves:
+    /// a row inserted above it, or older rows loaded past it, take its place.
+    /// The arriving row is measured once while the items it came with wait,
+    /// and an ordinary target at the first row waits for it the same way.
+    @Test(arguments: ScrollEngineMode.allCases, EdgeArrival.allCases)
+    func aScrollToTheTopGoesToTheRowAtTheEdgeWhenItApplies(mode: ScrollEngineMode, arrival: EdgeArrival) async throws {
+        let inverted = arrival == .newerInsertedUpsideDown || arrival == .olderAppendedUpsideDown
+        let explicit = arrival == .newFirstRowForAnExplicitTarget
+        let window = makeWindow()
+        window.frame = .init(x: 0, y: 0, width: 390, height: 600)
+        let list = UltraListView(engineMode: mode)
+        list.frame = window.bounds; window.addSubview(list); window.isHidden = false
+        defer { list.engine.teardown(); window.isHidden = true }
+        if inverted { list.contentView.transform = .init(scaleX: 1, y: -1) }
+        list.layoutIfNeeded()
+        // The edge row reserves 30 points beside it, a row that takes its place 50.
+        let side: BoundaryEdge = inverted ? .bottom : .top
+        var rows = (0..<200).map { HeldRow(identity: String($0)) }
+        rows[inverted ? 199 : 0].space = .init(title: "old", edge: side, height: 30)
+        list.applyChanges(items: rows, newInsets: .init(top: 10, bottom: 20), transition: .none)
+        for _ in 0..<150 where list.loadedIndexRange.isEmpty { try await Task.sleep(for: .milliseconds(20)) }
+        list.scrollTo(.init(index: 100), transition: .immediate)
+        for _ in 0..<150 where !list.loadedIndexRange.contains(100) { try await Task.sleep(for: .milliseconds(20)) }
+        #expect(list.loadedIndexRange.contains(100))
+        // The rows at the edge change off screen, and their measurements wait.
+        let hold = MeasurementHold()
+        for index in inverted ? 190..<200 : 0..<10 { rows[index].revision = 1; rows[index].hold = hold }
+        list.applyChanges(items: rows, transition: .none)
+        var landed = 0
+        list.didScrollToTop = { landed += 1 }
+        if explicit { list.scrollTo(.init(index: 0), transition: .uiKitScroll()) } else { list.statusBarTapped() }
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(landed == 0, "\(mode) \(arrival): landed before the edge row was measured")
+        #expect(!list.loadedIndexRange.contains(inverted ? 199 : 0), "\(mode) \(arrival): reached the edge before its row was measured")
+
+        // A row comes in at the edge meanwhile; its own measurement is ready.
+        let measured = MeasureCount()
+        let incoming = HeldRow(identity: "incoming", space: arrival == .newerInsertedUpsideDown || explicit ? nil : .init(title: "new", edge: side, height: 50), count: measured)
+        if arrival == .olderAppendedUpsideDown { rows.append(incoming) } else { rows.insert(incoming, at: 0) }
+        list.applyChanges(items: rows, transition: .none)
+        // A measured arrival at the edge can land there before its held
+        // neighbours fill in; the landing is reported once either way.
+        try await Task.sleep(for: .milliseconds(500))
+        await hold.open()
+        if explicit {
+            // An ordinary target reports no landing; it applies with the items.
+            for _ in 0..<150 where list.items.first?.identity != "incoming" || list.settledFrame(at: 0) == nil { try await Task.sleep(for: .milliseconds(20)) }
+            try await Task.sleep(for: .milliseconds(600))
+        } else {
+            for _ in 0..<150 where landed == 0 { try await Task.sleep(for: .milliseconds(20)) }
+            #expect(landed == 1, "\(mode) \(arrival): never reported landing")
+        }
+
+        // Measured at most once (upside down, a newer row may never be
+        // needed), and kept until the rows waiting for it apply.
+        let measures = await measured.value
+        #expect(measures <= 1, "\(mode) \(arrival): the incoming row was measured \(measures) times")
+        let edge = inverted ? rows.count - 1 : 0
+        let identity = arrival == .newerInsertedUpsideDown ? "199" : "incoming"
+        let reserve = arrival == .newerInsertedUpsideDown ? 30.0 : explicit ? 0 : 50.0
+        try #require(list.items.count == rows.count, "\(mode) \(arrival): the list shows \(list.items.count) rows, not \(rows.count)")
+        #expect(list.items[edge].identity == identity)
+        let frame = try #require(list.settledFrame(at: edge), "\(mode) \(arrival): the edge row isn't loaded")
+        // Content coordinates: upside down, the edge row's bottom is shown at the top.
+        if inverted { #expect(abs(frame.maxY - (580 - reserve)) < 0.5, "\(mode) \(arrival): the edge row ends at \(frame.maxY)") }
+        else { #expect(abs(frame.minY - (10 + reserve)) < 0.5, "\(mode) \(arrival): the edge row starts at \(frame.minY)") }
+        #expect(abs(list.overscrollDistance) < 0.5)
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(landed == (explicit ? 0 : 1), "\(mode) \(arrival): reported landing \(landed) times")
     }
 
     /// An immediate inset change during a scroll to the top (a line typed in

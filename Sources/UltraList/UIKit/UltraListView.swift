@@ -292,16 +292,16 @@ public final class UltraListView: UltraScrollView {
     public override func scrollToTop(animated: Bool = true) {
         guard !items.isEmpty else { return }
         let inverted = contentView.transform.d < 0
-        let index = inverted ? items.count - 1 : 0
         // The row's band meets the viewport's edge, so the list lands on its
         // edge without overscrolling past it. The target resolves when it
         // applies, which may wait for the row's measurement, so it reads the
-        // insets and reserved space then.
-        let target = ListScrollTarget(index: index) { [weak self] height, _ in
-            guard let self else { return 0 }
-            let reserve = items.indices.contains(index) ? reservedHeights(at: index) : (0, 0)
+        // edge row, the insets and the reserved space then.
+        var target = ListScrollTarget(index: inverted ? items.count - 1 : 0) { [weak self] height, _ in
+            guard let self, !items.isEmpty else { return 0 }
+            let reserve = reservedHeights(at: inverted ? items.count - 1 : 0)
             return inverted ? viewport.visibleHeight - height - reserve.1 : reserve.0
         }
+        target.edge = inverted ? .last : .first
         holdsPinnedRow = false
         scrollToTopGeneration &+= 1
         let transition: ListTransition = animated ? .uiKitScroll() : .immediate
@@ -428,8 +428,8 @@ public final class UltraListView: UltraScrollView {
         let newLookup = identityIndices
         let fullReplace = changesCollection && !oldItems.isEmpty && !items.isEmpty && Set(oldIDs).isDisjoint(with: newIDs)
         if pinnedIndex == nil || fullReplace { holdsPinnedRow = false }
-        if let scrollTo, scrollTo.index == pinnedIndex { holdsPinnedRow = true }
-        let target = scrollTo ?? pendingTarget
+        if let scrollTo = scrollTo.map(atEdge), scrollTo.index == pinnedIndex { holdsPinnedRow = true }
+        let target = (scrollTo ?? pendingTarget).map(atEdge)
         var reconciled = dirty
         for (identity, view) in oldViews {
             guard let newIndex = newLookup[identity], let oldIndex = oldLookup[identity] else { continue }
@@ -838,11 +838,20 @@ public final class UltraListView: UltraScrollView {
         }
     }
 
+    /// An edge target at the edge row of the items this pass shows.
+    private func atEdge(_ target: ListScrollTarget) -> ListScrollTarget {
+        guard let edge = target.edge, !items.isEmpty else { return target }
+        var target = target
+        target.index = edge == .last ? items.count - 1 : 0
+        return target
+    }
     /// A pass that resumes the target without its call (a layout, say) still
     /// places it where the call asked.
     private func recordPendingTarget(_ target: ListScrollTarget?, distance: Double) {
         guard let target, distance != 0 else { pendingTarget = target; return }
-        pendingTarget = .init(index: target.index, forward: target.forward) { target.resolve($0, $1) + distance }
+        var shifted = target
+        shifted.resolve = { target.resolve($0, $1) + distance }
+        pendingTarget = shifted
     }
 
     private func clearPendingDisplayViews(keeping retained: Set<ObjectIdentifier> = []) {
@@ -1355,6 +1364,11 @@ public final class UltraListView: UltraScrollView {
     }
     private func retainsPreparation(_ key: MeasurementKey) -> Bool {
         if preparationKeys.contains(key) || pendingDisplayViews[key] != nil || pendingDisplayMeasurements.contains(key) { return true }
+        // Items waiting for a window they can build (pendingItems) keep the
+        // rows it needs; the pending target names an index among them.
+        if let pendingItems, let index = pendingIdentityIndices[key.identity],
+           measurementKey(pendingItems[index], width: viewport.contentWidth) == key,
+           pendingTarget.map({ abs(index - $0.index) <= 80 }) ?? true { return true }
         guard let index = identityIndices[key.identity],
               measurementKey(items[index], width: viewport.contentWidth) == key else { return false }
         let lower = max(0, settledWindow.range.lowerBound - 80)

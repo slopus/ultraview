@@ -2035,6 +2035,106 @@ stay as they are. SHA-256: `UltraListView.swift`
 `97d76657f55d74af7530e66612316bb78aac14d28293be8bd2eca59eec7127ff`.
 `Proofs/UltraProofs` is unchanged.
 
+## Edge targets for a scroll to the top (the commit after `5b62b9b`)
+
+`scrollToTop(animated:)` used to aim at the edge row's index as of the call:
+0, or `count - 1` when the list is upside down. A scroll that waits for that
+row's measurement keeps its target until a pass can apply it. If rows came
+in at the edge meanwhile, the index then named another row:
+- a newer message inserted at 0 in an upside-down chat moves the oldest
+  row to `count`;
+- older history appended at the end puts a new row past it.
+
+In both cases the list landed a row short of the top, with the reserved
+space of the row at the old index, and `didScrollToTop` never came,
+because the list never rested on the edge.
+
+The target now carries `edge` (`ListScrollTarget.edge`, ListRow.swift:122-125,
+internal, set only by `scrollToTop`, :304). Each pass maps it to the edge
+index of the items it shows, after it assigns them (`atEdge`, :841-847,
+applied at :431-432). That includes a retry through `pendingScroll` or a
+far-jump hold, which re-enters with the same target. The target's
+`resolve` reads the reserved space of the edge row of the items it resolves
+against (:299-303). Every other target, ordinary indices and the identity
+remapping of `preparedTarget`, is unchanged. The pinned-row check (:431)
+maps only an explicit `scrollTo`, as before, so a pending target never newly
+holds the pinned row. `recordPendingTarget` (:850-855) copies the target
+when it folds in an additional distance, so the edge survives it.
+
+The same test found a second fault, which also affects ordinary targets.
+New items whose target row isn't measured yet wait in `pendingItems`
+while the list keeps showing the old items (:510-525). The measurement
+for a row that only the waiting items have was dropped as it arrived:
+`retainsPreparation` looked only at the shown items. The pass it marked
+dirty then asked for the measurement again, so the target never applied
+and the row was measured once a turn. `retainsPreparation` (:1365-1377)
+now also keeps a measurement whose key matches a row of `pendingItems`.
+When there is a pending target, that row must be within 80 rows of it,
+the same band the shown items get. The pending target's index counts
+among the waiting items, because the pass records it before it puts the
+old items back (:510-525). `pendingItems` and `pendingIdentityIndices` are
+written together, there and at :418, where the next pass takes them. While
+they are set, the pending target was recorded by that branch: a pass that
+records a target any other way takes the waiting items first. With no
+pending target, every measured row of the waiting items is kept. Only rows
+a failed build or a request ahead asked for are measured, and the next
+pass that applies takes the waiting items, after which the usual band
+applies. It is not a lasting cache. This adds a case to the retention policy noted under
+"Node row hosts at `1dd0bb4`" and changes no sweep's decision for a
+hosted root (`sweep_never_drops_hosted`).
+
+SHA-256:
+- `UltraListView.swift`
+  `dd2b2128ffc438a9bb781c10f0a2f54c2e60491444dd5f678ae55d2ddb6524e2`
+- `ListRow.swift`
+  `82ca2a4bc8d0f88faf6bf8a023ea7e0719e23b6fa7d3e9e9cbb140249c3894cd`
+- `ScrollToTopTests.swift`
+  `63a61cd74ce95c5daf64c866f16c33f54cc30745799718c070e9031d4e91db61`
+
+Lines of `UltraListView.swift` at `5b62b9b` (SHA-256 `8b5905c1…`) move
+as follows:
+- 1-294 stay;
+- 295-304, `scrollToTop`'s target, are edited and keep their extent;
+- 305-840 stay (:431-432 edited);
+- `atEdge` is new at :841-847;
+- `recordPendingTarget`'s body, :845, becomes :852-854;
+- 846-1357 move by 9;
+- `retainsPreparation`'s new lines are :1367-1371;
+- 1358 to the end move by 14.
+
+The premount section's citations, already 5 lower for those past :252
+after the collapse commit, move by 9 more from :931 to :1350 (the
+rebalance's take is at :940-947, `premountIndex` at :1013, `hasLiveHost` at
+:1296 and :1359). Its :159-179 stay, and its :369 is :374.
+
+| Model (`Proofs/UltraProofs/List/Readiness.lean`) | Swift after `5b62b9b` |
+| --- | --- |
+| `pick` | `(scrollTo ?? pendingTarget).map(atEdge)` (:432): the same choice, then an edge target's index read from the pass's items |
+
+`Readiness` models targets as row indices chosen by `pick` and compares
+calls by generation. An edge target is still one call with one generation;
+only the index it names depends on the items of the pass that applies it.
+`applies_latest`, `stale_noop`, `later_gen_lt` and `resume_applies` hold as
+they are. No Lean definition changes.
+
+`ScrollToTopTests.aScrollToTheTopGoesToTheRowAtTheEdgeWhenItApplies` runs
+in every engine, with the edge row's measurement held:
+- a new first row in an upright list;
+- a newer row inserted at 0 in an upside-down list;
+- an older row appended in an upside-down list;
+- a new first row while an ordinary `scrollTo` row 0 waits, which reports
+  no landing and must still apply.
+
+The old edge row reserves 30 points and the arriving row 50. In each case
+the test checks:
+- that the list lands on the row at the edge when the pass applies, with
+  that row's reserve;
+- that `didScrollToTop` comes once and not again;
+- that the arriving row is measured at most once.
+
+Not covered: an edge target that applies against an empty list (it is
+dropped, as every target is).
+
 ## Theorems
 
 **Correctness**
