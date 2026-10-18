@@ -357,6 +357,19 @@ or opacity when available. A no-op preserves a live generation. Analytic
 deadlines complete equal-endpoint tracks and reject stale callbacks. Duration
 scaling changes playback speed without changing spring parameters.
 
+Rows that enter the measured window during a mutation inherit a surviving
+neighbour's position clock. A bounded comparison of old and new row bands
+adjusts that motion across insertions, deletions and moves; height followers
+keep their own clocks and the geometry used by the latest full pass. The
+structural pass saves its original height contributions, so a later resize
+does not become part of the older move. Its mount witnesses remain available
+until any older motion they carry also ends. Unknown band heights, or intervals
+longer than 64 rows, retain the neighbour's motion without measuring more rows.
+A carried view joining its measured slot resumes from its presented position
+on the old clock. Near its deadline, or when that would amplify travel more
+than threefold, it uses a short remaining transition. This preserves position
+at the join; it does not preserve velocity there.
+
 ## Decisions for unresolved behavior
 
 The following records implementation choices and remaining empirical limits.
@@ -589,10 +602,11 @@ of roughly 30–50 ms: `applyChanges` diffs the whole collection on main in
 26–40 ms and the demo rebuilds its item array in 2–6 ms. That cost belongs to
 collection diffing and scales with the row count; the chat's delete turn is
 about 11 ms. Under the fling and resize stress the collapse stays within
-0.001 point of both neighbours. Rows that mount below the screen while the
-list is still carrying rows up are placed at their final frames, up to the
-deleted height away from the row above, until the carry ends; the probe
-reports this separately as off-screen drift. The resize stress diffs the
+0.001 point of both neighbours. At that checkpoint, rows mounting below the
+screen during a collapse lacked its running motion; the probe reported that
+as off-screen drift. Mounted rows now inherit the surviving motion as described
+above. The full-swipe stress measurement has not been repeated for that change.
+The resize stress diffs the
 whole feed every 200 ms, so its own turns, not the swipe, set its p99.
 
 The Xcode app target is `UltraViewDemoApp`, distinct from the SwiftPM demo library.

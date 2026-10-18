@@ -165,7 +165,7 @@ public struct AnimationTrack: Sendable, Equatable {
 /// Each property is replaced independently; completion always compares generations.
 public struct ListAnimationModel: Sendable {
     enum PositionSource: Sendable, Hashable {
-        case height(String), layout
+        case height(String), layout, continuation
     }
     public struct Key: Sendable, Hashable {
         public var owner: AnimationOwner
@@ -179,6 +179,7 @@ public struct ListAnimationModel: Sendable {
             switch positionSource {
             case .height(let identity): "ultraview.list.sizePosition.\(identity)"
             case .layout: "ultraview.list.sizeLayout"
+            case .continuation: "ultraview.list.continuation"
             case nil: "ultraview.list.\(property.rawValue)"
             }
         }

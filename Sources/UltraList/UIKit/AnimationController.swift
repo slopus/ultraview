@@ -73,6 +73,13 @@ final class AnimationController {
     func value(_ owner: AnimationOwner, _ property: AnimatedProperty, at time: Double) -> Double {
         baseValue(owner, property, at: time) + (property == .positionY ? positionLayerValue(owner, at: time) : 0)
     }
+    func presentedDisplacement(_ owner: AnimationOwner, at time: Double) -> Double {
+        if let captured = snapshots[owner] { return captured }
+        if let layer = layers[owner], let presentation = layer.presentation() {
+            return presentation.position.y - layer.position.y
+        }
+        return value(owner, .positionY, at: time)
+    }
     func baseValue(_ owner: AnimationOwner, _ property: AnimatedProperty, at time: Double) -> Double {
         let key = ListAnimationModel.Key(owner, property)
         return model.tracks[key].map { trackValue(key, track: $0, at: time) } ?? model.baseValue(owner, property, at: time)
@@ -134,6 +141,48 @@ final class AnimationController {
             let origin = animationOrigin(key, generation: track.generation)
             guard time < (origin ?? track.startTime) + track.transition.duration else { return nil }
             return .init(identity: identity, track: track, origin: origin)
+        }
+    }
+    func positionLayer(_ owner: AnimationOwner, source: ListAnimationModel.PositionSource) -> PositionLayer? {
+        let key = ListAnimationModel.Key(owner, source: source)
+        guard let track = model.tracks[key] else { return nil }
+        return .init(source: source, track: track, origin: animationOrigin(key, generation: track.generation))
+    }
+    func clockOrigin(_ key: ListAnimationModel.Key, generation: UInt64) -> Double? {
+        animationOrigin(key, generation: generation)
+    }
+    func inheritPosition(_ owner: AnimationOwner, from reference: AnimationOwner) {
+        let key = ListAnimationModel.Key(reference, .positionY)
+        guard let track = model.tracks[key] else {
+            model.replace(owner, .positionY, from: 0, to: 0, at: now, transition: .immediate)
+            clear(owner, .positionY); origins.removeValue(forKey: .init(owner, .positionY))
+            return
+        }
+        let origin = animationOrigin(key, generation: track.generation) ?? track.startTime
+        if let inherited = model.replace(owner, .positionY, from: track.from, to: track.to,
+                                         at: track.startTime, transition: track.transition) {
+            install(owner, .positionY, track: inherited, explicitOrigin: origin)
+        }
+    }
+    func joinPosition(_ owner: AnimationOwner, shown: Double, target: Double, at time: Double) {
+        let key = ListAnimationModel.Key(owner, .positionY)
+        guard let track = model.tracks[key] else { return }
+        let origin = animationOrigin(key, generation: track.generation) ?? track.startTime
+        let current = track.value(at: track.startTime + time - origin)
+        let remaining = abs(track.from - track.to) > 1e-6 ? (current - track.to) / (track.from - track.to) : 0
+        let residual = shown - target - positionLayerValue(owner, at: time)
+        let from = remaining > 0 ? residual / remaining : 0
+        if remaining >= 0.15, abs(track.from) > 1e-6, abs(from) <= 3 * abs(track.from) {
+            if let joined = model.replace(owner, .positionY, from: from, to: 0,
+                                          at: track.startTime, transition: track.transition) {
+                install(owner, .positionY, track: joined, explicitOrigin: origin)
+            }
+        } else if abs(residual) > 1e-6 {
+            var transition = track.transition
+            transition.duration = max(origin + transition.duration - time, 0.2 * transition.duration)
+            replace(owner, .positionY, from: residual, to: 0, at: time, transition: transition)
+        } else {
+            replace(owner, .positionY, from: 0, to: 0, at: time, transition: .immediate)
         }
     }
     func setPositionLayers(_ owner: AnimationOwner, _ desired: [PositionLayer]) {

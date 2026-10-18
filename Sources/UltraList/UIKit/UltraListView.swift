@@ -122,6 +122,30 @@ public final class UltraListView: UltraScrollView {
     private var newGhostRanges: [UInt64: Range<Int>] = [:]
     private var passOldIdentities: [String] = []
     private var passDiff = ItemDiff(old: [String](), new: [])
+    private struct FollowerSnapshot {
+        var index: Int
+        var from: Double
+        var to: Double
+        var residual: Double
+    }
+    private struct MountContinuation {
+        var oldIDs: [String]
+        var oldIndices: [String: Int]
+        var oldBands: [String: ContinuationField.Band]
+        var newBands: [String: ContinuationField.Band]
+        var moved: Set<String>
+        var participants: Set<String>
+        var placements: [String: Double]
+        var geometry: SizePositionGeometry
+        var followers: [FollowerSnapshot]
+        var clock: AnimationTrack
+        var origin: Double?
+        var deadline: Double
+        var witness: ListAnimationModel.Key?
+        var witnessGeneration: UInt64?
+    }
+    private var mountContinuation: MountContinuation?
+    private var mountSizeGeometry: SizePositionGeometry?
     private var pinnedIndex: Int?
     let accessibilityCoordinator = ListAccessibility()
     public let swipeActions = ListSwipeController()
@@ -261,6 +285,7 @@ public final class UltraListView: UltraScrollView {
             return
         }
         passing = true; appliedPassCount &+= 1
+        resolveMountContinuation(at: animations.now)
         CATransaction.begin(); CATransaction.setDisableActions(true)
         animations.capturePositions()
         defer {
@@ -338,6 +363,7 @@ public final class UltraListView: UltraScrollView {
             engine.halt()
             for (identity, view) in views { view.visibleRectUpdated(nil); view.removeFromSuperview(); animations.unbind(.row(identity), removeModel: true) }
             views.removeAll(); settledWindow = .init(); origin = 0
+            mountContinuation = nil; mountSizeGeometry = nil
             for (id, view) in attachmentViews { view.removeFromSuperview(); animations.unbind(.attachment(id), removeModel: true) }
             attachmentViews.removeAll(); attachmentMaps.removeAll(); attachmentFlightSignatures.removeAll()
             for (id, carry) in carried { carry.view.removeFromSuperview(); animations.unbind(.row(id), removeModel: true) }
@@ -493,11 +519,15 @@ public final class UltraListView: UltraScrollView {
         }
         settledWindow = newWindow; origin = newOrigin
         views = measuredViews.filter { nextIDs.contains($0.key) }
+        var mountedCarryPositions: [String: Double] = [:]
         CATransaction.begin(); CATransaction.setDisableActions(true)
         container.frame = .init(x: 0, y: origin, width: viewport.width, height: max(1, settledWindow.height))
         for row in settledWindow.rows {
             let id = items[row.index].identity
             guard let view = views[id] else { continue }
+            if carried[id] != nil {
+                mountedCarryPositions[id] = view.layer.position.y + animations.presentedDisplacement(.row(id), at: time)
+            }
             carried.removeValue(forKey: id)
             carryGenerations.removeValue(forKey: id)
             if view.superview !== container { container.addSubview(view) }
@@ -562,6 +592,7 @@ public final class UltraListView: UltraScrollView {
                 && newWindow.height <= viewport.visibleHeight && pinnedIndex == nil,
             pinsAnchorBottom: holdsPinnedRow && target == nil && anchor == pinnedIndex,
             visibleHeight: viewport.visibleHeight)
+        mountSizeGeometry = sizeGeometry
         func positionLayers(index: Int, view: ListRowView) -> [AnimationController.PositionLayer] {
             let own = view.placementOffset(size: .init(width: viewport.contentWidth, height: 1)).y
                 - view.placementOffset(size: .init(width: viewport.contentWidth, height: 0)).y
@@ -590,7 +621,8 @@ public final class UltraListView: UltraScrollView {
                                                at: time, transition: transition)
         }
         for (id, layers) in followers {
-            animations.setPositionLayers(.row(id), layers + (layout.map { [$0] } ?? []))
+            let continuation = preservesMoveClock ? animations.positionLayer(.row(id), source: .continuation) : nil
+            animations.setPositionLayers(.row(id), layers + (layout.map { [$0] } ?? []) + (continuation.map { [$0] } ?? []))
         }
         for (id, next) in plans {
             guard let carry = carried[id] else { continue }
@@ -618,6 +650,38 @@ public final class UltraListView: UltraScrollView {
                 animations.replace(owner, .positionY, from: inferred - newY - animations.positionLayerValue(owner, at: time), to: 0, at: time, transition: transition)
             }
         }
+        if (transition.isImmediate && !preservesMoveClock) || isCarousel || fullReplace {
+            mountContinuation = nil
+        } else if mutatesRows || !diff.moves.isEmpty {
+            func band(_ row: WindowRow) -> ContinuationField.Band {
+                .init(height: row.height, top: row.reservedTop, bottom: row.reservedBottom)
+            }
+            let witness = animations.model.tracks.first { $0.value.startTime == time }
+            let participants = Set(views.keys).union(carried.keys)
+            let deadline = participants.reduce(time + transition.duration * animations.durationScale) {
+                max($0, animations.retentionDeadline(.row($1)))
+            }
+            mountContinuation = .init(oldIDs: oldIDs, oldIndices: oldLookup,
+                oldBands: Dictionary(uniqueKeysWithValues: oldWindow.rows.map { (oldItems[$0.index].identity, band($0)) }),
+                newBands: Dictionary(uniqueKeysWithValues: settledWindow.rows.map { (items[$0.index].identity, band($0)) }),
+                moved: Set(diff.moves.map { items[$0.new].identity }),
+                participants: participants,
+                placements: views.merging(carried.mapValues(\.view), uniquingKeysWith: { view, _ in view }).mapValues { view in
+                    view.placementOffset(size: .init(width: viewport.contentWidth, height: 1)).y
+                        - view.placementOffset(size: .init(width: viewport.contentWidth, height: 0)).y
+                }, geometry: sizeGeometry,
+                followers: heightMotions.compactMap { motion in
+                    guard let index = newLookup[motion.identity] else { return nil }
+                    let residual = animations.positionLayerValue(.init(source: .height(motion.identity),
+                        track: motion.track.residual(multipliedBy: 1), origin: motion.origin), at: time)
+                    return .init(index: index, from: motion.track.from, to: motion.track.to, residual: residual)
+                },
+                clock: .init(generation: 0, from: 0, to: 0, startTime: time, transition: transition.scaled(by: animations.durationScale)),
+                origin: nil,
+                deadline: deadline,
+                witness: witness?.key, witnessGeneration: witness?.value.generation)
+        }
+        if preservesMoveClock { mountMotion(previous: oldWindow, carriedPositions: mountedCarryPositions, at: time) }
         CATransaction.commit()
         sweepPreparations(force: newItems != nil || sizeChanged)
         renderAttachments()
@@ -728,6 +792,7 @@ public final class UltraListView: UltraScrollView {
             }
         }
         let delta = offset - previousOffset
+        let time = animations.now
         previousOffset = engine.offset; onUserScrollDelta?(delta, animations.now)
         let base = origin - settledWindow.minY, previous = settledWindow
         let flightOffsets = engine.coveredOffsets(horizon: 0.3)
@@ -753,19 +818,24 @@ public final class UltraListView: UltraScrollView {
         if previous != settledWindow {
             let current = Set(settledWindow.rows.map { items[$0.index].identity })
             for (id, view) in views where !current.contains(id) {
-                view.visibleRectUpdated(nil); view.removeFromSuperview(); animations.unbind(.row(id)); views.removeValue(forKey: id)
+                view.visibleRectUpdated(nil); animations.unbind(.row(id)); view.removeFromSuperview(); views.removeValue(forKey: id)
             }
             let nextOrigin = engineMode == .uiKit
                 ? base + settledWindow.minY
                 : engine.containerOrigin(height: settledWindow.height, top: settledWindow.range.lowerBound == 0, bottom: settledWindow.range.upperBound == items.count)
             let shift = nextOrigin - settledWindow.minY - base
+            let carryPositions = Dictionary(uniqueKeysWithValues: carried.map { identity, carry in
+                (identity, carry.view.layer.position.y + animations.presentedDisplacement(.row(identity), at: time))
+            })
             origin = nextOrigin; shiftDetached(by: shift)
             engine.shift(by: shift); previousOffset = engine.offset
             CATransaction.begin(); CATransaction.setDisableActions(true)
             container.frame = .init(x: 0, y: origin, width: viewport.width, height: max(1, settledWindow.height))
+            var mountedCarries: [String: Double] = [:]
             for row in settledWindow.rows {
                 let id = items[row.index].identity
                 guard let view = views[id] else { continue }
+                if let shown = carryPositions[id] { mountedCarries[id] = shown + shift }
                 carried.removeValue(forKey: id)
                 carryGenerations.removeValue(forKey: id)
                 if view.superview !== container { container.addSubview(view) }
@@ -775,6 +845,7 @@ public final class UltraListView: UltraScrollView {
                 view.readinessObserver = { [weak self] in self?.accessibilityCoordinator.reconcile() }
                 if !previous.range.contains(row.index) { animations.seed(.row(id), width: viewport.contentWidth, height: row.height) }
             }
+            mountMotion(previous: previous, carriedPositions: mountedCarries, at: time)
             declaredEdges = settledWindow.edges(origin: origin, count: items.count, viewport: viewport, pinnedIndex: pinnedIndex)
             engine.setEdges(declaredEdges); resolveAttachments(transition: .immediate)
             CATransaction.commit()
@@ -785,6 +856,89 @@ public final class UltraListView: UltraScrollView {
         }
         sweepPreparations()
         renderAttachments(); reportVisibility(); super.handleScroll(engine.offset)
+    }
+
+    private func resolveMountContinuation(at time: Double) {
+        guard var record = mountContinuation else { return }
+        if record.origin == nil, let witness = record.witness, let generation = record.witnessGeneration {
+            record.origin = animations.clockOrigin(witness, generation: generation)
+        }
+        let deadline = max(record.deadline, (record.origin ?? record.clock.startTime) + record.clock.transition.duration)
+        mountContinuation = time < deadline ? record : nil
+    }
+
+    private func mountMotion(previous: ListWindow, carriedPositions: [String: Double], at time: Double) {
+        resolveMountContinuation(at: time)
+        let heightMotions = animations.heightMotions(at: time), layout = animations.layoutPosition(at: time)
+        let geometry = mountSizeGeometry
+        func placement(_ view: ListRowView?) -> Double {
+            guard let view else { return 0 }
+            return view.placementOffset(size: .init(width: viewport.contentWidth, height: 1)).y
+                - view.placementOffset(size: .init(width: viewport.contentWidth, height: 0)).y
+        }
+        func followers(_ row: WindowRow, view: ListRowView) -> [AnimationController.PositionLayer] {
+            let own = placement(view)
+            let heights = heightMotions.compactMap { motion -> AnimationController.PositionLayer? in
+                guard let geometry, let source = identityIndices[motion.identity] else { return nil }
+                let coefficient = geometry.coefficient(source: source, row: row.index,
+                    from: motion.track.from, to: motion.track.to, ownPlacement: own)
+                guard abs(coefficient) > 1e-6 else { return nil }
+                return .init(source: .height(motion.identity), track: motion.track.residual(multipliedBy: coefficient), origin: motion.origin)
+            }
+            return heights + (layout.map { [$0] } ?? [])
+        }
+        let bands = Dictionary(uniqueKeysWithValues: settledWindow.rows.map {
+            (items[$0.index].identity, ContinuationField.Band(height: $0.height, top: $0.reservedTop, bottom: $0.reservedBottom))
+        })
+        var witnesses = previous.rows.map(\.index)
+        // Work from the old window outward, so a new row can become the next
+        // row's witness. A large scroll can still use the unbound edge's model.
+        let rows = settledWindow.rows.filter { $0.index >= previous.range.upperBound }
+            + settledWindow.rows.filter { $0.index < previous.range.lowerBound }.reversed()
+        for row in rows {
+            let identity = items[row.index].identity, owner = AnimationOwner.row(identity)
+            guard let view = views[identity] else { continue }
+            var layers = followers(row, view: view)
+            if let record = mountContinuation, record.participants.contains(identity) {
+                if let continuation = animations.positionLayer(owner, source: .continuation) { layers.append(continuation) }
+            } else if let record = mountContinuation, !record.moved.contains(identity),
+                      let reference = witnesses.filter({
+                          items.indices.contains($0) && record.oldIndices[items[$0].identity] != nil && !record.moved.contains(items[$0].identity)
+                      }).min(by: { abs($0 - row.index) < abs($1 - row.index) }) {
+                let referenceID = items[reference].identity, referenceOwner = AnimationOwner.row(referenceID)
+                animations.inheritPosition(owner, from: referenceOwner)
+                let own = placement(view), referenceOwn = record.placements[referenceID] ?? placement(views[referenceID] ?? carried[referenceID]?.view)
+                var difference = 0.0
+                if let oldRow = record.oldIndices[identity], let oldReference = record.oldIndices[referenceID] {
+                    difference = ContinuationField.delta(old: record.oldIDs, new: identities,
+                        oldReference: oldReference, oldRow: oldRow, newReference: reference, newRow: row.index,
+                        oldBand: { record.oldBands[$0] ?? record.newBands[$0] ?? bands[$0] },
+                        newBand: { record.newBands[$0] ?? record.oldBands[$0] ?? bands[$0] },
+                        referencePlacement: referenceOwn, rowPlacement: own) ?? 0
+                    // Only the followers that existed in the structural pass
+                    // enter its continuation. Later resizes keep their clocks.
+                    difference -= record.followers.reduce(0) { sum, source in
+                        let rowCoefficient = record.geometry.coefficient(source: source.index, row: row.index,
+                            from: source.from, to: source.to, ownPlacement: own)
+                        let referenceCoefficient = record.geometry.coefficient(source: source.index, row: reference,
+                            from: source.from, to: source.to, ownPlacement: referenceOwn)
+                        return sum + (rowCoefficient - referenceCoefficient) * source.residual
+                    }
+                }
+                let inherited = animations.positionLayer(referenceOwner, source: .continuation)?.track.from ?? 0
+                if abs(inherited + difference) > 1e-6 {
+                    var track = record.clock; track.from = inherited + difference
+                    layers.append(.init(source: .continuation, track: track, origin: record.origin ?? track.startTime))
+                }
+            }
+            animations.setPositionLayers(owner, layers)
+            if let shown = carriedPositions[identity] {
+                animations.joinPosition(owner, shown: shown, target: origin + view.layer.position.y, at: time)
+            }
+            mountContinuation?.participants.insert(identity)
+            mountContinuation?.placements[identity] = placement(view)
+            witnesses.append(row.index)
+        }
     }
     private static func mergePreparedMutations(_ old: PreparedMutation, _ new: PreparedMutation) -> PreparedMutation {
         var result = new

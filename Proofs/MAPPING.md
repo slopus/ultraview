@@ -754,6 +754,34 @@ window (the anchor staying put, the pinned boundary) is the choice's, which
 the Swift's intent. UIKit playback (that installed clocks are the model's)
 and generation callbacks are hypotheses, checked by the tests above.
 
+### Mount continuation review based on `926e692`
+
+The follow-up adds `PositionSource.continuation` to the same additive sum.
+The `ListAnimationModel.value`, `positionLayerValue`, generation replacement
+and `AnimationTrack.residual` rows above were rechecked: their algorithms are
+unchanged. `superpose` still describes the sum of independent clocks, and
+`composed_seam` still requires the stated relation between adjacent own moves.
+Neither theorem establishes that the mount code chooses those moves correctly.
+
+`ContinuationField.delta` (SHA-256
+`d5bd0e643ab027a4ac14f2a7a5d2ee048008276e132939954ad44ac59e97ca39`)
+subtracts old and new band prefixes, including reserves and placement offsets.
+It visits at most 64 entries in either order and returns no estimate if a
+necessary height is unknown. Its exact-value Linux tests cover both directions,
+repeated index differences across move boundaries, reserves, placement, and
+unknown or distant bands. This helper has no Lean refinement proof.
+
+`UltraListView.mountMotion` saves the latest `SizePositionGeometry` and keeps
+the structural pass's height contributions frozen separately. Only height
+clocks present in that pass enter its continuation delta; later resizes remain
+independent. `AnimationController.inheritPosition` copies an own track and its
+origin. The saved record outlives a short structural pass if its witnesses still
+carry an older motion. A carried view's join solves for a new start on the same clock from its
+presented position; a small remaining fraction or more than threefold travel
+uses a fresh transition. This is position continuity, not a velocity guarantee.
+Capturing the origin before detaching its layer is part of the UIKit contract.
+These installation, fallback and bounded-history choices remain outside Lean.
+
 ## Pending scroll targets and readiness holds
 
 `Proofs/UltraProofs/List/Readiness.lean` models how `applyChanges` keeps a
