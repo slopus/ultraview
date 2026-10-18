@@ -38,6 +38,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate, UITabBarControlle
         window.rootViewController = tabs
         window.makeKeyAndVisible()
         self.window = window
+        ListVideoScenario.startIfRequested(window: window)
 
         // Every tab's host fills the same safe area. Once the first one is
         // laid out, the others are prepared at its size, off the main

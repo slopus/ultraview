@@ -65,13 +65,21 @@ Tests/
   UltraLayoutTests, UltraCoreTests, UltraListTests   run on Linux and in the
                                                      simulator
   UltraViewUIKitTests                                simulator only
+  UltraViewVideoTests                                screen-recorded touch
+                                                     scenarios; only the
+                                                     UltraViewVideo scheme
 App/Info.plist    the demo's Info.plist (xtool and Xcode)
+Tools/Video/      recording and frame analysis of the demo (its README.md)
 ```
 
 Dependencies only point down: UltraLayout ← UltraCore ← UltraList ←
 UltraView ← UltraViewDemo. A new test directory needs a `.testTarget` in
 Package.swift and a target in project.yml (template `PackageTests`, plus the
-`UltraViewDemo` scheme's test list).
+`UltraViewDemo` scheme's test list). UltraViewVideoTests stays out of that
+list: it only records, and runs from Tools/Video/record.py.
+
+Recordings and frame dumps never go into the repo; Tools/Video writes them
+under `.context/`.
 
 ## Yoga
 

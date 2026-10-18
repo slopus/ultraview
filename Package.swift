@@ -76,6 +76,7 @@ let package = Package(
             dependencies: ["UltraView"]
         ),
         .testTarget(name: "UltraListInteractionTests", dependencies: ["UltraView"]),
+        .testTarget(name: "UltraViewVideoTests", dependencies: ["UltraView"]),
         .testTarget(name: "UltraViewDemoTests", dependencies: ["UltraViewDemo", "UltraView"]),
         .testTarget(name: "UltraKeyboardRuntimeTests", dependencies: ["UltraViewDemo", "UltraView"]),
         .testTarget(

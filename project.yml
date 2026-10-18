@@ -86,6 +86,21 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         PRODUCT_BUNDLE_IDENTIFIER: dev.ultraview.tests.UltraListInteractionTests
         TEST_TARGET_NAME: UltraViewDemoApp
+  # Screen-recorded touch scenarios (Tools/Video/README.md). Only the
+  # UltraViewVideo scheme builds them; without the video runner's
+  # environment they skip.
+  UltraViewVideoTests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: Tests/UltraViewVideoTests
+    dependencies:
+      - target: UltraViewDemoApp
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: dev.ultraview.tests.UltraViewVideoTests
+        TEST_TARGET_NAME: UltraViewDemoApp
   UltraViewDemoTests:
     templates: [PackageTests]
     sources:
@@ -161,3 +176,13 @@ schemes:
       config: Release
       targets:
         - name: UltraViewPerformanceTests
+  # Release, as the recordings should show the shipped code.
+  UltraViewVideo:
+    build:
+      targets:
+        UltraViewDemoApp: all
+        UltraViewVideoTests: [test]
+    test:
+      config: Release
+      targets:
+        - name: UltraViewVideoTests
