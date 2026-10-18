@@ -317,9 +317,10 @@ final class ListVideoTouchTests: XCTestCase {
     }
 
     /// With the keyboard up: reveal Reply on the newest message and tap it,
-    /// then delete the next message with a full swipe.
+    /// then delete the next message with a full swipe. On message cards: the
+    /// chat's bubbles are mostly shorter than the rows it swipes.
     @MainActor func testVideoChatSwipes() throws {
-        try launch("chat", extra: keyboardProbe + ["-listSwipeProbe", "YES"], seconds: 14)
+        try launch("chat", extra: keyboardProbe + ["-listSwipeProbe", "YES", "-chatCards", "YES"], seconds: 14)
         let composer = openKeyboard()
         let top = composer.frame.minY - 12
         func visible() throws -> [CGRect] {
