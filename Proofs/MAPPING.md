@@ -498,10 +498,10 @@ came to show the row soon, is drawn ahead later through
 
 | Model (`Proofs/UltraProofs/List/Hosts.lean`) | Swift |
 | --- | --- |
-| `S.stage` | `PreparedNodeContent.drawAhead()` (NodeRow.swift:36-53) makes a host only when `host ?? staged` is `nil` (:42-45): only while `host` reads `nil` (no view keeps a host of the root, so the root has no renderer: a host's renderer detaches when it deallocates, and `host` is weak), and only when nothing is staged; a `NodeHostView` for the root, kept in `staged`. When a kept or staged host exists and its content is incomplete (`isContentComplete` false), it draws into that host (:38-41) and makes none: no model operation (see "Cold rows and target ownership" below). Called from `NodeRow.prepare` (:113-129) for a live identity, an appearance still to show, or `showsSoon` (:123-126); from `UltraListView.showSoon` (UltraListView.swift:1491-1494) for a stored preparation the list will show soon, called for a mutation's nearest requests (:1419), a request with the hint (:1511) and prepared rows ahead of a scroll, queued by the scroll turn (:1585-1586, `drawAheadLater` :1495-1499) and drawn about a millisecond's worth per later main-queue turn (`drainDrawAhead` :1501-1505); before a running preparation is stored, when the list came to show it soon meanwhile (:1519-1521), which stores only while its ticket is current (:1523-1530); and from `awaitPreparedDisplay` (:1445-1460) for a stored preparation of a projected on-screen row whose content is not display-prepared |
+| `S.stage` | `PreparedNodeContent.drawAhead()` (NodeRow.swift:36-53) makes a host only when `host ?? staged` is `nil` (:42-45): only while `host` reads `nil` (no view keeps a host of the root, so the root has no renderer: a host's renderer detaches when it deallocates, and `host` is weak), and only when nothing is staged; a `NodeHostView` for the root, kept in `staged`. When a kept or staged host exists and its content is incomplete (`isContentComplete` false), it draws into that host (:38-41) and makes none: no model operation (see "Cold rows and target ownership" below). Called from `NodeRow.prepare` (:113-129) for a live identity, an appearance still to show, or `showsSoon` (:123-126); from `UltraListView.showSoon` (UltraListView.swift:1658-1661) for a stored preparation the list will show soon, called for a mutation's nearest requests, or only for the physical rows an identity target's projection requires (:1572-1573), a request with the hint (:1678) and prepared rows ahead of a scroll, queued by the scroll turn (:1756-1757, `drawAheadLater` :1662-1666) and drawn about a millisecond's worth per later main-queue turn (`drainDrawAhead` :1668-1672); before a running preparation is stored, when the list came to show it soon meanwhile (:1686-1688), which stores only while its ticket is current (:1690-1697); and from `awaitPreparedDisplay` (:1611-1626, also through `awaitProjectedDisplay` :1601-1609) for a stored preparation of a projected on-screen row whose content is not display-prepared |
 | `S.start` | `NodeRowView.start` (NodeRow.swift:251) with `checkout(owner:)` (:54-65): the live host, else `staged`, else a new `NodeHostView` (:60), and `staged = nil` (:62). Under `accept`'s and the queued candidate's guard (:288-298, :246-249) |
 | `S.reveal` | `showPreparedHost(_:)` (NodeRow.swift:190), with the pass-end wait (:215-221) and `passDidEnd` (:303-308) |
-| `S.drop`, `sweep_never_drops_hosted` | `hasLiveHost` false at UltraListView.swift:1535 and in `sweepPreparations` (:1604-1616) |
+| `S.drop`, `sweep_never_drops_hosted` | `hasLiveHost` false at UltraListView.swift:1702 and in `sweepPreparations` (:1775-1787) |
 
 A staging after the preparation is stored is a separate step in the model
 (the model allows `stage` between any others); a `drawAhead` that finds a
@@ -524,26 +524,26 @@ again, and `one_host` holds as before. The idle turn is a timer and
 `drawAhead` after the premount finds the host kept and makes no host.
 
 Integration preserves the edge-target and pending-item retention fix from
-`1a4e486`: `atEdge` is now UltraListView.swift:938, `recordPendingTarget`
-is now `recordPendingIntent` (:951-955, see below), and the unchanged
-retention predicate is at :1617-1629. It
+`1a4e486`: `atEdge` is now UltraListView.swift:981, `recordPendingTarget`
+is now `recordPendingIntent` (:994-998, see below), and the unchanged
+retention predicate is at :1788-1800. It
 keeps pending-item preparations in addition to the existing band and live
 hosts. The edge regression file is unchanged (SHA-256 `63a61cd7…`), including
 all 12 arriving-edge cases. The keyboard controller, gesture, composer and
 app settings are unchanged from `f5124f8`.
 
 The premount and collapse mappings above retain their historical citations.
-The current `departureEdge` is at UltraListView.swift:284-287. NodeRow.swift
+The current `departureEdge` is at UltraListView.swift:302-305. NodeRow.swift
 lines from :106 on at `f478507` move by 16 and then, with the cold-row
 change, those from :46 on at `02bfb32` by 8, so `showPreparedHost`'s
 appearance condition the premount section cites (:178-179) is at :202-203.
 Current SHA-256, with the uncommitted cold-row change below:
 `UltraListView.swift`
-`92988bcb9d921fc449c78b6d77440a5666cd15cc997a76aa3f4f7d681e270305`,
+`7bdc426ab87598352312a9bf87fb50ca061e31a9cec516c694637ba90500519d`,
 `NodeRow.swift`
 `17b07d550e21e9108759a8e64c3c785b8af3463f58a39c2cfd2dac7a97fa408a`,
 `ListRow.swift`
-`cdd19b1742d17b30d72f9e11fa0f9667ea362ae708765bf6883f25fb3cf88fe6`,
+`749c1d9a12ece7acc6ed96413f0468f8125515d2dc86f7075e3ffb76a4ad1fc3`,
 and the new `WindowProjection.swift`
 `12c2ec2bad4a59aa5566c0450d049500f96309efe245502d95df53439a86c9ee`.
 At `02bfb32` the first three were `6c4d84a4481fe805ad035834f6690fd22690699a4b2504c08e882d44c10e52d7`,
@@ -594,16 +594,17 @@ new condition and is unchanged, so the `Readiness` rows (`Out.empty`,
 target pending, a change of size, insets or both keeps the rows and the
 target, which applies once the measurements finish. An explicit empty
 collection still cancels the first preparation. In the current source the
-reset is at UltraListView.swift:535-569, its pending-target handling at
-:536-543, the queue guard at :560-567 (it now also cancels the display draws
-below, :565-566), and the explicit empty collection's `removeAll()` at :434.
+reset is at UltraListView.swift:557-594, its pending-target handling at
+:558-567, the queue guard at :584-592 (it now also cancels the display draws
+below, :589-590), and the explicit empty collection's `removeAll()` at :455.
 
 **Cold rows and target ownership (uncommitted, on `02bfb32`).** Three
 changes, at the SHA-256s above; line numbers in this paragraph and the next
 are current. No Lean definition or theorem changes, none of this is a new
 theorem, and none of it is shown to refine the models. Cold cached content,
-display readiness, the projected window and the input generation are
-integration outside the proofs, checked at runtime.
+display readiness, the projected windows, the input generation and the
+transfer of a held target into the queue are integration outside the
+proofs, checked at runtime.
 
 - *Cold cached content, awaited before a pass.* A stored height does not
   mean its content is still drawn: the host that drew it can be released.
@@ -611,48 +612,108 @@ integration outside the proofs, checked at runtime.
   `isDisplayPrepared`; a node row's content is prepared when its kept or
   staged host has complete content (NodeRow.swift:32). The drain's existing
   requests are unchanged: the same `min(80, max(24, loaded rows + 8))` band
-  around the anchor, and `showSoon` only for its nearest `rowsShownSoon`
-  (:1418-1420). Once that band's measurements are in, the drain projects a
-  queued entry's window before `takeReady` (`projectedPreparations`,
-  :1328-1392; joined at :1407-1415):
-  - It projects only a mutation that keeps the same identities in the same
+  around the anchor, and `showSoon` for its nearest `rowsShownSoon`
+  (:1571-1574). An entry whose eligible intent opts into an identity,
+  without a relative distance, instead shows soon only the keys its
+  projection requires on the physical screen (:1551-1552, :1561, :1572), so
+  no band row off that screen is drawn ahead for it, and nothing is until a
+  projection names those keys. Once that band's measurements are in, the
+  drain projects a queued entry's window before `takeReady`
+  (`projectedPreparations`, :1393-1400; joined at :1557-1569). An eligible intent whose target opts
+  into an identity, without a relative distance, takes the target
+  projection below; any other entry takes the preserved projection, which
+  itself declines an eligible intent, and so does an identity entry whose
+  target projection declines at its guards.
+  - *Preserved projection* (`projectedPreservedPreparations`, :1468-1536).
+    It projects only a mutation that keeps the same identities in the same
     order and the same pinned row, with no distance, while rows are loaded
     and no items wait for a window, and whose effective size and insets
     equal the current viewport's. Neither the mutation's intent, rebased
     onto its items, nor the held intent, rebased onto them, may be eligible,
-    and neither may carry a relative distance (:1329-1340). A cancelled
-    intent does not stop the projection: as in the pass that rejects it
-    (:486), the projection keeps the visible content
-    (`.preserveVisibleContent`, :1346).
-  - It brings the engine's flight up to the current time (`engine.sync()`,
-    :1342), as a pass does (:491) before it reads the offset (:494), then
-    reads the offset, origin and settled window (:1343-1345).
-  - It builds the window the pass would build without a target through the
-    same helpers as the pass (WindowProjection.swift):
-    `PreservedWindowAnchor.survivor`, its initializer and `window` (pass
-    :571-581 and :607; preflight :1347-1357), and `WindowPlacement` for
-    the origin, edges and destination (pass :630-635; preflight
-    :1379-1383).
-  - Asynchronous rows use their stored heights. A row without one joins the
-    entry's waiting keys and is requested. A synchronous row uses its loaded
-    height only while it is unchanged and in the loaded window. A row it
-    cannot size that way, or whose measurement is unavailable, abandons the
-    projection, and the entry waits for nothing more (:1357-1377).
-  - The keys it requires are the asynchronous rows on the physical screen at
-    the destination, including those behind the insets
-    (`WindowPlacement.physicalRows`), except rows already on screen with a
-    display-ready view (:1384-1390). For each whose stored content is not
-    display-prepared, `awaitPreparedDisplay` (:1445-1460) starts one
-    `drawAhead()` under a ticket (`preparationDraws`, :69), unless one is
-    running, and the key joins the waiting keys. When the draw ends the drain
-    runs again, and its `replaceWaiting` (:1416) drops the key once the
+    and neither may carry a relative distance (:1471-1482). A cancelled
+    intent does not stop it: as in the pass that rejects it (:508), it keeps
+    the visible content (`.preserveVisibleContent`, :1488). It brings the
+    engine's flight up to the current time (`engine.sync()`, :1484), as a
+    pass does (:513) before it reads the offset (:516), then reads the
+    offset, origin and settled window (:1485-1487). It builds the window the
+    pass would build without a target through the same helpers as the pass
+    (WindowProjection.swift): `PreservedWindowAnchor.survivor`, its
+    initializer and `window` (pass :596-606 and :641; preflight
+    :1489-1500), and `WindowPlacement` for the origin, edges and destination
+    (pass :665-669; preflight :1523-1527). Asynchronous rows use their
+    stored heights; a row without one joins the entry's waiting keys and is
+    requested. A synchronous row uses its loaded height only while it is
+    unchanged and in the loaded window. A row it cannot size that way, or
+    whose measurement is unavailable, abandons the projection, and the
+    entry waits for nothing more (:1500-1521). The keys it requires are the
+    asynchronous rows on the physical screen at the destination, including
+    those behind the insets (`WindowPlacement.physicalRows`), except rows
+    already on screen with a display-ready view (:1528-1534).
+  - *Target projection* (`projectedIdentityPreparations`, :1402-1466), for a
+    target that opted into `ListScrollTarget.identity`. Its guards are rows
+    loaded, a non-empty collection and the current viewport (:1405-1410);
+    it syncs the engine before reading the offset (:1412-1414). It builds
+    the target's window with `ListWindow.build` around the target's rebased
+    index and the new pinned row (:1415-1416, :1445-1452), and places it
+    with `WindowPlacement` as a targeted window, displacing only when a
+    distance is set (:1457-1462). Asynchronous rows use stored heights, and a missing one
+    joins the waiting keys. A synchronous row uses its loaded height while it
+    is unchanged, loaded and not dirty, or the height a display hold for the
+    same gate recorded for it. The loaded height counts only while the
+    settled window was built at the current content width and measurement
+    environment (`settledValueGeometry`, :53, set only when a pass commits
+    its window, :746, cleared at the reset, :571, and checked at :1431), so
+    a geometry pass that did not commit its window cannot lend its old
+    heights. Otherwise the projection stops there: no key
+    is required, and only the missing keys found so far wait, with the
+    resolution if one was made (:1421-1444, :1455). The rows past the
+    window's uncovered edges are measured too (:1463). Every row on the
+    physical screen at the destination is required (:1464-1465). The
+    target's resolver is called with no view, and the projection records
+    its result with the generation, gate, anchor key, height and viewport
+    (`TargetResolution`, :121-128; :1447-1450). The drain hands that
+    resolution to the pass that applies the entry (:1545, :1558, :1589), and
+    the pass reuses its offset only while all five match (:630-634);
+    otherwise it calls the resolver again, with no view for an identity
+    target (:636). ListRow.swift:146-151 documents the resolver contract.
+  - For each required key whose stored content is not display-prepared,
+    `awaitPreparedDisplay` (:1611-1626) starts one `drawAhead()` under a
+    ticket (`preparationDraws`, :70), unless one is running, and the key
+    joins the waiting keys. For a target projection, `awaitProjectedDisplay`
+    (:1601-1609) also waits on a row view a display hold for the same gate
+    staged and that is not yet ready: its `displayWaitObserver` runs the
+    drain while the queue still owns the gate. When a draw ends the drain
+    runs again, and its `replaceWaiting` (:1570) drops the key once the
     content is prepared. Display keys never go through `complete(_:)`. The
-    reset (:565-566) and a sweep that drops the preparation (:1613) cancel
+    reset (:589-590) and a sweep that drops the preparation (:1784) cancel
     the draw.
-  - The projection applies nothing: while the entry waits, the live items,
-    views, dirty marks and window stay as they were. Besides syncing the
-    engine's flight to the clock, it only requests measurements and draws
-    content.
+  - Neither projection applies anything: while the entry waits, the live
+    items, views, dirty marks and window stay as they were. Besides syncing
+    the engine's flight to the clock, they only request measurements, draw
+    content, mark the keys they read as retained (below) and, for a target
+    projection, call the resolver.
+  - Every row either projection sizes or tries to size marks its key
+    retained before anything else (`PreparationProjection.retained`, :132;
+    :1420-1423, :1499-1502): stored and missing heights, synchronous rows,
+    including one that stops the target projection, and the target
+    projection's uncovered edge rows. Every result either projection
+    returns carries the set (a preserved projection that gives up returns
+    none, as before, :1521), and the drain adds it to `preparationKeys`
+    (:1559), whose keys `retainsPreparation` keeps (:1789) until the next
+    drain recomputes them (:1543).
+    So a waiting entry keeps the stored heights and preparations of its
+    whole projected window, preload margin included, instead of a sweep
+    forgetting margin heights that the next drain's projection then
+    requests again, which could keep the entry waiting for good. Retention
+    only: no key is requested, drawn or required because of it, and the
+    physically required keys are as above. The `Preparation` hypothesis
+    that awaited keys eventually complete failed for that sequence, outside
+    the model; this restores it for that sequence only, and nothing here
+    proves that no other path forgets an awaited key.
+  - The rows a drain requests are remembered with their entry's generation
+    (`activePreparationItems`, :153; :1554, :1565) until the queue empties
+    or the list resets (:1599, :591), so a failed measurement can be retried
+    for them (below).
   - `Hosts`: `drawAhead()` makes a host only under `S.stage`'s guard,
     unchanged. Drawing into an existing incomplete host makes none; it is
     content, which the model leaves out like the snapshot's content.
@@ -663,88 +724,109 @@ integration outside the proofs, checked at runtime.
     hypothesis now covers drawing as well as measuring, and it remains a
     hypothesis. A preparation whose host is released again becomes cold and
     is awaited again, and each drain projects again, so a newly uncovered
-    frontier row joins the wait. Nothing here proves that the projection
-    settles or that its content stays drawn. That the projected window is
-    the window the pass then builds is a runtime expectation, not a theorem:
-    the pass can still differ if the state changes between the drain and the
+    frontier row joins the wait. Nothing here proves that a projection
+    settles or that its content stays drawn. That a projected window is the
+    window the pass then builds is a runtime expectation, not a theorem: the
+    pass can still differ if the state changes between the drain and the
     pass.
 - *A hold over the physical viewport.* The readiness hold (`Out.hold`) now
   applies to any explicit target in a pass that keeps the collection, size
   and insets (`target != nil, !changesCollection, !sizeChanged,
-  !insetChanged`, :644), not only to a jump that shares no row and
+  !insetChanged`, :679), not only to a jump that shares no row and
   displaces nothing. Its coverage and readiness checks use
-  `WindowPlacement.physicalRows` and `uncoveredIndices` (:645), so the whole
-  viewport from 0 to its height, not the area inside the insets. The hold's
-  observer is an internal `ListRowView.displayWaitObserver` slot
-  (ListRow.swift:81, called by `reportDisplayReady` at :83; set at
-  :662-670), separate from the accessibility `readinessObserver` that
-  mounted rows and `reportVisibility` set (:720, :1088, :1642), so neither
-  overwrites the other. `clearPendingDisplayViews` (:957-964) clears every
-  slot and starts a new hold generation; it runs on a drag that cancels the
-  held target (:294), on a rejected intent (:485), at a reset (:544) and a
-  new hold (:656), after the hold check in a pass that goes on (:674), and
-  at the end of the pass (:899).
+  `WindowPlacement.physicalRows` and `uncoveredIndices` (:680), so the whole
+  viewport from 0 to its height, not the area inside the insets. The hold
+  records its intent's gate and the heights of the rows it staged
+  (:693-697). Its observer is an internal `ListRowView.displayWaitObserver`
+  slot (ListRow.swift:81, called by `reportDisplayReady` at :83; set at
+  :702-711), separate from the accessibility `readinessObserver` that
+  mounted rows and `reportVisibility` set (:763, :1155, :1813), so neither
+  overwrites the other. When the check passes it runs the drain if a queued
+  entry owns the gate, and otherwise the held retry (:708-709).
+  `clearPendingDisplayViews` (:1022-1031) clears every slot and starts a
+  new hold generation. Unless forced, it leaves a hold alone while a queued
+  entry's eligible identity intent owns its gate (`preparationOwns`,
+  :1000-1005; :1023). It runs on a drag that cancels the held target (:313),
+  on a rejected intent (:507), forced at a reset (:567) and a new hold
+  (:691), after the hold check in a pass that goes on (:716, forced when
+  the pass has a target), and at the end of the pass (:942).
   `Readiness` takes how a call ends as an input, so its theorems hold for
   these holds as they are. The destination predicate stays outside it.
 - *Target ownership.* An explicit target is an intent whose gate all its
-  copies share (:101-117); a gate refuses for good once the input
+  copies share (:104-120); a gate refuses for good once the input
   generation differs from its own or something cancels it. The public
-  `applyChanges` (:388-408) alone makes a gate, records the input
+  `applyChanges` (:407-427) alone makes a gate, records the input
   generation in it, and cancels the previous call's gate
-  (`latestScrollGate`, :80), scheduling a drain. A target without an edge
-  follows a row only when it names one (:398-400): its own `identity`, or,
+  (`latestScrollGate`, :81), scheduling a drain. A target without an edge
+  follows a row only when it names one (:417-419): its own `identity`, or,
   when the call carries items, the identity of the row at its index in
-  them. `ListScrollTarget.identity` (ListRow.swift:144-146, set by either
-  initializer, :153-158) is the change's one public API addition, an opt-in
+  them. `ListScrollTarget.identity` (ListRow.swift:144-152, set by either
+  initializer, :159-164) is the change's one public API addition, an opt-in
   that defaults to `nil`. A standalone target without one keeps its numeric
-  index. An edge target records none and is resolved by `atEdge`.
-  - `handleDragBegin` (:288-304) advances the generation. A held intent it
+  index. An edge target records none and is resolved by `atEdge`. Only a
+  target that sets `identity` itself takes the target projection, has its
+  display hold owned by the queue, or is transferred into the queue.
+  - `handleDragBegin` (:307-323) advances the generation. A held intent it
     makes ineligible is cleared with its closure, and
     `clearPendingDisplayViews` runs. A retry that carried a relative
     distance runs once more without its target; otherwise, if a retry was
     held, a pass with `.preserveVisibleContent` and no target runs on the
     next turn. A drain is scheduled either way.
   - Each pass takes `intent ?? pendingIntent` through `eligibleIntent`
-    (:469-487, :944-947), before it halts the engine (:490). An eligible
+    (:491-509, :987-990), before it halts the engine (:512). An eligible
     intent with an identity is rebased onto the collection the pass is for
-    (`newItems ?? pendingItems ?? items`, :470): its index becomes its
+    (`newItems ?? pendingItems ?? items`, :492): its index becomes its
     identity's index there, and if the identity is gone its gate is
-    cancelled for good (:473-476). One without an identity keeps its index
-    in that collection. A cancelled older candidate does not erase a newer held
-    intent, which is rebased and cancelled the same way (:477-483). A
+    cancelled for good (:495-498). One without an identity keeps its index
+    in that collection. A cancelled older candidate does not erase a newer
+    held intent, which is rebased and cancelled the same way (:499-505). A
     rejected intent clears the pending target and its closure, and the pass
-    keeps the visible content (`.preserveVisibleContent`, :486). The
+    keeps the visible content (`.preserveVisibleContent`, :508). The
     relative distance (the call's and the one recorded with the held
     intent) is kept either way; the intent's own distance goes with it
-    (:471, :489).
-  - `pendingTarget` is the eligible held intent's target (:82), and `pick`
-    is now `scrollTo.map(atEdge)` (:526), with `scrollTo` already that
-    intent. `recordPendingIntent` (:951-955) keeps the call's relative
+    (:493, :511).
+  - `pendingTarget` is the eligible held intent's target (:83), and `pick`
+    is now `scrollTo.map(atEdge)` (:548), with `scrollTo` already that
+    intent. `recordPendingIntent` (:994-998) keeps the call's relative
     distance apart from the target instead of folding it into `resolve`.
   - Queued mutations carry the raw intent: `mergePreparedMutations`
-    (:1287-1299); `preparedIntent` (:1300-1302), the intent rebased onto
-    the mutation's items by `rebasedIntent` (:1303-1310), `nil` when its
+    (:1354-1366); `preparedIntent` (:1367-1369), the intent rebased onto
+    the mutation's items by `rebasedIntent` (:1370-1377), `nil` when its
     identity is gone, as `preparedTarget` was; `requestedPreparations`,
-    which anchors on that intent only while it is eligible (:1311-1325);
-    and the drain's `updateNewest` (:1424-1432). The drain hands the pass
-    the raw intent (:1435), so the pass sees a missing identity and cancels
-    the gate.
+    which anchors on that intent only while it is eligible (:1378-1392);
+    and the drain's `updateNewest` (:1578-1587), which carries the intent
+    to a successor without its relative distance (:1583). The drain hands
+    the pass the raw intent (:1591), so the pass sees a missing identity and
+    cancels the gate.
+  - A held identity intent moves into the queue
+    (`promotePendingIdentityIntent`, :1007-1020): while no items wait for a
+    window and a mutation is queued, an eligible held intent that opted into
+    an identity and has no relative distance becomes the newest queued
+    mutation's intent, unless that mutation carries another eligible
+    intent, and `pendingTarget` and `pendingScroll` are cleared. It runs
+    after a submission (:463), at the zero-viewport and empty-window guards
+    (:566, :657), after a new hold (:712) and on each drain turn (:1542).
+    A dirty flush also runs the drain after its pass when the queue is not
+    empty (:1635).
   - A failed measurement is retried after its backoff only for a row whose
     exact key (identity, revision, width and environment) is still in the
-    current items or, failing that, in the items waiting for a first window
-    (:1556-1565); otherwise its failure count is dropped. Retries and
-    backoff are outside the models.
+    current items, else in the items waiting for a first window, else in a
+    still-queued entry's requested rows (:1723-1735); otherwise its failure
+    count is dropped. Retries and backoff are outside the models.
 
 `Readiness` has no input generation, gate or drag, and its targets are
 indices. For sequences without a drag, its events map as before, and a newer
 explicit call replaces `pendingTarget` and `pendingScroll` as `call_some`
 states. A drag that clears the held target, the pass it may schedule, the
 cancellation of an older gate held by a queued mutation or a `passing`
-deferral, and the rebase that moves a held target to its identity's new
-index or cancels it when the identity is gone, are steps the model does not
-have. In the Swift they only re-point or remove a target, but no theorem
-states that. `ListPreparation` still holds for the queue's order; which
-target a queued mutation keeps, and which keys the projection adds, are not
+deferral, the rebase that moves a held target to its identity's new index or
+cancels it when the identity is gone, the transfer of a held identity target
+into the queue, and a hold whose observer drains the queue instead of
+running the retry, are steps the model does not have. In the Swift they
+only re-point, move or remove a target, but no theorem states that.
+`ListPreparation` still holds for the queue's order; `Q.updateNewest` now
+also changes a queued mutation's intent (the transfer above), but which
+target a queued mutation keeps, and which keys the projections add, are not
 modeled. The runtime tests, by name:
 - `WindowProjectionTests` (Linux, 12 cases): the survivor, the anchor's
   screen position across insets and distance, the top and pinned-row
@@ -775,6 +857,23 @@ modeled. The runtime tests, by name:
   - cancelling an inherited target still waits for the collapsed
     collection's cold rows;
   - cached node content reports cold after its live host retires.
+- `QueuedIdentityReadinessTests`, 18 cases in every engine. Each holds a
+  target with an identity waiting for a cold row to draw, then queues a
+  collection, so the target moves into the queue. In all but the drag case
+  the target's resolver never receives a view and is never called once the
+  queued collection is the list's items, so the pass that applies it reuses
+  the projection's resolution:
+  - a stream waits for the identity target's physical rows;
+  - a shrinking identity target waits for its new physical frontier: a row
+    exposed behind the top inset is awaited, and the old hold's draw
+    finishing does not flush the collection;
+  - an inserted collection keeps its identity target behind the draw gate;
+  - an invalid queued frontier retries its new revision: a physical row
+    outside the initial preparation band fails once, is retried from the
+    queued entry's requested rows, and is then awaited until it draws;
+  - a committed row can grow while an identity target belongs to the queue;
+  - a drag cancels the queued identity target before its old draw
+    completes.
 
 ## Node transitions at `44f8a0c`
 
@@ -1275,8 +1374,9 @@ commit and not covered:
   `handleDragBegin` (:179, :231) leave `pendingTarget` and `pendingScroll`
   as they are, so the readiness observer still resumes the jump (:545),
   and that pass halts the engine (:368).
-  In the current source a drag cancels the held target, and a held target
-  named by its row follows that row or is cancelled once it is gone; see
+  In the current source a drag cancels the held target, a held target
+  named by its row follows that row or is cancelled once it is gone, and a
+  held identity target can move into the preparation queue; see
   "Cold rows and target ownership" under "Drawing ahead for rows shown
   soon".
 

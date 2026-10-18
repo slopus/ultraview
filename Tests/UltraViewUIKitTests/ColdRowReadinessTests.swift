@@ -115,6 +115,10 @@ private final class GrowingColdRow: ListRow {
         let rows = (1..<80).map(ColdPreparedRow.init)
         list.applyChanges(items: [ColdFixedRow(revision: 0, height: 1200)] + rows, transition: .none)
         try await waitUntil { list.items.count == 80 && rows.prefix(3).allSatisfy { $0.preparations == 1 } }
+        // Finish queued work from the initial pass before cooling its cache.
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            DispatchQueue.main.async { continuation.resume() }
+        }
         #expect(list.settledFrame(at: 0)?.height == 1200)
         let gate = ColdDrawingGate()
         for row in rows.prefix(3) { row.content.cool(until: gate) }

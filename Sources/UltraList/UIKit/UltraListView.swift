@@ -50,6 +50,7 @@ public final class UltraListView: UltraScrollView {
     private var carryGenerations: [String: UInt64] = [:]
     private var nextCarryGeneration: UInt64 = 0
     private var viewport = ListViewport(width: 0, height: 0)
+    private var settledValueGeometry: (width: Double, environment: UInt64)?
     private var measurementEnvironment = RenderEnvironment()
     private var measurementEnvironmentKey: UInt64 = 0
     private var origin: Double = 0
@@ -85,6 +86,8 @@ public final class UltraListView: UltraScrollView {
     private var pendingDisplayRequired: Set<MeasurementKey> = []
     private var pendingDisplayMeasurements: Set<MeasurementKey> = []
     private var pendingDisplayGeneration: UInt64 = 0
+    private var pendingDisplayGate: ScrollIntentGate?
+    private var pendingDisplayHeights: [MeasurementKey: (item: any ListRow, height: Double)] = [:]
     private var pendingItems: [any ListRow]?
     private var pendingIdentityIndices: [String: Int] = [:]
     private var unavailableMeasurements: Set<MeasurementKey> = []
@@ -115,6 +118,20 @@ public final class UltraListView: UltraScrollView {
         var relativeDistance: Double = 0
         var gate: ScrollIntentGate
     }
+    private struct TargetResolution {
+        var generation: UInt64
+        var gate: ScrollIntentGate
+        var key: MeasurementKey
+        var height: Double
+        var viewport: ListViewport
+        var offset: Double
+    }
+    private struct PreparationProjection {
+        var required: [MeasurementKey]
+        var missing: [(item: any ListRow, key: MeasurementKey, width: Double)]
+        var retained: Set<MeasurementKey> = []
+        var target: TargetResolution? = nil
+    }
     private struct PreparedMutation {
         var items: [any ListRow]
         var size: CGSize?
@@ -132,6 +149,8 @@ public final class UltraListView: UltraScrollView {
     private var preparationQueue = PreparationQueue<PreparedMutation, MeasurementKey>()
     private var viewportRequest: UInt64 = 0
     private var applyingPreparedMutation = false
+    private var applyingPreparedTarget: (generation: UInt64, resolution: TargetResolution?)?
+    private var activePreparationItems: [MeasurementKey: (generation: UInt64, item: any ListRow)] = [:]
     private var drainingPreparations = false
     private var deferredAttachmentRender = false
     private var pendingBlockAnimations: [InsertedBlock] = []
@@ -413,7 +432,9 @@ public final class UltraListView: UltraScrollView {
         var additionalScrollDistance = distance
         var anchorMode = requestedAnchorMode
         let preparedMutation = applyingPreparedMutation
+        let preparedTarget = applyingPreparedTarget
         applyingPreparedMutation = false
+        applyingPreparedTarget = nil
         var resolvedTransition = requestedTransition.inheritsDefault ? (newItems == nil ? .immediate : defaultTransition) : requestedTransition
         let onlyInsets = newItems == nil && newSize == nil && newInsets != nil && scrollTo == nil && additionalScrollDistance == 0
             && newInsets?.left == viewport.insets.left && newInsets?.right == viewport.insets.right
@@ -439,6 +460,7 @@ public final class UltraListView: UltraScrollView {
                 additionalDistance: additionalScrollDistance, anchorMode: anchorMode, compensates: compensatesInsetChange,
                 absorbsOverscroll: absorbsEdgeChangeIntoOverscroll, animatesInsertions: animatesInsertions, transition: transition)
             preparationQueue.submit(mutation, waiting: [], merge: Self.mergePreparedMutations)
+            promotePendingIdentityIntent()
             drainPreparedMutations()
             return
         }
@@ -541,10 +563,12 @@ public final class UltraListView: UltraScrollView {
                     self?.applyChanges(intent: intent, additionalScrollDistance: distance, anchorMode: anchorMode, compensatesInsetChange: compensatesInsetChange, absorbsEdgeChangeIntoOverscroll: absorbsEdgeChangeIntoOverscroll, animatesInsertions: animatesInsertions, transition: transition)
                 }
             }
-            clearPendingDisplayViews()
+            promotePendingIdentityIntent()
+            clearPendingDisplayViews(force: true)
             engine.halt()
             for (identity, view) in views { view.visibleRectUpdated(nil); view.removeFromSuperview(); animations.unbind(.row(identity), removeModel: true) }
             views.removeAll(); settledWindow = .init(); origin = 0
+            settledValueGeometry = nil
             mountContinuation = nil; mountSizeGeometry = nil
             for (id, view) in attachmentViews { view.removeFromSuperview(); animations.unbind(.attachment(id), removeModel: true) }
             attachmentViews.removeAll(); attachmentMaps.removeAll(); attachmentFlightSignatures.removeAll()
@@ -564,6 +588,7 @@ public final class UltraListView: UltraScrollView {
                 measurementTasks.removeAll(); measurementTickets.removeAll()
                 for drawing in preparationDraws.values { drawing.task.cancel() }
                 preparationDraws.removeAll()
+                activePreparationItems.removeAll()
             }
             engine.setEdges(.init(minimum: 0, maximum: 0)); engine.setOffset(0)
             runs.removeAll(); renderAttachments(); return
@@ -601,7 +626,16 @@ public final class UltraListView: UltraScrollView {
         if let target {
             newWindow = ListWindow.build(count: items.count, anchor: anchor, viewport: viewport, margin: preloadMargin,
                 pinnedIndex: pinnedIndex, measure: measure) { height in
-                    viewport.insets.top + additionalScrollDistance + target.resolve(height, measuredViews[items[anchor].identity])
+                    let resolved: Double
+                    if let preparedTarget, let resolution = preparedTarget.resolution,
+                       resolution.generation == preparedTarget.generation, resolution.gate === intent?.gate,
+                       resolution.key == measurementKey(items[anchor], width: viewport.contentWidth),
+                       resolution.height == height, resolution.viewport == viewport {
+                        resolved = resolution.offset
+                    } else {
+                        resolved = target.resolve(height, target.identity == nil ? measuredViews[items[anchor].identity] : nil)
+                    }
+                    return viewport.insets.top + additionalScrollDistance + resolved
                 }
         } else {
             newWindow = preserved.window(count: items.count, margin: preloadMargin, measure: measure)
@@ -620,6 +654,7 @@ public final class UltraListView: UltraScrollView {
                 items = oldItems; identities = oldIDs; identityIndices = oldLookup; pinnedIndex = oldPinnedIndex
             }
             else { declaredEdges = .init(); engine.setEdges(declaredEdges) }
+            promotePendingIdentityIntent()
             return
         }
         pendingIntent = nil; pendingScroll = nil
@@ -653,8 +688,13 @@ public final class UltraListView: UltraScrollView {
                     let item = items[row.index]
                     if let view = measuredViews[item.identity] { staged[measurementKey(item, width: viewport.contentWidth)] = view }
                 }
-                clearPendingDisplayViews(keeping: Set(staged.values.map(ObjectIdentifier.init)))
+                clearPendingDisplayViews(keeping: Set(staged.values.map(ObjectIdentifier.init)), force: true)
                 pendingDisplayViews = staged
+                pendingDisplayGate = intent?.gate
+                pendingDisplayHeights = Dictionary(uniqueKeysWithValues: newWindow.rows.map { row in
+                    let item = items[row.index]
+                    return (measurementKey(item, width: viewport.contentWidth), (item, row.height))
+                })
                 pendingDisplayRequired = Set(required.map { measurementKey(items[$0.index], width: viewport.contentWidth) })
                 pendingDisplayMeasurements = Set(missing.map { measurementKey(items[$0], width: viewport.contentWidth) })
                 for index in missing { requestMeasurement(index) }
@@ -665,13 +705,15 @@ public final class UltraListView: UltraScrollView {
                         guard let self, pendingDisplayGeneration == generation,
                               pendingDisplayMeasurements.allSatisfy({ measurements.height(for: $0) != nil }),
                               pendingDisplayRequired.allSatisfy({ pendingDisplayViews[$0]?.isDisplayReady == true }) else { return }
-                        let resume = pendingScroll; pendingScroll = nil; resume?()
+                        if let gate = pendingDisplayGate, preparationOwns(gate) { drainPreparedMutations() }
+                        else { let resume = pendingScroll; pendingScroll = nil; resume?() }
                     }
                 }
+                promotePendingIdentityIntent()
                 return
             }
         }
-        clearPendingDisplayViews(keeping: Set(measuredViews.values.map(ObjectIdentifier.init)))
+        clearPendingDisplayViews(keeping: Set(measuredViews.values.map(ObjectIdentifier.init)), force: target != nil)
         var oldSnapshot = Dictionary(uniqueKeysWithValues: oldWindow.rows.map { (oldItems[$0.index].identity, $0) })
         for (id, carry) in carried where oldSnapshot[id] == nil {
             guard let index = oldLookup[id] else { continue }
@@ -701,6 +743,7 @@ public final class UltraListView: UltraScrollView {
             }
         }
         settledWindow = newWindow; origin = newOrigin
+        settledValueGeometry = (viewport.contentWidth, measurementEnvironmentKey)
         views = measuredViews.filter { nextIDs.contains($0.key) }
         var mountedCarryPositions: [String: Double] = [:]
         CATransaction.begin(); CATransaction.setDisableActions(true)
@@ -954,13 +997,37 @@ public final class UltraListView: UltraScrollView {
         pendingIntent = stored
     }
 
-    private func clearPendingDisplayViews(keeping retained: Set<ObjectIdentifier> = []) {
+    private func preparationOwns(_ gate: ScrollIntentGate) -> Bool {
+        preparationQueue.entries.contains { entry in
+            guard let intent = eligibleIntent(entry.value.intent) else { return false }
+            return intent.gate === gate && intent.target.identity != nil
+        }
+    }
+
+    /// Transfer a waiting opt-in target, rather than letting its old retry
+    /// race the collection that is preparing its updated row.
+    private func promotePendingIdentityIntent() {
+        guard pendingItems == nil, !preparationQueue.isEmpty,
+              let intent = eligibleIntent(pendingIntent), intent.target.identity != nil,
+              intent.relativeDistance == 0 else { return }
+        var promoted = false
+        preparationQueue.updateNewest { mutation in
+            if let existing = eligibleIntent(mutation.intent), existing.gate !== intent.gate { return }
+            mutation.intent = intent
+            promoted = true
+        }
+        if promoted { pendingIntent = nil; pendingScroll = nil }
+    }
+
+    private func clearPendingDisplayViews(keeping retained: Set<ObjectIdentifier> = [], force: Bool = false) {
+        if !force, let gate = pendingDisplayGate, preparationOwns(gate) { return }
         pendingDisplayGeneration &+= 1
         for (key, view) in pendingDisplayViews {
             view.displayWaitObserver = nil
             if !retained.contains(ObjectIdentifier(view)), views[key.identity] !== view, carried[key.identity]?.view !== view { view.removeFromSuperview() }
         }
         pendingDisplayViews.removeAll(); pendingDisplayRequired.removeAll(); pendingDisplayMeasurements.removeAll()
+        pendingDisplayHeights.removeAll(); pendingDisplayGate = nil
     }
 
     private func updateViewportInsets(_ insets: ListInsets, compensates: Bool, transition: ListTransition) {
@@ -1323,9 +1390,84 @@ public final class UltraListView: UltraScrollView {
             return (item, key, width)
         }
     }
+    private func projectedPreparations(_ mutation: PreparedMutation, generation: UInt64) -> PreparationProjection? {
+        if let intent = eligibleIntent(preparedIntent(mutation)), intent.target.identity != nil,
+           intent.relativeDistance == 0,
+           let projected = projectedIdentityPreparations(mutation, intent: intent, generation: generation) {
+            return projected
+        }
+        return projectedPreservedPreparations(mutation)
+    }
+
+    /// Identity targets opt into a height-only resolver, so their destination
+    /// can be prepared without creating or updating a live row.
+    private func projectedIdentityPreparations(_ mutation: PreparedMutation, intent: ScrollIntent, generation: UInt64) -> PreparationProjection? {
+        guard !settledWindow.rows.isEmpty, !mutation.items.isEmpty else { return nil }
+        let currentViewport = mutation.viewportRequest == viewportRequest
+        let size = currentViewport ? mutation.size : nil
+        let insets = currentViewport ? mutation.insets ?? viewport.insets : viewport.insets
+        guard size.map({ Double($0.width) == viewport.width && Double($0.height) == viewport.height }) ?? true,
+              insets == viewport.insets, viewport.contentWidth > 0, viewport.height > 0 else { return nil }
+
+        engine.sync()
+        let width = viewport.contentWidth, oldWindow = settledWindow
+        let oldOffset = engine.offset, oldSettled = declaredEdges.clamped(oldOffset)
+        let anchor = min(max(0, intent.target.index), mutation.items.count - 1)
+        let nextPinned = mutation.items.firstIndex(where: \.pinsToBottomEdge)
+        var missing: [MeasurementKey: (item: any ListRow, key: MeasurementKey, width: Double)] = [:]
+        var unsupported = false
+        var resolution: TargetResolution?
+        var retained: Set<MeasurementKey> = []
+        func measure(_ index: Int) -> (height: Double, top: Double, bottom: Double)? {
+            let item = mutation.items[index], key = measurementKey(item, width: width)
+            retained.insert(key)
+            let height: Double
+            if item.measuresAsynchronously {
+                guard let cached = measurements.height(for: key) else {
+                    missing[key] = (item, key, width)
+                    return nil
+                }
+                height = cached
+            } else if settledValueGeometry?.width == width, settledValueGeometry?.environment == measurementEnvironmentKey,
+                      !scheduler.dirty.contains(item.identity), let oldIndex = identityIndices[item.identity],
+                      item.isEqual(to: items[oldIndex]), let row = oldWindow.rows.first(where: { $0.index == oldIndex }) {
+                height = row.height
+            } else if !scheduler.dirty.contains(item.identity), pendingDisplayGate === intent.gate,
+                      let staged = pendingDisplayHeights[key], item.isEqual(to: staged.item) {
+                height = staged.height
+            } else {
+                unsupported = true
+                return nil
+            }
+            let reserve = reservedHeights(at: index, in: mutation.items)
+            return (height, reserve.0, reserve.1)
+        }
+        let window = ListWindow.build(count: mutation.items.count, anchor: anchor, viewport: viewport,
+            margin: preloadMargin, pinnedIndex: nextPinned, measure: measure) { height in
+                let offset = intent.target.resolve(height, nil)
+                resolution = TargetResolution(generation: generation, gate: intent.gate,
+                    key: measurementKey(mutation.items[anchor], width: width), height: height,
+                    viewport: viewport, offset: offset)
+                return viewport.insets.top + mutation.additionalDistance + intent.distance + offset
+            }
+        // A synchronous row without a known value still takes the existing
+        // path. Reuse a resolution already made before reaching that row.
+        if unsupported { return .init(required: [], missing: Array(missing.values), retained: retained, target: resolution) }
+        guard !window.rows.isEmpty else { return .init(required: [], missing: Array(missing.values), retained: retained) }
+        let placement = WindowPlacement(newWindow: window, count: mutation.items.count, viewport: viewport, pinnedIndex: nextPinned,
+            oldWindowIsEmpty: false, platformCoordinates: engineMode == .uiKit, hasTarget: true,
+            oldOrigin: origin, oldOffset: oldOffset, oldSettled: oldSettled, oldOverscroll: oldOffset - oldSettled,
+            displaces: mutation.additionalDistance + intent.distance != 0, moves: false,
+            absorbsOverscroll: mutation.absorbsOverscroll,
+            containerOrigin: engine.containerOrigin(height: window.height, top: window.range.lowerBound == 0, bottom: window.range.upperBound == mutation.items.count))
+        for index in placement.uncoveredIndices { _ = measure(index) }
+        return .init(required: placement.physicalRows.map { measurementKey(mutation.items[$0.index], width: width) },
+            missing: Array(missing.values), retained: retained, target: resolution)
+    }
+
     /// Height changes in the same collection can expose rows beyond the old
     /// window. Predict that window from values before touching any live view.
-    private func projectedPreparations(_ mutation: PreparedMutation) -> (required: [MeasurementKey], missing: [(item: any ListRow, key: MeasurementKey, width: Double)])? {
+    private func projectedPreservedPreparations(_ mutation: PreparedMutation) -> PreparationProjection? {
         let candidate = mutation.intent ?? pendingIntent
         guard !settledWindow.rows.isEmpty, eligibleIntent(preparedIntent(mutation)) == nil,
               eligibleIntent(rebasedIntent(pendingIntent, in: mutation.items)) == nil, pendingItems == nil,
@@ -1354,8 +1496,10 @@ public final class UltraListView: UltraScrollView {
         var missing: [MeasurementKey: (item: any ListRow, key: MeasurementKey, width: Double)] = [:]
         var unsupported = false
         let width = viewport.contentWidth
+        var retained: Set<MeasurementKey> = []
         let window = preserved.window(count: mutation.items.count, margin: preloadMargin) { index in
             let item = mutation.items[index], key = measurementKey(item, width: width)
+            retained.insert(key)
             let height: Double
             if item.measuresAsynchronously {
                 guard let measured = measurements.height(for: key) else {
@@ -1375,7 +1519,7 @@ public final class UltraListView: UltraScrollView {
             return (height, reserve.0, reserve.1)
         }
         guard !unsupported else { return nil }
-        guard !window.rows.isEmpty else { return ([], Array(missing.values)) }
+        guard !window.rows.isEmpty else { return .init(required: [], missing: Array(missing.values), retained: retained) }
         let placement = WindowPlacement(newWindow: window, count: mutation.items.count, viewport: viewport, pinnedIndex: pinnedIndex,
             oldWindowIsEmpty: false, platformCoordinates: engineMode == .uiKit, hasTarget: false,
             oldOrigin: oldOrigin, oldOffset: oldOffset, oldSettled: oldSettled, oldOverscroll: oldOverscroll,
@@ -1388,34 +1532,44 @@ public final class UltraListView: UltraScrollView {
                views[item.identity]?.isDisplayReady == true { return nil }
             return measurementKey(item, width: width)
         }
-        return (required, Array(missing.values))
+        return .init(required: required, missing: Array(missing.values), retained: retained)
     }
     private func drainPreparedMutations() {
         guard !passing, !drainingPreparations else { return }
         drainingPreparations = true
         defer { drainingPreparations = false }
         while !preparationQueue.isEmpty {
+            promotePendingIdentityIntent()
             preparationKeys.removeAll(keepingCapacity: true)
+            activePreparationItems.removeAll(keepingCapacity: true)
+            var resolutions: [UInt64: TargetResolution] = [:]
             for entry in preparationQueue.entries {
                 let effective = entry.generation == preparationQueue.latest?.generation
                     ? preparationQueue.inFlight.map { Self.mergePreparedMutations($0.value, entry.value) } ?? entry.value
                     : entry.value
                 let requests = requestedPreparations(effective)
+                let projectsIdentity = eligibleIntent(preparedIntent(effective)).map { $0.target.identity != nil && $0.relativeDistance == 0 } ?? false
+                var physicalSoon: Set<MeasurementKey> = []
                 preparationKeys.formUnion(requests.map(\.key))
+                for request in requests { activePreparationItems[request.key] = (entry.generation, request.item) }
                 let missing = requests.filter { measurements.height(for: $0.key) == nil && !unavailableMeasurements.contains($0.key) }
                 var waiting = Set(missing.map(\.key))
-                if missing.isEmpty, let projected = projectedPreparations(effective) {
+                if missing.isEmpty, let projected = projectedPreparations(effective, generation: entry.generation) {
+                    if let target = projected.target { resolutions[entry.generation] = target }
+                    preparationKeys.formUnion(projected.retained)
                     preparationKeys.formUnion(projected.required)
+                    physicalSoon.formUnion(projected.required)
                     preparationKeys.formUnion(projected.missing.map(\.key))
-                    for key in projected.required where awaitPreparedDisplay(key) { waiting.insert(key) }
+                    for key in projected.required where awaitProjectedDisplay(key, gate: projected.target?.gate) { waiting.insert(key) }
                     for request in projected.missing {
+                        activePreparationItems[request.key] = (entry.generation, request.item)
                         waiting.insert(request.key)
                         requestMeasurement(request.item, key: request.key, width: request.width)
                     }
                 }
                 preparationQueue.replaceWaiting(generation: entry.generation, with: waiting)
                 // Requests come nearest the anchor first: those the mutation will show.
-                let soon = Set(requests.prefix(rowsShownSoon).map(\.key))
+                let soon = projectsIdentity ? physicalSoon : Set(requests.prefix(rowsShownSoon).map(\.key))
                 for key in soon { showSoon(key) }
                 for request in missing { requestMeasurement(request.item, key: request.key, width: request.width, showsSoon: soon.contains(request.key)) }
             }
@@ -1426,11 +1580,13 @@ public final class UltraListView: UltraScrollView {
                     if successor.intent == nil, successor.items.contains(where: { $0.identity == identity }) {
                         var carried = intent
                         if successor.additionalDistance != 0 { carried.distance = 0 }
+                        carried.relativeDistance = 0
                         successor.intent = carried
                     }
                 }
             }
             applyingPreparedMutation = true
+            applyingPreparedTarget = (ready.generation, resolutions[ready.generation])
             applyChanges(items: mutation.items, newSize: currentViewport ? mutation.size : nil, newInsets: currentViewport ? mutation.insets : nil,
                 intent: mutation.intent, additionalScrollDistance: mutation.additionalDistance, anchorMode: mutation.anchorMode,
                 compensatesInsetChange: mutation.compensates, absorbsEdgeChangeIntoOverscroll: mutation.absorbsOverscroll,
@@ -1440,6 +1596,16 @@ public final class UltraListView: UltraScrollView {
             else { for block in mutation.blocks { animateInsertedBlockNow(block) } }
         }
         preparationKeys.removeAll(keepingCapacity: true)
+        activePreparationItems.removeAll(keepingCapacity: true)
+    }
+    private func awaitProjectedDisplay(_ key: MeasurementKey, gate: ScrollIntentGate?) -> Bool {
+        let drawing = awaitPreparedDisplay(key)
+        guard let gate, pendingDisplayGate === gate, let view = pendingDisplayViews[key], !view.isDisplayReady else { return drawing }
+        view.displayWaitObserver = { [weak self, weak gate] in
+            guard let self, let gate, preparationOwns(gate) else { return }
+            drainPreparedMutations()
+        }
+        return true
     }
     /// Drawing waits belong to preparation, before a pass can touch live rows.
     private func awaitPreparedDisplay(_ key: MeasurementKey) -> Bool {
@@ -1466,6 +1632,7 @@ public final class UltraListView: UltraScrollView {
                 if !scheduler.dirty.isEmpty {
                     if let retry = pendingScroll { pendingScroll = nil; retry() }
                     else { applyChanges(transition: scheduler.animated ? defaultTransition : .immediate) }
+                    if !preparationQueue.isEmpty { drainPreparedMutations() }
                 }
             }
         }
@@ -1559,6 +1726,10 @@ public final class UltraListView: UltraScrollView {
                     } else if let pendingItems, let index = pendingIdentityIndices[item.identity],
                               measurementKey(pendingItems[index], width: viewport.contentWidth) == key {
                         retryItem = pendingItems[index]
+                    } else if let queued = activePreparationItems[key],
+                              preparationQueue.entries.contains(where: { $0.generation == queued.generation }),
+                              measurementKey(queued.item, width: viewport.contentWidth) == key {
+                        retryItem = queued.item
                     } else {
                         measurementFailures.removeValue(forKey: key); return
                     }

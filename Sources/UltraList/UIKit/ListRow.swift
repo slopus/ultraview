@@ -143,6 +143,12 @@ public struct ListScrollTarget {
     public var index: Int
     /// A row to follow across later collection changes. Without an identity,
     /// a standalone target keeps its numeric index.
+    /// An identity target's resolver must depend only on its height. It
+    /// receives a nil view and may be evaluated more than once during
+    /// preparation. The selected result is reused when that preparation applies.
+    /// Collection changes can wait for that destination to draw. Keep separate
+    /// scroll-distance changes out of that wait; accumulated relative distance
+    /// uses the ordinary retry path instead.
     public var identity: String?
     public var forward: Bool?
     public var resolve: (Double, ListRowView?) -> Double

@@ -143,8 +143,8 @@ Display callbacks do not step row mutation geometry. Rows exposed by an inset
 change enter at their final frames and share the viewport's keyboard transition.
 
 Explicit targets take priority over the pin latch, followed by preservation of
-visible content and normal anchoring. A target resolver runs once with its
-measured row height. Automatic anchoring keeps the loaded collection top pinned;
+visible content and normal anchoring. A target resolver receives its measured
+row height. Automatic anchoring keeps the loaded collection top pinned;
 `.preserveVisibleContent` instead follows a surviving visible witness. Insets
 and additional scroll distance participate in the same viewport transition.
 An unmeasured explicit target retains its transition until its measurement is
@@ -754,6 +754,27 @@ still follows the row at its index in those items. Scrolls to the top follow the
 current edge row.
 Name a row already in the list, or submit the target with the items that contain
 it. A target naming a missing row is canceled.
+
+An explicit identity also opts into preparation from values: its resolver must
+depend only on the supplied height, receives a nil view, and can run again when
+preparation retries. The selected pass reuses that attempt's result. When a
+collection arrives during the draw wait, the queued collection owns the target
+and prepares its destination using the newest heights. It waits for the full
+physical viewport, including rows behind insets, while committed rows can still
+resize. A previous draw completion cannot apply the target to the old collection.
+Cached heights in the projected preload margin stay retained until the pass
+applies.
+
+This collection gate requires unchanged viewport geometry, no accumulated
+relative distance, and cached asynchronous heights or unchanged loaded values
+for synchronous rows in the projected window. Keep independent scroll-distance
+changes out of an identity target's draw wait. Geometry changes, accumulated
+relative distance, unknown synchronous heights, numeric targets and edge targets
+use the ordinary pass; a collection arriving with one of those targets can still
+apply before its destination finishes drawing.
+When an identity target has no accumulated relative distance but its projection
+cannot run, preparation also omits the nearby-row draw-ahead hint. The ordinary
+pass starts that drawing.
 
 The first integrated full unit run had one failure in 914 tests: the platform
 engine's carousel jump showed one drawn card after about 19 ms, before its next
