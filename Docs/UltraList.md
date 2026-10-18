@@ -420,8 +420,14 @@ and simulator suites with 3 clock checks, 10 hosted keyboard methods and 19 demo
 tests. Five gesture methods passed 36 launches across all three engines and both
 keyboard paths. The momentum comparison uses card rows; the other scenarios use
 the default variable-height bubbles. Sampled video review covers partial and
-midway returns in every engine. The hosted tests load the app's symbols without
-linking another copy of the library into the test bundle.
+midway returns in every engine. More detailed analysis of the variable-rate
+recordings found separate composites during finger tracking: the keyboard can
+lead the composer and rows by 3–7 milliseconds before they catch up. The observed
+gap ranges from about 3 points at slow speeds to 46 points in a fast fling.
+Those captures do not establish whether a physical display shows the intermediate
+composite. The shared release clock therefore does not establish alignment at
+every composite during finger tracking. The hosted tests load the app's symbols
+without linking another copy of the library into the test bundle.
 
 The keyboard lookup depends on private UIKit hierarchy. It dynamically checks
 the scene's `keyboardSceneDelegate` and that object's `keyboardWindow` selectors,
