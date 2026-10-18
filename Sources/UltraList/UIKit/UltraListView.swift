@@ -232,15 +232,18 @@ public final class UltraListView: UltraScrollView {
     public func applyChanges(items newItems: [any ListRow]? = nil, newSize: CGSize? = nil, newInsets: ListInsets? = nil, scrollTo: ListScrollTarget? = nil, additionalScrollDistance: Double = 0, anchorMode: ListAnchorMode = .automatic, compensatesInsetChange: Bool = true, absorbsEdgeChangeIntoOverscroll: Bool = false, animatesInsertions: Bool = true, transition requestedTransition: ListTransition = .default) {
         let preparedMutation = applyingPreparedMutation
         applyingPreparedMutation = false
-        let transition = requestedTransition.inheritsDefault ? (newItems == nil ? .immediate : defaultTransition) : requestedTransition
+        var resolvedTransition = requestedTransition.inheritsDefault ? (newItems == nil ? .immediate : defaultTransition) : requestedTransition
+        let onlyInsets = newItems == nil && newSize == nil && newInsets != nil && scrollTo == nil && additionalScrollDistance == 0
+            && newInsets?.left == viewport.insets.left && newInsets?.right == viewport.insets.right
+            && !absorbsEdgeChangeIntoOverscroll && !settledWindow.rows.isEmpty
+        if !onlyInsets { resolvedTransition.viewportCurve = nil }
+        let transition = resolvedTransition
         if passing {
             deferred.append { [weak self] in self?.applyChanges(items: newItems, newSize: newSize, newInsets: newInsets, scrollTo: scrollTo, additionalScrollDistance: additionalScrollDistance, anchorMode: anchorMode, compensatesInsetChange: compensatesInsetChange, absorbsEdgeChangeIntoOverscroll: absorbsEdgeChangeIntoOverscroll, animatesInsertions: animatesInsertions, transition: transition) }
             return
         }
         if !preparedMutation, newSize != nil || newInsets != nil { viewportRequest &+= 1 }
-        if newItems == nil, newSize == nil, let newInsets, scrollTo == nil, additionalScrollDistance == 0,
-           newInsets.left == viewport.insets.left, newInsets.right == viewport.insets.right,
-           !absorbsEdgeChangeIntoOverscroll, !settledWindow.rows.isEmpty {
+        if onlyInsets, let newInsets {
             updateViewportInsets(newInsets, compensates: compensatesInsetChange, transition: transition)
             return
         }

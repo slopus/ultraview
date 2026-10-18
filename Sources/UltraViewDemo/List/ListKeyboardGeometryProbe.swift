@@ -12,7 +12,9 @@ final class ListKeyboardGeometryProbe: NSObject {
     private let marker: UIView
     private let report = UILabel()
     private var link: CADisplayLink?
-    private var maximumComposerGap = 0.0, maximumRestingRowGap = 0.0
+    private var maximumTrackingComposerGap = 0.0, maximumRestingRowGap = 0.0
+    private var trackingComposerSamples = 0
+    private var inputIsDragging = false
     private var samples = 0, movingSamples = 0, dragSamples = 0, rowAnimationSamples = 0
     private var previousKeyboardY: Double?
     private var dragMinimum = Double.infinity, dragMaximum = -Double.infinity
@@ -39,6 +41,7 @@ final class ListKeyboardGeometryProbe: NSObject {
     private var previousHandoffMotion = Double.infinity, lastPublish = 0.0
     private var recentSpeeds: [Double] = []
     private var keyboardSpringCorrect = true
+    private var keyboardTransition: ListTransition?
     private var worstRowState: [String: Double] = [:]
 
     init(owner: UIView, composer: UIView, list: UltraListView, keyboardEdge: UIView, followsComposer: @escaping () -> Bool = { true }) {
@@ -72,12 +75,16 @@ final class ListKeyboardGeometryProbe: NSObject {
         insetDurations.append(milliseconds)
         if insetDurations.count > 512 { insetDurations.removeFirst() }
     }
+    func recordKeyboardTransition(_ transition: ListTransition) { keyboardTransition = transition }
     private func position() -> Double {
         guard let list, let first = list.loadedIndexRange.first, let frame = list.settledFrame(at: first) else { return 0 }
         let prefix = list.items.prefix(first).reduce(0.0) { total, item in total + ((item as? DemoListRow)?.height ?? 0) }
         return prefix - frame.minY
     }
     private func input(_ event: GestureRecording.Event) {
+        // Observe input phases independently of the controller's tracking guard.
+        if event.phase == .began { inputIsDragging = true }
+        if event.phase == .ended || event.phase == .cancelled { inputIsDragging = false }
         if event.phase == .began { recentSpeeds.removeAll(keepingCapacity: true); handoffUntil = 0; keyboardHideTime = 0 }
         if event.phase == .changed {
             recentSpeeds.append(abs(event.velocity.y))
@@ -142,9 +149,14 @@ final class ListKeyboardGeometryProbe: NSObject {
         }
         if !followsComposerMotion() {
             for (layer, key) in [(list.contentView.layer, "ultraview.list.viewportOffset")] + views.map({ ($0.layer, "ultraview.list.positionY") }) {
-                guard let animation = layer.animation(forKey: key) as? CABasicAnimation,
-                      let from = animation.fromValue as? NSNumber, let to = animation.toValue as? NSNumber else { continue }
-                maximumDetachedAnimation = max(maximumDetachedAnimation, abs(to.doubleValue - from.doubleValue))
+                guard let raw = layer.animation(forKey: key) else { continue }
+                guard let animation = raw as? CAPropertyAnimation, animation.probeIsSupported else {
+                    keyboardSpringCorrect = false; continue
+                }
+                let values = animation.probeScalarValues
+                if let lower = values.min(), let upper = values.max() {
+                    maximumDetachedAnimation = max(maximumDetachedAnimation, upper - lower)
+                } else { keyboardSpringCorrect = false }
             }
         }
         previousHandoff = (y, bar, time)
@@ -166,13 +178,26 @@ final class ListKeyboardGeometryProbe: NSObject {
             keyboardSpringSamples += 1
             if let spring = animation as? CASpringAnimation {
                 keyboardSpringCorrect = keyboardSpringCorrect && abs(spring.stiffness - 555.027) < 0.001 && abs(spring.damping - 47.118) < 0.001 && spring.mass == 1
+            } else if let keyframes = animation as? CAKeyframeAnimation,
+                      let transition = keyboardTransition, let curve = transition.viewportCurve,
+                      let values = keyframes.values as? [Double], values.count == curve.progress.count,
+                      let from = values.first, let to = values.last {
+                let matches = zip(values, curve.progress).allSatisfy { abs($0 - (from + (to - from) * $1)) < 1e-6 }
+                keyboardSpringCorrect = keyboardSpringCorrect && matches && keyframes.calculationMode == .linear
+                    && keyframes.keyTimes == nil && keyframes.timingFunctions == nil
+                    && abs(keyframes.duration / Double(keyframes.speed) - transition.duration * list.animationDurationScale) < 1e-6
             } else { keyboardSpringCorrect = false }
         }
         if moving, let previousPassCount { keyboardPasses += list.appliedPassCount - previousPassCount }
         previousPassCount = list.appliedPassCount
         minimumViewportHeight = min(minimumViewportHeight, list.bounds.height)
         maximumViewportHeight = max(maximumViewportHeight, list.bounds.height)
-        maximumComposerGap = max(maximumComposerGap, abs(bar.maxY + 8 - keyboardY))
+        // During a drag the guide supplies the physical finger position.
+        // Pixel captures check the keyboard's separate animated surface.
+        if inputIsDragging {
+            if moving { trackingComposerSamples += 1 }
+            maximumTrackingComposerGap = max(maximumTrackingComposerGap, abs(bar.maxY + 8 - keyboardY))
+        }
         if list.isTracking {
             dragSamples += 1; dragMinimum = min(dragMinimum, keyboardY); dragMaximum = max(dragMaximum, keyboardY)
             if list.contentView.layer.animation(forKey: "ultraview.list.viewportOffset") != nil { trackingViewportAnimations += 1 }
@@ -215,7 +240,8 @@ final class ListKeyboardGeometryProbe: NSObject {
         }
         let document: [String: Any] = [
             "samples": samples, "movingSamples": movingSamples, "dragSamples": dragSamples,
-            "composerGap": maximumComposerGap, "rowGap": maximumRestingRowGap,
+            "trackingComposerGap": maximumTrackingComposerGap, "trackingComposerSamples": trackingComposerSamples,
+            "rowGap": maximumRestingRowGap,
             "dragKeyboardTravel": dragMinimum.isFinite ? dragMaximum - dragMinimum : 0,
             "rowAnimationSamples": rowAnimationSamples, "ended": ended, "cancelled": cancelled,
             "releaseVelocity": releaseVelocity, "coast": coast, "keyboardY": keyboardY,

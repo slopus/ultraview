@@ -39,6 +39,45 @@ private enum KeyboardHideCompletion: CaseIterable {
         #expect(consumers.allSatisfy { $0 !== bar }, "The owned inset positions the composer")
     }
 
+    @Test(arguments: ScrollEngineMode.allCases, [false, true])
+    func ordinaryKeyboardTravelClampsAtTheChatEdge(mode: ScrollEngineMode, hiding: Bool) async throws {
+        let controller = ListChatController(mode: mode), window = makeWindow()
+        window.rootViewController = controller; window.isHidden = false
+        defer { controller.list.haltScrolling(); window.isHidden = true; window.rootViewController = nil }
+        controller.view.layoutIfNeeded()
+        let list = controller.list
+        for _ in 0..<150 where list.loadedIndexRange.isEmpty { try await Task.sleep(for: .milliseconds(20)) }
+        list.scrollTo(.init(index: 25), transition: .none)
+        for _ in 0..<150 where !list.loadedIndexRange.contains(25) { try await Task.sleep(for: .milliseconds(20)) }
+        let row = try #require(list.loadedItemView(at: 25))
+        let bar = try #require(controller.view.subviews.first { $0.accessibilityIdentifier == "composerBar" })
+        if hiding { controller.keyboardFrameChanged(height: 252, duration: 0, curve: 7, fullHeight: 335) }
+        try await Task.sleep(for: .milliseconds(50))
+        let relative = row.layer.convert(row.layer.bounds, to: controller.view.layer).maxY - bar.frame.minY
+        window.layer.speed = 0; window.layer.timeOffset = 100
+        let begin = hiding ? 252.0 : -83, end = hiding ? -83.0 : 252, duration = 0.3833333333333333
+        controller.keyboardFrameChanged(height: max(0, end), duration: duration, curve: 7, fullHeight: 335,
+                                        physicalBeginHeight: begin, physicalEndHeight: end)
+        #expect(list.contentView.layer.animation(forKey: "ultraview.list.viewportOffset") is CAKeyframeAnimation)
+        #expect(bar.layer.animation(forKey: "ultraview.chat.composerPosition") is CAKeyframeAnimation)
+        for phase in [0.0, 0.04, 0.08, 0.13, 0.2, 0.4, 0.6, 0.8, 1] {
+            CATransaction.begin(); CATransaction.setDisableActions(true)
+            window.layer.timeOffset = 100 + duration * phase
+            CATransaction.commit(); CATransaction.flush()
+            try await Task.sleep(for: .milliseconds(35))
+            let destination = try #require(controller.view.layer.presentation())
+            let shownBar = try #require(bar.layer.presentation()), shownRow = try #require(row.layer.presentation())
+            let barFrame = shownBar.convert(shownBar.bounds, to: destination)
+            let rowFrame = shownRow.convert(shownRow.bounds, to: destination)
+            let progress = phase == 1 ? 1 : ListCurve.keyboardSpring.value(at: phase, duration: duration)
+            let keyboardTop = controller.view.bounds.maxY - (begin + (end - begin) * progress)
+            let restingTop = controller.view.bounds.maxY - controller.view.safeAreaInsets.bottom
+            #expect(abs(barFrame.maxY + 8 - min(restingTop, keyboardTop)) < 0.5,
+                    "\(mode)/hide=\(hiding), phase \(phase): composer follows the clamped physical edge")
+            #expect(abs(rowFrame.maxY - barFrame.minY - relative) < 0.5)
+        }
+    }
+
     @Test(arguments: ScrollEngineMode.allCases, KeyboardMotion.allCases)
     private func composerAndRowsShareEveryRenderedReturnFrame(mode: ScrollEngineMode, motion: KeyboardMotion) async throws {
         let controller = ListChatController(mode: mode), window = makeWindow()
@@ -56,7 +95,8 @@ private enum KeyboardHideCompletion: CaseIterable {
         window.layer.speed = 0; window.layer.timeOffset = 100
         var startTime = 100.0
         if motion == .interruptedShow {
-            controller.keyboardFrameChanged(height: 252, duration: 0.3833333333333333, curve: 7)
+            controller.keyboardFrameChanged(height: 252, duration: 0.3833333333333333, curve: 7, fullHeight: 335,
+                                            physicalBeginHeight: -83, physicalEndHeight: 252)
             CATransaction.flush()
             try await Task.sleep(for: .milliseconds(35))
             startTime += 0.1; window.layer.timeOffset = startTime

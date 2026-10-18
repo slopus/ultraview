@@ -70,14 +70,32 @@ public enum ListCurve: Sendable, Equatable {
     }
 }
 
+/// Uniformly spaced progress values for the viewport's additive correction.
+/// Row size and content animations keep the transition's ordinary curve.
+public struct ViewportCurve: Sendable, Equatable {
+    public let progress: [Double]
+    public init(progress: [Double]) {
+        precondition(progress.count >= 2 && progress.first == 0 && progress.last == 1 && progress.allSatisfy(\.isFinite))
+        self.progress = progress
+    }
+    public func value(at phase: Double) -> Double {
+        let index = min(1, max(0, phase)) * Double(progress.count - 1)
+        let lower = min(progress.count - 2, Int(index)), fraction = index - Double(lower)
+        return progress[lower] + (progress[lower + 1] - progress[lower]) * fraction
+    }
+    var progressBounds: ClosedRange<Double> { progress.min()!...progress.max()! }
+}
+
 public struct ListTransition: Sendable, Equatable {
     internal var inheritsDefault = false
     public var duration: Double
     public var curve: ListCurve
+    /// Used by an inset-only pass. Other passes use `curve` for every property.
+    public var viewportCurve: ViewportCurve?
     public var durationFactor: Double
     public var isImmediate: Bool { duration <= 0 }
-    public init(duration: Double, curve: ListCurve = .easeInOut, durationFactor: Double = 1) {
-        self.duration = duration; self.curve = curve; self.durationFactor = durationFactor
+    public init(duration: Double, curve: ListCurve = .easeInOut, durationFactor: Double = 1, viewportCurve: ViewportCurve? = nil) {
+        self.duration = duration; self.curve = curve; self.durationFactor = durationFactor; self.viewportCurve = viewportCurve
     }
     public static let immediate = ListTransition(duration: 0)
     public static let none = immediate
@@ -93,7 +111,7 @@ public struct ListTransition: Sendable, Equatable {
     public static func uiKitScroll(_ duration: Double = 0.3) -> Self { .init(duration: duration, curve: .uiKitScroll) }
     public static func smoothDeceleration(_ duration: Double = 1.15) -> Self { .init(duration: duration, curve: .smoothDeceleration) }
     public func scaled(by factor: Double) -> Self {
-        .init(duration: duration * factor, curve: curve, durationFactor: durationFactor * factor)
+        .init(duration: duration * factor, curve: curve, durationFactor: durationFactor * factor, viewportCurve: viewportCurve)
     }
 }
 
@@ -120,9 +138,10 @@ public struct AnimationTrack: Sendable, Equatable {
     public var to: Double
     public var startTime: Double
     public var transition: ListTransition
+    var viewportCurve: ViewportCurve? = nil
     public var deadline: Double { startTime + max(0, transition.duration) }
     public var valueBounds: ClosedRange<Double> {
-        let bounds = transition.curve.progressBounds
+        let bounds = viewportCurve?.progressBounds ?? transition.curve.progressBounds
         let first = from + (to - from) * bounds.lowerBound
         let last = from + (to - from) * bounds.upperBound
         return min(first, last)...max(first, last)
@@ -132,12 +151,14 @@ public struct AnimationTrack: Sendable, Equatable {
     }
     public func value(at time: Double) -> Double {
         if transition.isImmediate || time >= deadline { return to }
-        let progress = transition.curve.value(at: (time - startTime) / transition.duration, duration: transition.duration / transition.durationFactor)
+        let phase = (time - startTime) / transition.duration
+        let progress = viewportCurve?.value(at: phase)
+            ?? transition.curve.value(at: phase, duration: transition.duration / transition.durationFactor)
         return from + (to - from) * progress
     }
     func residual(multipliedBy coefficient: Double) -> Self {
         .init(generation: generation, from: (from - to) * coefficient, to: 0,
-              startTime: startTime, transition: transition)
+              startTime: startTime, transition: transition, viewportCurve: viewportCurve)
     }
 }
 
@@ -182,7 +203,8 @@ public struct ListAnimationModel: Sendable {
     mutating func setPositionLayer(_ owner: AnimationOwner, source: PositionSource, track template: AnimationTrack) -> AnimationTrack {
         let key = Key(owner, source: source)
         if let current = tracks[key], current.from == template.from, current.to == template.to,
-           current.startTime == template.startTime, current.transition == template.transition { return current }
+           current.startTime == template.startTime, current.transition == template.transition,
+           current.viewportCurve == template.viewportCurve { return current }
         generation += 1
         var track = template; track.generation = generation
         tracks[key] = track
@@ -198,7 +220,8 @@ public struct ListAnimationModel: Sendable {
         generation += 1
         let key = Key(owner, property); stored[key] = to
         guard !transition.isImmediate else { tracks.removeValue(forKey: key); return nil }
-        let track = AnimationTrack(generation: generation, from: from, to: to, startTime: time, transition: transition)
+        let track = AnimationTrack(generation: generation, from: from, to: to, startTime: time, transition: transition,
+                                   viewportCurve: owner == .viewport && property == .viewportOffset ? transition.viewportCurve : nil)
         tracks[key] = track; return track
     }
     /// A settled no-op keeps the old track's phase and generation intact, unless `restarts` asks for a track on this
@@ -214,7 +237,8 @@ public struct ListAnimationModel: Sendable {
             let from = track.from + new - track.to
             if min(from, new) >= 0 {
                 generation += 1; stored[key] = new
-                let moved = AnimationTrack(generation: generation, from: from, to: new, startTime: track.startTime, transition: track.transition)
+                let moved = AnimationTrack(generation: generation, from: from, to: new, startTime: track.startTime,
+                                           transition: track.transition, viewportCurve: track.viewportCurve)
                 tracks[key] = moved; return moved
             }
         }

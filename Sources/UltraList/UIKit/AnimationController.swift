@@ -299,8 +299,16 @@ final class AnimationController {
         if layers[key.owner]?.animation(forKey: key.animationKey) != nil { return track.from }
         return track.value(at: time)
     }
-    static func compile(_ property: AnimatedProperty, track: AnimationTrack) -> CABasicAnimation {
+    static func compile(_ property: AnimatedProperty, track: AnimationTrack) -> CAPropertyAnimation {
         let logical = track.transition.duration / track.transition.durationFactor
+        if let curve = track.viewportCurve {
+            let animation = CAKeyframeAnimation(keyPath: property.keyPath)
+            animation.values = curve.progress.map { track.from + (track.to - track.from) * $0 }
+            animation.calculationMode = .linear
+            animation.duration = logical; animation.speed = Float(1 / track.transition.durationFactor)
+            configure(animation, property: property, track: track)
+            return animation
+        }
         let curve = track.transition.curve
         let animation: CABasicAnimation
         if case .dampedSpring(let damping) = curve {
@@ -333,12 +341,15 @@ final class AnimationController {
             }
         }
         animation.fromValue = track.from; animation.toValue = track.to
+        configure(animation, property: property, track: track)
+        return animation
+    }
+    private static func configure(_ animation: CAPropertyAnimation, property: AnimatedProperty, track: AnimationTrack) {
         animation.isAdditive = property.additive
         animation.fillMode = .both; animation.isRemovedOnCompletion = false
         animation.setValue(track.generation, forKey: "ultraviewGeneration")
         animation.setValue(track.startTime, forKey: "ultraviewStartTime")
         if property.additive { animation.preferredFrameRateRange = .init(minimum: 30, maximum: 120, preferred: 120) }
-        return animation
     }
 }
 #endif

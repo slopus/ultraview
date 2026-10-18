@@ -53,5 +53,30 @@ import Testing
         #expect(oldCompletions == 0 && nextCompletions == 1)
         #expect(!controller.model.hasTracks(.row("a")))
     }
+    @Test func viewportSamplesRenderOnTheirClockAndLeaveRowSizesBasic() async throws {
+        let window = makeWindow(), host = UIView(frame: .init(x: 0, y: 0, width: 100, height: 200))
+        window.addSubview(host); window.isHidden = false
+        defer { window.isHidden = true }
+        let curve = ViewportCurve(progress: [0, 0, 0.25, 0.75, 1, 1])
+        let transition = ListTransition(duration: 0.5, curve: .linear, viewportCurve: curve).scaled(by: 2)
+        var model = ListAnimationModel()
+        let viewportTrack = model.replace(.viewport, .viewportOffset, from: 100, to: 0, at: 1, transition: transition)
+        let rowTrack = model.replace(.row("a"), .height, from: 100, to: 200, at: 1, transition: transition)
+        let track = try #require(viewportTrack), row = try #require(rowTrack)
+        #expect(AnimationController.compile(.height, track: row) is CABasicAnimation)
+        let animation = AnimationController.compile(.viewportOffset, track: track)
+        #expect(animation is CAKeyframeAnimation)
+        host.layer.speed = 0; host.layer.timeOffset = 1
+        animation.beginTime = 1
+        host.layer.add(animation, forKey: "viewport")
+        for phase in [0.1, 0.3, 0.5, 0.7, 0.9] {
+            CATransaction.begin(); CATransaction.setDisableActions(true)
+            host.layer.timeOffset = 1 + phase
+            CATransaction.commit(); CATransaction.flush()
+            try await Task.sleep(for: .milliseconds(35))
+            let shown = try #require(host.layer.presentation())
+            #expect(abs(shown.bounds.origin.y - track.value(at: 1 + phase)) < 0.2)
+        }
+    }
 }
 #endif

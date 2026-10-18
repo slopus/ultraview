@@ -137,10 +137,13 @@ final class ListComposerKeystrokeProbe: NSObject {
             var tracks: [String: Any] = [:]
             for (name, layer) in [("bar", bar.layer), ("text", text.layer), ("viewport", chat.list.contentView.layer)] {
                 for key in layer.animationKeys() ?? [] {
-                    guard let animation = layer.animation(forKey: key) as? CABasicAnimation else { continue }
+                    guard let raw = layer.animation(forKey: key) else { continue }
+                    guard let animation = raw as? CAPropertyAnimation, animation.probeIsSupported else {
+                        failure = "Unsupported animation \(type(of: raw)) at \(name)/\(key)"; continue
+                    }
                     tracks[name + "/" + key] = ["begin": animation.beginTime, "duration": animation.duration,
-                        "from": String(describing: animation.fromValue), "to": String(describing: animation.toValue),
-                        "path": animation.keyPath ?? ""]
+                        "from": String(describing: animation.probeFromValue), "to": String(describing: animation.probeToValue),
+                        "path": animation.keyPath ?? "", "samples": (animation as? CAKeyframeAnimation)?.values?.count ?? 0]
                 }
             }
             entry["tracks"] = tracks

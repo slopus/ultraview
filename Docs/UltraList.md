@@ -103,6 +103,12 @@ can apply; a newer complete collection supersedes a pending one. The list-level
 `defaultTransition` starts at `.easeInOut(0.3)`. Per-update transitions override
 it, including `.none`, `.init(duration:curve:)` and `.spring(_:damping:)`.
 Position, size and opacity compile to `CABasicAnimation` or `CASpringAnimation`.
+An inset-only pass can supply `ListTransition.viewportCurve`, a `ViewportCurve`
+of uniformly spaced progress samples. Its viewport correction compiles to a
+linear `CAKeyframeAnimation`; the same samples drive analytic geometry and
+coverage bounds. Collection, size, scroll-target and other full passes use the
+ordinary transition curve. Rows merely revealed by an inset profile enter at
+their final frames and skip their content appearance.
 Each row's height keeps its own clock. Other rows follow that height through
 separate additive position tracks, while insertions and moves keep their own
 position tracks. A later Send or move preserves an unchanged height transition.
@@ -312,13 +318,18 @@ engine, with recorded drag samples and releases required by the assertions.
 The chat list keeps its full frame behind the composer and keyboard. The
 keyboard's notification supplies the occlusion target and duration in the same
 turn; `ListTransition.keyboard(_:)` applies the system keyboard spring to the
-viewport offset. One owned composer inset positions the bar and the list in
+physical begin/end frames. A sampled viewport profile clamps that full travel
+at the chat's resting edge: the composer stays there while the keyboard moves
+through the area below the chat, then follows its edge. One owned composer
+inset positions the bar and the list in
 the same transaction. The guide supplies finger samples during a drag;
 noninteractive layout uses notification targets. The bar copies the viewport
 animation's timing, including its absolute start time.
 A transparent, noninteractive production view depends on the guide so its
 movement schedules the chat's layout even with diagnostics disabled. The
 keyboard geometry probe reads that view and adds no guide constraints.
+It records the composer-to-guide gap during finger tracking. Pixel captures
+check ordinary show/hide against the keyboard's animated surface.
 An undismissed interactive drag returns with an ease-in-out transition over the
 remaining fraction of the keyboard's full height, taken from its notification
 frame. That full height can exceed the overlap with the chat view. A notification

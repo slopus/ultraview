@@ -489,8 +489,11 @@ final class ListStreamSendProbe: NSObject {
                                       ("positionY", view.layer, view.layer.position.y),
                                       ("viewportOffset", list.contentView.layer, list.contentView.layer.bounds.minY)] {
             let key = name == "viewportOffset" ? name : row.identity + "/" + name
-            guard let animation = owner.animation(forKey: "ultraview.list.\(name)") as? CABasicAnimation else {
+            guard let raw = owner.animation(forKey: "ultraview.list.\(name)") else {
                 previousTracks.removeValue(forKey: key); continue
+            }
+            guard let animation = raw as? CAPropertyAnimation, animation.probeIsSupported else {
+                result.violate("unsupportedAnimation", ["property": key, "type": String(describing: type(of: raw))]); continue
             }
             let generation = (animation.value(forKey: "ultraviewGeneration") as? NSNumber)?.uint64Value ?? 0
             let start = animation.beginTime == 0
@@ -511,9 +514,9 @@ final class ListStreamSendProbe: NSObject {
             tracks[name] = ["generation": generation, "begin": animation.beginTime,
                 "modelStart": (animation.value(forKey: "ultraviewStartTime") as? NSNumber)?.doubleValue ?? 0,
                 "duration": animation.duration, "speed": animation.speed,
-                "from": (animation.fromValue as? NSNumber)?.doubleValue ?? 0,
-                "to": (animation.toValue as? NSNumber)?.doubleValue ?? 0,
-                "curve": first + last]
+                "from": (animation.probeFromValue as? NSNumber)?.doubleValue ?? 0,
+                "to": (animation.probeToValue as? NSNumber)?.doubleValue ?? 0,
+                "curve": first + last, "samples": (animation as? CAKeyframeAnimation)?.values?.count ?? 0]
         }
         var hosts: [[String: Any]] = []
         for child in view.subviews {
@@ -562,10 +565,14 @@ final class ListStreamSendProbe: NSObject {
                 "animations": view.layer.animationKeys() ?? []]
             var tracks: [String: Any] = [:]
             for key in view.layer.animationKeys() ?? [] {
-                guard let animation = view.layer.animation(forKey: key) as? CABasicAnimation else { continue }
+                guard let raw = view.layer.animation(forKey: key) else { continue }
+                guard let animation = raw as? CAPropertyAnimation, animation.probeIsSupported else {
+                    result.violate("unsupportedAnimation", ["property": key, "type": String(describing: type(of: raw))]); continue
+                }
                 tracks[key] = ["begin": animation.beginTime, "duration": animation.duration,
-                    "speed": animation.speed, "from": (animation.fromValue as? NSNumber)?.doubleValue ?? 0,
-                    "to": (animation.toValue as? NSNumber)?.doubleValue ?? 0,
+                    "speed": animation.speed, "from": (animation.probeFromValue as? NSNumber)?.doubleValue ?? 0,
+                    "to": (animation.probeToValue as? NSNumber)?.doubleValue ?? 0,
+                    "samples": (animation as? CAKeyframeAnimation)?.values?.count ?? 0,
                     "generation": (animation.value(forKey: "ultraviewGeneration") as? NSNumber)?.uint64Value ?? 0]
             }
             if !tracks.isEmpty { entry["tracks"] = tracks }
@@ -669,7 +676,11 @@ final class ListStreamSendProbe: NSObject {
                            trim(Double(sample.bar.minY)), trim(Double(sample.bar.height)), trim(sample.viewport), sent ? 1 : 0])
     }
     private func insertCurve(_ source: String, _ layer: CALayer, _ key: String, sendTime: Double) -> InsertCurve? {
-        guard let animation = layer.animation(forKey: key) as? CABasicAnimation, !(animation is CASpringAnimation),
+        guard let raw = layer.animation(forKey: key) else { return nil }
+        guard let property = raw as? CAPropertyAnimation, property.probeIsSupported else {
+            failure = "Unsupported animation \(type(of: raw)) at \(source)/\(key)"; return nil
+        }
+        guard let animation = property as? CABasicAnimation, !(animation is CASpringAnimation),
               let from = (animation.fromValue as? NSNumber)?.doubleValue, let to = (animation.toValue as? NSNumber)?.doubleValue,
               animation.duration > 0, animation.speed > 0 else { return nil }
         let begin = animation.beginTime == 0 ? CACurrentMediaTime() : layer.convertTime(animation.beginTime, to: nil)

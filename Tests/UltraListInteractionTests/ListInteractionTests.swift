@@ -66,7 +66,8 @@ final class ListInteractionTests: XCTestCase {
             XCTAssertGreaterThan(state["movingSamples"] as? Int ?? 0, 5, "\(mode): \(state)")
             XCTAssertGreaterThan(state["dragSamples"] as? Int ?? 0, 5, "\(mode): \(state)")
             XCTAssertGreaterThan(state["dragKeyboardTravel"] as? Double ?? 0, 20, "\(mode): \(state)")
-            for key in ["composerGap", "rowGap"] {
+            XCTAssertGreaterThanOrEqual(state["trackingComposerSamples"] as? Int ?? 0, 3, "\(mode): missing moving finger-driven composer samples")
+            for key in ["trackingComposerGap", "rowGap"] {
                 XCTAssertLessThanOrEqual(state[key] as? Double ?? 1000, 1.5, "\(mode) \(key): \(state)")
             }
             XCTAssertEqual(state["rowAnimationSamples"] as? Int, 0, "\(mode): \(state)")
@@ -155,7 +156,8 @@ final class ListInteractionTests: XCTestCase {
             XCTAssertEqual(state["keyboardSpringCorrect"] as? Bool, true, "\(mode): \(state)")
             XCTAssertEqual((state["handoffSamples"] as? [[String: Double]])?.count, 4, "\(mode): \(state)")
             XCTAssertLessThanOrEqual(state["detachedAnimationAmplitude"] as? Double ?? 1000, 1, "\(mode): \(state)")
-            XCTAssertLessThanOrEqual(state["composerGap"] as? Double ?? 1000, 1.5, "\(mode): \(state)")
+            XCTAssertGreaterThanOrEqual(state["trackingComposerSamples"] as? Int ?? 0, 3, "\(mode): missing moving finger-driven composer samples")
+            XCTAssertLessThanOrEqual(state["trackingComposerGap"] as? Double ?? 1000, 1.5, "\(mode): \(state)")
             let frames = try XCTUnwrap(state["releaseFrames"] as? [[String: Double]])
             XCTAssertGreaterThan(frames.count, 10, mode)
             let firstTime = try XCTUnwrap(frames.first?["time"]), lastTime = try XCTUnwrap(frames.last?["time"])

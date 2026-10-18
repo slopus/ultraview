@@ -57,6 +57,20 @@ private final class ViewportRowView: ListRowView {
     }
 
     @Test(arguments: ScrollEngineMode.allCases)
+    func aViewportProfileAppliesOnlyToInsetPasses(mode: ScrollEngineMode) throws {
+        let (window, list) = fixture(mode)
+        defer { list.haltScrolling(); window.isHidden = true }
+        let profile = ViewportCurve(progress: [0, 0, 0.5, 1])
+        let transition = ListTransition(duration: 1, curve: .linear, viewportCurve: profile)
+        list.applyChanges(newInsets: .init(top: 80), transition: transition)
+        #expect(list.contentView.layer.animation(forKey: "ultraview.list.viewportOffset") is CAKeyframeAnimation)
+        list.applyChanges(newInsets: .init(top: 120), scrollTo: .init(index: 15), transition: transition)
+        #expect(list.contentView.layer.animation(forKey: "ultraview.list.viewportOffset") is CABasicAnimation)
+        let row = try #require(list.loadedItemView(at: 15))
+        #expect(!(row.layer.animation(forKey: "ultraview.list.height") is CAKeyframeAnimation))
+    }
+
+    @Test(arguments: ScrollEngineMode.allCases)
     func finishingWithoutACorrectionDoesNothing(mode: ScrollEngineMode) throws {
         let (window, list) = fixture(mode)
         defer { list.haltScrolling(); window.isHidden = true }
