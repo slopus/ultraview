@@ -2211,7 +2211,8 @@ The dismissal growth check uses an injected host. Notification durations/curves,
 changes between end and layout, native height changes during dismissal, host
 replacement, hardware keyboard changes and rotation during a drag still lack
 runtime parity evidence. The historical models establish none of these UIKit
-behaviors. The final integrated 24-method hosted run remains pending.
+behaviors. The final integrated 24-method hosted run passes, including the four
+refocus and rotation methods, with no skips or Swift compiler warnings.
 
 On a show that interrupts the driver's final system hide, a hold waits for
 committed native position motion and the final shown model frame. The

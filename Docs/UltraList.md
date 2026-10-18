@@ -454,10 +454,11 @@ continues through both outcomes. `dismissedInTouchSequence` reports the decision
 until the next touch sequence. Editing ends after dismissal animation completion.
 
 The gesture and release regressions pass 322 Linux tests in 54 suites, and 390
-Lean theorem checks pass. The staged baseline passed simulator suites with 3 clock
-checks, 20 hosted methods, 17 demo tests and 5 interaction methods over 36 launches,
-with no Swift compiler or duplicate-library warnings. Exact subpixel placement,
-multiline growth, refocus and rotation checks pass. The momentum comparison uses
+Lean theorem checks pass. The integrated candidate passed simulator suites with
+3 clock checks, 24 hosted methods, 17 demo tests and 5 interaction methods over
+36 launches, with no skips, Swift compiler or duplicate-library warnings. The
+built demo also has `CADisableMinimumFrameDurationOnPhone` enabled. Exact subpixel
+placement, multiline growth, refocus and rotation checks pass. The momentum comparison uses
 card rows; the other interaction scenarios use variable-height bubbles.
 
 Four focused height-change methods failed before the geometry fix and passed
@@ -465,14 +466,14 @@ after it. They cover shrinkage before a fast release, growth during tracking and
 return, and a taller host at dismissal completion. Six native cases, across all
 engines during tracking and return, grew the keyboard from 335 to 399 points,
 observed a matching notification while ownership was held, and checked stable
-host identity and the final inset. The final integrated run after rebasing is
-pending. Earlier variable-rate recordings found separate composites during finger
-tracking: the keyboard can
-lead the composer and rows by 3–7 milliseconds before they catch up. The observed
-gap ranges from about 3 points at slow speeds to 46 points in a fast fling.
-Those captures do not establish whether a physical display shows the intermediate
-composite. Pixel review of the staged baseline is pending. The shared release clock
-therefore does not establish alignment at every composite during finger tracking.
+host identity and the final inset. Pixel review of the preceding baseline's
+36 interaction recordings found no driven composites where the rows and composer
+moved separately. The first driven motion
+moved the keyboard, composer and rows together in 14 of 18 runs; the other four
+showed the keyboard first. Separate keyboard and app composites still occur during
+finger tracking. Recording timestamps and a fitted nominal 60 Hz grid cannot
+establish which intermediate composites a physical display would show. The shared
+release clock therefore does not establish alignment at every tracking composite.
 The hosted tests load the app's symbols
 without linking another copy of the library into the test bundle.
 
@@ -799,7 +800,7 @@ bundle identifier so independent test runners retain their own identities.
 
 | Area | Implemented | Deferred or not yet validated |
 |---|---|---|
-| Keyboard | The composer follows the keyboard layout guide. The fixed inverted list receives the notified occlusion as its top inset. Programmatic show/hide and composer size changes compensate at every scroll position. Interactive dismissal preserves finger placement and release momentum. Presentation-layer interaction checks cover all three engines. | Current physical-device interaction is blocked by the locked iPhone (passcode required, no developer image). Earlier device cold entry and UIKit keyboard/input costs exceed 16.7 ms; measured limits are described below. |
+| Keyboard | Optional driven dismissal coalesces touch samples for window layout and shares its release curve with the composer and list inset. Unsupported configurations retain the system path. Programmatic show/hide and composer size changes compensate at every scroll position. Interactive dismissal preserves finger placement and release momentum. Simulator interaction checks cover all three engines. | Current physical-device interaction is blocked by the locked iPhone (passcode required, no developer image). Earlier device cold entry and UIKit keyboard/input costs exceed 16.7 ms; measured limits are described below. |
 | Accessibility | Hosted nodes apply accessibility properties; text nodes publish labels and static-text traits. Viewport-sized scroll actions follow screen direction, including inverted lists. Logical row focus survives virtualization and returns to a recreated descendant when available. | Physical VoiceOver interaction coverage, including custom accessibility-element containers. |
 | Node row revisions | Ready content remains visible until the newest replacement applies its visible commit; superseded candidates are discarded. With `animatesContent`, keyed nodes, text and bitmaps animate on the row's height timing. | Rows without `animatesContent` (the default, and the demo's cards) still swap content at its final layout under the row's clip. Measured main-thread cost while content animates. |
 | Trackpad | Continuous indirect pan input has its own drag baseline and rubber-band coefficient. The physics model supports indirect replay. | Physical trackpad parity, indirect recording fixtures and discrete wheel input. The committed public gesture fixtures use direct touch. |
