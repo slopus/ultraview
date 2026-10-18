@@ -2569,7 +2569,7 @@ This review pins the new sources by SHA-256:
 | --- | --- |
 | `KeyboardDismissalGesture.swift` | `12be1df541aa8d78d7c882d71043df8e858633eb945fbc7721c42fc669ded5eb` |
 | `KeyboardDismissalMotion.swift` | `32be8df047fa68c4608b987ddc2528085c53f09cd5aa7683c83b223f4c97187d` |
-| `UIKit/KeyboardDismissalController.swift` | `34b30622ae9b09df411e8b393eba3a27910185463129c80a71d596a5523bedd7` |
+| `UIKit/KeyboardDismissalController.swift` | `ad4daec024e0d9dbc597ea94310c63dfee8f8358a82cc39051726bb1d0987675` |
 | `UIKit/KeyboardDismissalAnimation.swift` | `a790414ac44028edd88335c0bebd6f7d8784c82a45cf8fb3e9b128faa8a16cb6` |
 | `UIKit/KeyboardHostLookup.swift` | `b7d05de5c4fd9a1d03aa497ecf382b17bf1f0be22cf0879dd46b631feafc38a2` |
 | `UIKit/KeyboardHostMotion.swift` | `3ea35b72d3d03adf395c6745f01af5b159d2aa52972c035f72ff0d27d1eb0768` |
@@ -2594,7 +2594,8 @@ host bounds. Tracking and ordinary release introduce no enclosing driver
 transaction. The callback receives signed overlap and an exact interactive flag.
 `performUpdate` defers the whole operation past an active list pass and rejects
 superseded requests. The demo disables inset compensation while its list tracks
-or drags (`applyDrivenKeyboard`), and accepts subpixel inset changes.
+or drags, or while released momentum is decelerating (`applyDrivenKeyboard`),
+and accepts subpixel inset changes. A stationary return still compensates.
 Its owned `viewDidLayoutSubviews` restores the bottom constraint's exact position
 after Auto Layout rounds the result, preserving its anchor when the composer
 grows. The hosted subpixel regression keeps its exact-value comparison, and a
@@ -2701,7 +2702,7 @@ The source pins are SHA-256:
 | Source | SHA-256 |
 | --- | --- |
 | `UltraList/UIKit/UltraListView.swift` | `60dc00c68f182044929a79b1a7aa90f9436b509ab7f30ee13062e9fbdaa0c2be` |
-| `UltraViewDemo/List/ListChatController.swift` | `a4912786b3e950bb9733084b67116104119d59857906b696c81b9c0cae1371e1` |
+| `UltraViewDemo/List/ListChatController.swift` | `06a1265d05b8b7bec1ffe1ca9f2ea7a3c75cd82a0213a968496f184cd45cbcb2` |
 
 | Existing model relation | Reviewed Swift |
 | --- | --- |
@@ -2783,6 +2784,26 @@ above pin `7bdc426a` (`fda45e5`). At `60dc00c6`, lines from :48 move by 2, from
 :406 by 58, from :523 by 59, from :525 by 64, from :775 by 69, from :1034
 by 71 and from :1076 by 75. :524 is now :583-588.
 NodeRow, ListRow and WindowProjection are unchanged by this accessory change.
+
+The keyboard-return follow-up after `38f14a2` changes only the demo's
+compensation eligibility and notification coordinate conversion. A returning
+keyboard leaves a released, decelerating list's offset unchanged; a stationary
+list retains the inset compensation described above. Both notification handlers
+convert screen frames through the window scene's screen coordinate space before
+converting into the client view. Scene-less tests subtract the window's frame
+origin. These are runtime conditions outside the Lean models. The hosted
+`KeyboardReturnMomentumRuntimeTests` covers coasting and stationary returns in
+all engines, plus nested client views in offset windows on both interaction
+paths. The five notification conversion sites were rechecked; no Lean model or
+theorem changed. Native simulator validation passed the three new hosted
+regressions, 81 retained seam cases, 1,129 unit cases, 28 hosted methods, 120 demo
+cases, five keyboard interactions and the Release performance test. The 41-case
+interaction run had four previously accepted main-thread timing failures across
+three methods; its 12 swipe probes reported no content-scaled main-thread work.
+The first performance launch executed no tests; one simulator recovery passed
+using identical Release binaries. Physical-device validation remains incomplete:
+the single attempt selected Release hosted tests without enabling testability
+and stopped at their test-module imports.
 
 ## Theorems
 

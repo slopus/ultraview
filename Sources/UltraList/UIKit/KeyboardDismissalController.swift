@@ -103,7 +103,7 @@ public final class KeyboardDismissalController: NSObject {
     /// docked host can correct its origin when both sources describe the same size.
     public func resolvedKeyboardFrame(_ screenFrame: CGRect) -> CGRect? {
         guard let view = coordinateView, let window = view.window else { return nil }
-        var result = view.convert(screenFrame, from: nil)
+        var result = view.convert(keyboardFrameInWindow(screenFrame, window: window), from: window)
         guard result.minY < view.convert(window.bounds, from: window).maxY,
               let found = lookupHost(window.windowScene),
               abs(found.view.bounds.height - screenFrame.height) <= 0.5 else { return result }
@@ -128,13 +128,13 @@ public final class KeyboardDismissalController: NSObject {
         guard isDriving else { return false }
         if ownership == .recoveringShow, let window = attachedWindow,
            let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect,
-           abs(Double(window.convert(frame, from: nil).minY) - keyboardTop) > 0.5 {
+           abs(Double(keyboardFrameInWindow(frame, window: window).minY) - keyboardTop) > 0.5 {
             invalidate(); refresh()
             return false
         }
         guard ownership == .awaitingHide, let window = attachedWindow,
               let screenFrame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return true }
-        let target = window.convert(screenFrame, from: nil)
+        let target = keyboardFrameInWindow(screenFrame, window: window)
         guard target.minY < window.bounds.maxY - 0.5 else { return true }
         guard let currentHost = lookupHost(window.windowScene) else { invalidate(); return false }
         if let oldHost = host, oldHost.view !== currentHost.view {
@@ -195,6 +195,10 @@ public final class KeyboardDismissalController: NSObject {
         guard let host, let window = attachedWindow, let shown = host.view.layer.presentation(),
               let root = host.window.layer.presentation() else { return nil }
         return window.convert(shown.convert(shown.bounds, to: root), from: host.window)
+    }
+    private func keyboardFrameInWindow(_ frame: CGRect, window: UIWindow) -> CGRect {
+        if let screen = window.windowScene?.screen { return window.convert(frame, from: screen.coordinateSpace) }
+        return frame.offsetBy(dx: -window.frame.minX, dy: -window.frame.minY)
     }
 
     public func invalidate() {

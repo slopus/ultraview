@@ -248,7 +248,7 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
         followsComposer = true
         keyboardTransition = update.transition
         applyComposerInset(max(update.height, view.safeAreaInsets.bottom) + (composerHeight?.constant ?? composerBar.bounds.height) + 8,
-                           transition: update.transition, compensatesInsetChange: !list.isTracking && !list.isDragging,
+                           transition: update.transition, compensatesInsetChange: !list.isTracking && !list.isDragging && !list.isDecelerating,
                            finishesAnimation: update.transition.isImmediate && update.phase != .tracking,
                            minimumChange: 1e-6)
         keyboardTransition = nil
@@ -326,13 +326,13 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
     @objc private func keyboardWillChange(_ notification: Notification) {
         let started = CACurrentMediaTime()
         defer { MainThreadMonitor.shared.note("keyboard frame handler \((CACurrentMediaTime() - started) * 1000) ms") }
-        guard keyboardDismissal?.handle(notification) != true, view.window != nil,
+        guard keyboardDismissal?.handle(notification) != true, let window = view.window,
               let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
         let duration = (notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double) ?? 0
         let raw = (notification.userInfo?[UIResponder.keyboardAnimationCurveUserInfoKey] as? UInt) ?? 7
-        let local = keyboardDismissal?.resolvedKeyboardFrame(frame) ?? view.convert(frame, from: nil)
+        let local = keyboardDismissal?.resolvedKeyboardFrame(frame) ?? view.convert(keyboardFrameInWindow(frame, window: window), from: window)
         let windowBottom = view.window.map { view.convert($0.bounds, from: $0).maxY } ?? view.bounds.maxY
-        let begin = (notification.userInfo?[UIResponder.keyboardFrameBeginUserInfoKey] as? CGRect).map { view.convert($0, from: nil) }
+        let begin = (notification.userInfo?[UIResponder.keyboardFrameBeginUserInfoKey] as? CGRect).map { view.convert(keyboardFrameInWindow($0, window: window), from: window) }
         let alreadyHidden = begin.map { $0.minY >= windowBottom - 0.5 && local.minY >= windowBottom - 0.5 } ?? false
         keyboardFrameChanged(height: max(0, view.bounds.maxY - local.minY), duration: duration, curve: raw,
                              fullHeight: frame.height, finishesHide: alreadyHidden,
@@ -342,6 +342,10 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
     @objc private func keyboardDidHide(_ notification: Notification) {
         guard keyboardDismissal?.handle(notification) != true else { return }
         keyboardFrameChanged(height: 0, duration: 0, curve: 7, finishesHide: true)
+    }
+    private func keyboardFrameInWindow(_ frame: CGRect, window: UIWindow) -> CGRect {
+        if let screen = window.windowScene?.screen { return window.convert(frame, from: screen.coordinateSpace) }
+        return frame.offsetBy(dx: -window.frame.minX, dy: -window.frame.minY)
     }
     func keyboardDragBegan(height: Double) {
         if let pendingKeyboardResolution {
