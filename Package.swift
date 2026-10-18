@@ -77,6 +77,7 @@ let package = Package(
         ),
         .testTarget(name: "UltraListInteractionTests", dependencies: ["UltraView"]),
         .testTarget(name: "UltraViewDemoTests", dependencies: ["UltraViewDemo", "UltraView"]),
+        .testTarget(name: "UltraKeyboardRuntimeTests", dependencies: ["UltraViewDemo", "UltraView"]),
         .testTarget(
             // UI automation runs through the XcodeGen performance scheme.
             name: "UltraViewPerformanceTests",

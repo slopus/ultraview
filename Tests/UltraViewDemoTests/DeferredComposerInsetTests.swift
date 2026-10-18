@@ -7,6 +7,42 @@ import UltraView
 @MainActor
 @Suite(.serialized) struct DeferredComposerInsetTests {
     @Test(arguments: ScrollEngineMode.allCases)
+    func aQueuedInsetCannotOverwriteANewerUpdateAfterThePassEnds(mode: ScrollEngineMode) async throws {
+        let controller = ListChatController(mode: mode)
+        let window: UIWindow
+        if let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first {
+            window = UIWindow(windowScene: scene)
+            window.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+        } else { window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844)) }
+        window.rootViewController = controller; window.isHidden = false
+        defer { controller.list.haltScrolling(); window.isHidden = true; window.rootViewController = nil }
+        controller.view.layoutIfNeeded()
+        let list = controller.list
+        for _ in 0..<150 where list.loadedIndexRange.isEmpty { try await Task.sleep(for: .milliseconds(20)) }
+        list.scrollTo(.init(index: 25), transition: .none)
+        for _ in 0..<150 where !list.loadedIndexRange.contains(25) { try await Task.sleep(for: .milliseconds(20)) }
+        let bar = try #require(controller.view.subviews.first { $0.accessibilityIdentifier == "composerBar" })
+        window.layer.speed = 0; window.layer.timeOffset = 100
+        var queued = false
+        list.onUserScrollDelta = { _, _ in
+            list.onUserScrollDelta = nil; queued = true
+            controller.keyboardFrameChanged(height: 150, duration: 0.4, curve: 7)
+        }
+        list.handleScroll(list.currentScrollOffset)
+        #expect(queued)
+        // This arrives in the same turn, before the main-queue drain scheduled
+        // by handleScroll's defer. It is the newest keyboard state.
+        controller.keyboardFrameChanged(height: 300, duration: 0.4, curve: 7)
+        let latestInset = list.viewportInsets.top, latestBar = bar.frame
+        #expect(latestInset > 300)
+        try await Task.sleep(for: .milliseconds(80))
+        #expect(list.viewportInsets.top == latestInset,
+                "\(mode): stale inset \(list.viewportInsets.top) replaced newest \(latestInset)")
+        #expect(bar.frame == latestBar,
+                "\(mode): stale accessory \(bar.frame) replaced newest \(latestBar)")
+    }
+
+    @Test(arguments: ScrollEngineMode.allCases)
     func anInsetReenteredDuringAKeyframedPassWaitsForItsOwnViewportClock(mode: ScrollEngineMode) async throws {
         let controller = ListChatController(mode: mode)
         let window: UIWindow
