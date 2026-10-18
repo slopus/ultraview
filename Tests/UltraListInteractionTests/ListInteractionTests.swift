@@ -28,7 +28,7 @@ final class ListInteractionTests: XCTestCase {
     @MainActor func testKeyboardTracksComposerAndViewportDuringShowHideAndInteractiveDismissal() throws {
         let app = XCUIApplication()
         for mode in ["uiKit", "stepped", "keyframe"] {
-            app.launchArguments = ["-screen", "lists", "-listScreen", "chat", "-listEngine", mode, "-listKeyboardGeometryProbe", "YES"]
+            app.launchArguments = ["-screen", "lists", "-listScreen", "chat", "-listEngine", mode, "-listKeyboardGeometryProbe", "YES", "-listSystemKeyboardDismissal", "YES"]
             app.launch()
             let composer = app.textViews["composer"]
             XCTAssertTrue(composer.waitForExistence(timeout: 10))
@@ -94,7 +94,7 @@ final class ListInteractionTests: XCTestCase {
     @MainActor func testKeyboardDoesNotVetoReleaseMomentumInEitherDirection() throws {
         let app = XCUIApplication()
         for mode in ["uiKit", "stepped", "keyframe"] {
-            app.launchArguments = ["-screen", "lists", "-listScreen", "chat", "-listEngine", mode, "-listKeyboardGeometryProbe", "YES", "-listInitialRow", "25"]
+            app.launchArguments = ["-screen", "lists", "-listScreen", "chat", "-listEngine", mode, "-listKeyboardGeometryProbe", "YES", "-listInitialRow", "25", "-listSystemKeyboardDismissal", "YES"]
             app.launch()
             let composer = app.textViews["composer"]
             XCTAssertTrue(composer.waitForExistence(timeout: 10))
@@ -130,7 +130,7 @@ final class ListInteractionTests: XCTestCase {
     @MainActor private func checkKeyboardDismissal(stationaryRelease: Bool, initialRow: Int = 0) throws {
         let app = XCUIApplication()
         for mode in ["uiKit", "stepped", "keyframe"] {
-            app.launchArguments = ["-screen", "lists", "-listScreen", "chat", "-listEngine", mode, "-listKeyboardGeometryProbe", "YES"]
+            app.launchArguments = ["-screen", "lists", "-listScreen", "chat", "-listEngine", mode, "-listKeyboardGeometryProbe", "YES", "-listSystemKeyboardDismissal", "YES"]
             if initialRow > 0 { app.launchArguments += ["-listInitialRow", "\(initialRow)"] }
             app.launch()
             let composer = app.textViews["composer"]
@@ -190,7 +190,7 @@ final class ListInteractionTests: XCTestCase {
     @MainActor func testUndismissedKeyboardDragCanReturnToTheNewestEdge() throws {
         let app = XCUIApplication()
         for mode in ["uiKit", "stepped", "keyframe"] {
-            app.launchArguments = ["-screen", "lists", "-listScreen", "chat", "-listEngine", mode, "-listKeyboardGeometryProbe", "YES"]
+            app.launchArguments = ["-screen", "lists", "-listScreen", "chat", "-listEngine", mode, "-listKeyboardGeometryProbe", "YES", "-listSystemKeyboardDismissal", "YES"]
             app.launch()
             let composer = app.textViews["composer"]
             XCTAssertTrue(composer.waitForExistence(timeout: 10))

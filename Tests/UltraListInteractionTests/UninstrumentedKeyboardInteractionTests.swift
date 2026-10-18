@@ -2,7 +2,7 @@
 import XCTest
 import UIKit
 
-/// Screenshots come from the test process. The app runs without diagnostic
+/// The system control path. Screenshots come from the test process without diagnostic
 /// flags, marker views, display links, or geometry queries during the drag.
 final class UninstrumentedKeyboardInteractionTests: XCTestCase {
     @MainActor func testPortraitComposerFollowsThePhysicalKeyboardWithoutProbes() throws {
@@ -18,7 +18,7 @@ final class UninstrumentedKeyboardInteractionTests: XCTestCase {
         defer { XCUIDevice.shared.orientation = .portrait }
         let app = XCUIApplication()
         for mode in ["keyframe", "uiKit", "stepped"] {
-            app.launchArguments = ["-screen", "lists", "-listScreen", "chat", "-listEngine", mode]
+            app.launchArguments = ["-screen", "lists", "-listScreen", "chat", "-listEngine", mode, "-listSystemKeyboardDismissal", "YES"]
             app.launch()
             let composer = app.textViews["composer"], keyboard = app.keyboards.firstMatch
             XCTAssertTrue(composer.waitForExistence(timeout: 10))

@@ -16,6 +16,7 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
     private var waitsForSentCollection = false
     private var pendingComposerHeight: CGFloat?
     private var keyboardProbe: ListKeyboardGeometryProbe?
+    var keyboardDismissal: KeyboardDismissalController?
     private var keyboardTransition: ListTransition?
     private var gestureKeyboardTransition: ListTransition?
     private var keyboardHeight = 0.0
@@ -28,7 +29,9 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
     private var keyboardDragHasEnded = false
     private var pendingKeyboardResolution: KeyboardInsetGesture.Resolution?
     private var keyboardResolutionGeneration: UInt64 = 0
-    private var isTrackingKeyboard: Bool { keyboardGesture.isTracking || (list.isTracking && !keyboardDragHasEnded) }
+    private var isTrackingKeyboard: Bool {
+        keyboardDismissal?.isAvailable != true && (keyboardGesture.isTracking || (list.isTracking && !keyboardDragHasEnded))
+    }
     private var swipeProbe: ListSwipeProbe?
     private var rows: [any ListRow] = []
     /// The conversation as bubbles. Chaos runs keep the card rows they mutate.
@@ -40,6 +43,7 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
     private let monitor = ListFrameMonitor(name: "chat")
     var chaosRows: [DemoListRow] { get { rows.compactMap { $0 as? DemoListRow } } set { rows = newValue } }
     private var composerInset = 0.0
+    private var composerInsetRequest: UInt64 = 0
     private var hostProbe: Bool { UserDefaults.standard.bool(forKey: "listHostProbe") }
     init(mode: ScrollEngineMode) { list = UltraListView(engineMode: mode); super.init(nibName: nil, bundle: nil) }
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
@@ -129,7 +133,7 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
             if event.phase == .touchDown { self?.keyboardDragHasEnded = false }
         }
         list.willBeginDragging = { [weak self] in
-            guard let self else { return }
+            guard let self, keyboardDismissal?.isAvailable != true else { return }
             gestureKeyboardTop = view.keyboardLayoutGuide.layoutFrame.minY
             keyboardDragBegan(height: view.bounds.maxY - gestureKeyboardTop)
             followsComposer = true
@@ -139,12 +143,19 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
             if abs(view.keyboardLayoutGuide.layoutFrame.minY - gestureKeyboardTop) > 1 { followsComposer = false }
         }
         list.didEndDragging = { [weak self] in
-            guard let self else { return }
+            guard let self, keyboardDismissal?.isAvailable != true else { return }
             followsComposer = abs(view.keyboardLayoutGuide.layoutFrame.minY - gestureKeyboardTop) <= 1
             keyboardDragEnded(height: view.bounds.maxY - view.keyboardLayoutGuide.layoutFrame.minY)
         }
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardWillChange(_:)), name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
-        NotificationCenter.default.addObserver(self, selector: #selector(keyboardDidHide), name: UIResponder.keyboardDidHideNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(keyboardDidHide(_:)), name: UIResponder.keyboardDidHideNotification, object: nil)
+        if !UserDefaults.standard.bool(forKey: "listSystemKeyboardDismissal") {
+            keyboardDismissal = KeyboardDismissalController(scrollView: list, coordinateView: view,
+                accessoryHeight: { [weak self] in Double(self?.composerBar.bounds.height ?? 0) + 8 },
+                restingHeight: { [weak self] in Double(self?.view.safeAreaInsets.bottom ?? 0) },
+                hasInput: { [weak self] in self?.composer.isFirstResponder == true },
+                update: { [weak self] update in self?.applyDrivenKeyboard(update) })
+        }
         if UserDefaults.standard.bool(forKey: "listKeyboardGeometryProbe") || UserDefaults.standard.bool(forKey: "listComposerMetrics") {
             keyboardProbe = ListKeyboardGeometryProbe(owner: view, composer: composerBar, list: list,
                                                      keyboardEdge: keyboardLayoutInput, followsComposer: { [weak self] in self?.followsComposer ?? false })
@@ -201,6 +212,8 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
         defer { MainThreadMonitor.shared.note("composer layout \((CACurrentMediaTime() - started) * 1000) ms") }
         super.viewDidLayoutSubviews()
         updateComposerHeight()
+        keyboardDismissal?.refresh()
+        guard keyboardDismissal?.isDriving != true else { return }
         let guideHeight = Double(view.bounds.maxY - view.keyboardLayoutGuide.layoutFrame.minY)
         if isTrackingKeyboard, abs(view.keyboardLayoutGuide.layoutFrame.minY - gestureKeyboardTop) > 1 { followsComposer = false }
         // The guide can lay out its destination before our keyboard notification.
@@ -218,6 +231,17 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
     }
     private var effectiveKeyboardHeight: Double {
         keyboardIsVisible ? max(keyboardHeight, view.safeAreaInsets.bottom) : view.safeAreaInsets.bottom
+    }
+    func applyDrivenKeyboard(_ update: KeyboardDismissalUpdate) {
+        keyboardHeight = update.height
+        keyboardIsVisible = update.height > view.safeAreaInsets.bottom + 0.5
+        followsComposer = true
+        keyboardTransition = update.transition
+        applyComposerInset(update.height + (composerHeight?.constant ?? composerBar.bounds.height) + 8,
+                           transition: update.transition, compensatesInsetChange: update.phase != .tracking,
+                           finishesAnimation: update.transition.isImmediate && update.phase != .tracking,
+                           minimumChange: 1e-6)
+        keyboardTransition = nil
     }
     private var keyboardInputIsTracking: Bool {
         if let scroll = list.contentView as? UIScrollView {
@@ -243,13 +267,16 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
             applyComposerInset(inset, transition: .none)
         }
     }
-    private func applyComposerInset(_ inset: Double, transition: ListTransition, compensatesInsetChange: Bool? = nil, finishesAnimation: Bool = false) {
+    private func applyComposerInset(_ inset: Double, transition: ListTransition, compensatesInsetChange: Bool? = nil, finishesAnimation: Bool = false, minimumChange: Double = 0.5) {
+        composerInsetRequest &+= 1
+        let request = composerInsetRequest
         list.performAfterCurrentPass { [weak self] in
-            self?.applyComposerInsetNow(inset, transition: transition, compensatesInsetChange: compensatesInsetChange, finishesAnimation: finishesAnimation)
+            guard let self, composerInsetRequest == request else { return }
+            applyComposerInsetNow(inset, transition: transition, compensatesInsetChange: compensatesInsetChange, finishesAnimation: finishesAnimation, minimumChange: minimumChange)
         }
     }
-    private func applyComposerInsetNow(_ inset: Double, transition: ListTransition, compensatesInsetChange: Bool?, finishesAnimation: Bool) {
-        guard abs(inset - composerInset) > 0.5 else {
+    private func applyComposerInsetNow(_ inset: Double, transition: ListTransition, compensatesInsetChange: Bool?, finishesAnimation: Bool, minimumChange: Double) {
+        guard abs(inset - composerInset) > minimumChange else {
             if finishesAnimation {
                 CATransaction.begin(); CATransaction.setDisableActions(true)
                 removeComposerAnimations(); list.finishViewportTransition()
@@ -334,10 +361,11 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
     @objc private func keyboardWillChange(_ notification: Notification) {
         let started = CACurrentMediaTime()
         defer { MainThreadMonitor.shared.note("keyboard frame handler \((CACurrentMediaTime() - started) * 1000) ms") }
-        guard view.window != nil, let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
+        guard keyboardDismissal?.handle(notification) != true, view.window != nil,
+              let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
         let duration = (notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double) ?? 0
         let raw = (notification.userInfo?[UIResponder.keyboardAnimationCurveUserInfoKey] as? UInt) ?? 7
-        let local = view.convert(frame, from: nil)
+        let local = keyboardDismissal?.resolvedKeyboardFrame(frame) ?? view.convert(frame, from: nil)
         let windowBottom = view.window.map { view.convert($0.bounds, from: $0).maxY } ?? view.bounds.maxY
         let begin = (notification.userInfo?[UIResponder.keyboardFrameBeginUserInfoKey] as? CGRect).map { view.convert($0, from: nil) }
         let alreadyHidden = begin.map { $0.minY >= windowBottom - 0.5 && local.minY >= windowBottom - 0.5 } ?? false
@@ -346,7 +374,8 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
                              physicalBeginHeight: begin.map { view.bounds.maxY - $0.minY },
                              physicalEndHeight: view.bounds.maxY - local.minY)
     }
-    @objc private func keyboardDidHide() {
+    @objc private func keyboardDidHide(_ notification: Notification) {
+        guard keyboardDismissal?.handle(notification) != true else { return }
         keyboardFrameChanged(height: 0, duration: 0, curve: 7, finishesHide: true)
     }
     func keyboardDragBegan(height: Double) {
@@ -430,7 +459,9 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
     func keyboardFrameChanged(height: Double, duration: Double, curve raw: UInt, tracking: Bool? = nil, fullHeight: Double? = nil, finishesHide: Bool = false,
                               physicalBeginHeight: Double? = nil, physicalEndHeight: Double? = nil) {
         let tracking = finishesHide ? false : (tracking ?? isTrackingKeyboard)
-        let duration = finishesHide ? 0 : duration
+        let smallChange = keyboardDismissal?.isAvailable == true && !tracking && keyboardIsVisible
+            && height > view.safeAreaInsets.bottom + 0.5 && abs(height - keyboardHeight) <= 44
+        let duration = finishesHide || smallChange ? 0 : duration
         if let fullHeight { keyboardFullHeight = fullHeight }
         else if height > view.safeAreaInsets.bottom + 0.5 { keyboardFullHeight = height }
         if !tracking, height > keyboardHeight + 1 { followsComposer = true }
@@ -555,7 +586,17 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
         let rects = list.loadedAttachmentViews.map { $0.convert($0.bounds, to: list) }
         monitor.recordState(name, values: ["inset": composerInset, "pinHeld": list.holdsPinnedRow, "pinStrict": list.isStrictlyPinnedToBottomEdge, "attachmentCount": rects.count, "attachmentsFinite": rects.allSatisfy { $0.minY.isFinite && $0.maxY.isFinite }])
     }
-    override func viewDidDisappear(_ animated: Bool) { super.viewDidDisappear(animated); streaming?.cancel(); monitor.finish(); keyboardProbe?.stop() }
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        if !animated { keyboardDismissal?.dismissImmediately() }
+        if keyboardDismissal?.isDriving != true { keyboardDismissal?.invalidate() }
+    }
+    override func viewDidAppear(_ animated: Bool) { super.viewDidAppear(animated); keyboardDismissal?.refresh() }
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        keyboardDismissal?.invalidate()
+        streaming?.cancel(); monitor.finish(); keyboardProbe?.stop()
+    }
     /// Reply from the leading edge; Delete, also by a full swipe, from the trailing edge.
     private func withSwipeActions(_ row: DemoListRow) -> DemoListRow {
         var row = row

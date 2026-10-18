@@ -3,8 +3,9 @@
 #
 # The demo app target compiles Sources/UltraViewDemo itself and links the
 # package's `UltraView` product. Each directory under Tests/ is a unit-test
-# bundle; none is hosted in the app. `xcodebuild test -scheme UltraViewDemo`
-# runs all of them in the simulator.
+# bundle; UltraKeyboardRuntimeTests is hosted in the app for a live window scene
+# and software keyboard. `xcodebuild test -scheme UltraViewDemo` runs all of them
+# in the simulator.
 name: UltraView
 options:
   bundleIdPrefix: dev.ultraview
@@ -105,6 +106,24 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: dev.ultraview.performance
         CODE_SIGN_STYLE: Automatic
         TEST_TARGET_NAME: UltraViewDemoApp
+  UltraKeyboardRuntimeTests:
+    templates: [PackageTests]
+    sources:
+      - path: Tests/UltraKeyboardRuntimeTests
+    # The host supplies symbols through BUNDLE_LOADER. Linking its package
+    # into this bundle would load the library classes twice.
+    dependencies:REPLACE:
+      - target: UltraViewDemoApp
+        link: false
+        embed: false
+      - package: UltraView
+        product: UltraView
+        link: false
+        embed: false
+    settings:
+      base:
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/UltraViewDemoApp.app/UltraViewDemoApp
+        BUNDLE_LOADER: $(TEST_HOST)
 schemes:
   UltraViewDemo:
     build:
@@ -117,6 +136,7 @@ schemes:
         UltraListInteractionTests: [test]
         UltraViewDemoTests: [test]
         UltraViewPerformanceTests: [test]
+        UltraKeyboardRuntimeTests: [test]
     run:
       config: Debug
       executable: UltraViewDemoApp
@@ -129,6 +149,7 @@ schemes:
         - name: UltraViewUIKitTests
         - name: UltraListInteractionTests
         - name: UltraViewDemoTests
+        - name: UltraKeyboardRuntimeTests
         - name: UltraViewPerformanceTests
           skipped: true
   UltraViewPerformance:

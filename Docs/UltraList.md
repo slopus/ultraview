@@ -120,7 +120,9 @@ or queues the whole closure after the running pass. Use it to update an
 accessory and the list in one transaction. Updating the accessory first and
 then calling a deferred `applyChanges` can copy the previous pass's viewport
 animation. The chat queues its complete inset update this way and scales any
-copied keyframes to the accessory's own displacement.
+copied keyframes to the accessory's own displacement. A newer inset request
+supersedes a queued one, so an older closure cannot restore a stale keyboard
+height after a later update has already applied.
 
 A collection update first prepares nearby asynchronous rows while retaining its
 transition and anchor. The displayed collection stays coherent until that pass
@@ -378,17 +380,81 @@ keyboard's notification supplies the occlusion target and duration in the same
 turn; `ListTransition.keyboard(_:)` applies the system keyboard spring to the
 physical begin/end frames. A sampled viewport profile clamps that full travel
 at the chat's resting edge: the composer stays there while the keyboard moves
-through the area below the chat, then follows its edge. One owned composer
-inset positions the bar and the list in
-the same transaction. The guide supplies finger samples during a drag;
-noninteractive layout uses notification targets. The bar copies the viewport
-animation's timing, including its absolute start time.
+through the area below the chat, then follows its edge. One composer inset
+positions the bar and the list in the same transaction. The bar copies the
+viewport animation's timing, including its absolute start time.
+
+`KeyboardDismissalController` is an opt-in library component. The chat demo
+enables it in every engine; `-listSystemKeyboardDismissal YES` selects the
+system control path. A client supplies its scroll view, coordinate view,
+accessory height, resting keyboard inset, a constant-time first-responder check,
+and a synchronous update callback.
+The callback applies the supplied height and transition to its accessory and
+list. `refresh()` follows layout and window changes; `invalidate()` detaches
+the window recognizer. `dismissImmediately()` ends editing and removes keyboard
+animations during immediate navigation.
+Forward keyboard frame-change and did-hide notifications through `handle(_:)`
+before applying ordinary notification insets. It consumes updates while the
+driver owns the motion and recovers a show that interrupts its final system
+hide. An interrupted release still resolves ownership and lands the accessory
+and viewport at their target. Playback honors the list's animation duration scale.
+Refocus can retain native hide motion underneath the next show. The controller
+holds its offset until the native show commits, then reads the physical position
+inside the applying closure. When the shown model frame and host configuration
+match, it removes the host's native position animations and starts its own bounds
+motion, accessory and viewport on one transaction clock. This cancels those
+native animation completions with `finished == false`; runtime tests check the
+show notifications, input responder and subsequent native hide/show cycle.
+Ancestor motion, host bounds or transform motion, and a host that draws its own
+contents, background or shadow reject takeover and end owned recovery. A changed
+frame target during recovery returns handling to the ordinary notification path.
+In hosted simulator rotation tests, both system and driven paths retain a stale
+keyboard layout-guide frame until the next native keyboard change. The composer
+uses the host frame and stays aligned with the physical keyboard during that gap.
+
+On supported phones the controller moves the keyboard host, accessory, and
+viewport correction in one transaction. A window recognizer permits simultaneous
+recognition without cancelling or delaying touches. It arms above the keyboard
+and accessory when a first responder exists, ignores the bottom 44 points, and
+starts tracking after three points of vertical travel. The last tenth of a
+second determines release velocity. Passing the bottom threshold or releasing
+downward faster than 500 points per second below the keyboard dismisses it;
+other releases return it. Dismissal takes 0.3832 seconds and return takes 0.25.
+Both use the same sampled spring for the keyboard and app, with exact endpoints
+and a viewport profile clamped at the resting edge. Scroll momentum continues
+through both outcomes. `dismissedInTouchSequence` reports the dismissal decision
+until the next touch sequence.
+During finger tracking, the pan moves the rows and the inset changes without
+anchor compensation. Release motion compensates the inset so the rows follow
+the returning or dismissing composer. Driven updates also apply subpixel inset
+changes, keeping the accessory on the keyboard's edge at low finger speeds.
+
+The driven-controller checkpoint passed 310 Linux tests, 390 Lean theorem checks,
+and simulator suites with 3 clock checks, 10 hosted keyboard methods and 19 demo
+tests. Five gesture methods passed 36 launches across all three engines and both
+keyboard paths. The momentum comparison uses card rows; the other scenarios use
+the default variable-height bubbles. Sampled video review covers partial and
+midway returns in every engine. The hosted tests load the app's symbols without
+linking another copy of the library into the test bundle.
+
+The keyboard lookup depends on private UIKit hierarchy. It dynamically checks
+the scene's `keyboardSceneDelegate` and that object's `keyboardWindow` selectors,
+then finds containers ending in `InputSetContainerView` or `TrackingWindowView`
+and hosts ending in `InputSetHostView` or `KeyboardItemContainerView`. These
+names can break on an operating-system update. A missing window or host, an
+out-of-process keyboard, a floating keyboard, or a non-phone device retains the
+system interactive path. Programmatic transitions still use keyboard frame
+notifications; a matching visible host can correct the frame origin, and small
+prediction-bar changes apply immediately.
+
+The system fallback reads the layout guide during finger tracking and
+notification targets during other transitions.
 A transparent, noninteractive production view depends on the guide so its
 movement schedules the chat's layout even with diagnostics disabled. The
 keyboard geometry probe reads that view and adds no guide constraints.
 It records the composer-to-guide gap during finger tracking. Pixel captures
 check ordinary show/hide against the keyboard's animated surface.
-An undismissed interactive drag returns with an ease-in-out transition over the
+In the fallback, an undismissed drag returns with an ease-in-out transition over the
 remaining fraction of the keyboard's full height, taken from its notification
 frame. That full height can exceed the overlap with the chat view. A notification
 whose begin and end frames are already below the window, or `keyboardDidHide`,
@@ -402,12 +468,12 @@ This checkpoint passed 237 Linux tests, 373 simulator unit tests, seven keyboard
 interaction methods, the 21-phase motion and next-draft test, and eighteen
 Stream/Send scenarios.
 
-During an interactive drag, guide changes update the inset immediately, with
+In the system fallback, guide changes update the inset immediately, with
 anchor compensation disabled while the finger owns the motion. The inset-only
 path avoids collection diffing, row reapplication and individual row animations.
 UIKit drives keyboard interaction through its public scroll API; custom engines
-use an empty system scroll view alongside their own pan recognizer. Release
-suppression belongs only to a gesture that actually dismissed the keyboard.
+use an empty system scroll view alongside their own pan recognizer. Neither
+keyboard path suppresses the scroll engine's release velocity.
 
 Animation owners keep independent generations per property. Retargeting resumes
 from the analytic value, with presentation samples for row y and absolute size
