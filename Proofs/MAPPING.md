@@ -769,7 +769,7 @@ subtracts old and new band prefixes, including reserves and placement offsets.
 It visits at most 64 entries in either order and returns no estimate if a
 necessary height is unknown. Its exact-value Linux tests cover both directions,
 repeated index differences across move boundaries, reserves, placement, and
-unknown or distant bands. This helper has no Lean refinement proof.
+unknown or distant bands. `ListMount.delta_spec` refines it (the next section).
 
 Source pins at `3ffd162` (SHA-256): `UltraListView.swift`
 `7496a1ca5c38bf8a4fc18270c119b5924be5d2805e84ccc69349ead02fb5e4d7` and
@@ -830,6 +830,61 @@ Where the models touch this code, lines at `3ffd162`:
 
 No theorem statement or hypothesis changed with these four commits; none of
 them touches `Proofs/UltraProofs`.
+
+## Rows mounted during a structural move at `3ffd162`
+
+`Proofs/UltraProofs/List/Mount.lean` refines `ContinuationField.delta` and
+states what a mounted row's motion is. A pass that inserts, removes or moves
+rows animates the rows in its window on one clock. A row that scrolling
+mounts while that motion runs copies a surviving neighbour's own position
+track and gets a continuation term on the pass's clock that starts at the
+neighbour's continuation plus `δ`, which `delta` computes.
+`ContinuationField.swift` is unchanged since `cde2528`, and
+`Sources/UltraList` is the same at `ccd95d3` as at `3ffd162`.
+
+| Model (`Proofs/UltraProofs/List/Mount.lean`) | Swift at `3ffd162` |
+| --- | --- |
+| `Band`, `Band.extent` | `ContinuationField.Band` (ContinuationField.swift:4-9) |
+| `delta`'s guard | `abs(row - reference) <= limit` in both orders and all four indices in range (:15-17), as `Nat` differences both ways and `< length` |
+| `slice`, `sign`, `tally` | the two loops filling `coefficients` (:18-24): `±1` per index of `min ..< max`, by direction. The dictionary is a function that is 0 off its keys (`tally_eq`) |
+| `keyTerm`, `keySum` over `keys` | the loop over `coefficients` (:25-31): the skip for equal coefficients with no band in either order, `nil` for a nonzero coefficient without a band, else `old · extent - new · extent`. `keys` is the dictionary's iteration order, which the theorems leave open; they require it to list each identity once (`Nodup`) and to include both intervals' identities |
+| `endTerm` | the loop over the row and the reference (:32-41): nothing when neither order has a band, `nil` when one does, else the change in top reserve plus placement times the change in height |
+| `oldBand`, `newBand` | `MountContinuation.band(_:before:)` (UltraListView.swift:142-149): the record-time band in that order, else the other order's, with the height presented when the pass began (`presentedHeights`, :677-681) in both |
+| `place B order i pl` | where a layout puts row `i`'s own motion: the extents before it, its top reserve, its placement coefficient times its height. `pl` is `placementOffset` at height 1 less at height 0 (`placement`, :906-910; `record.placements`, :674-676, :940) |
+| `delta`'s arguments | `mountMotion`'s call (:941-950): `record.oldIDs`/`newIDs`, the indices of the row and the witness in each order (one identity each, `hRow`, `hRef`), and their placements. `nil` falls back to 0 (:949) |
+| `copy_value` | `inheritPosition` (AnimationController.swift:160-172): `model.replace` with the witness's own track's ends, start and transition, a new generation, and the witness's origin |
+| `cont clock c` | the continuation layer (UltraListView.swift:951-955): `record.clock` (from 0 to 0 at the pass's time on its scaled transition, :682) with `from` set to the witness's continuation's `from` plus `difference`, and `record.origin` |
+| `shown` | a row's settled place plus its own `.positionY` track plus its continuation; the height followers (:911-921) are `composed_seam`'s and go on their own clocks |
+| a witness the pass moved (`pass_witness`) | a participant row whose own track the pass replaced at `time` with the transition scaled by `durationScale` (UltraListView.swift:652-655 through AnimationController.swift:258-267), which is `record.clock`'s timing |
+| chains (`delta_telescopes`) | `witnesses.append(row.index)` (UltraListView.swift:963): a mounted row is a witness for the next, nearest first (:933-937) |
+
+- `delta_spec`: whenever `delta` returns a value, it is the row's place less
+  the witness's in the old layout less the same in the new, for any
+  iteration order of the keys and any layouts the known bands describe
+  (`hOld`, `hNew`) in which a row with no band in either order is unchanged
+  (`hSame`, what the two skips assume).
+- `mount_relative`: the mounted row less its witness is their settled
+  difference plus `δ` times what is left of the pass's clock, at every frame,
+  whatever clock the witness's own track is on. With `δ` the change in their
+  offset, they start at the old layout's offset and end at the new one's.
+- `mount_moved`, `mounted_as_moved`: when the witness moves from its old to
+  its new place on the pass's clock (`pass_witness`: a participant the pass
+  restarted), the mounted row is where the pass would have put it at every
+  frame, given that each layout's places are `place` plus one constant per
+  layout and one per view. The mounted row then satisfies the same
+  hypothesis, so a chain of mounts does too.
+- `delta_sample`: `a b c d` (extents 10, 20, 30, 40) reordered to `a c b d`:
+  `d` against `a` changes by 0, `c` against `a` by 20.
+
+Not covered: a moved row and a row whose bands `delta` can't resolve get
+`δ = 0` and follow their witness (:942-949); a witness whose displacement
+the pass left unchanged keeps its earlier clock (AnimationController.swift:232-238),
+so only `mount_relative` describes it; a participant's existing
+continuation is kept as is (UltraListView.swift:931-932); a carried row's
+join is `joinStart`'s (the table above). That the window's settled places
+are `place` plus constants is a hypothesis, which `ContinuationFieldTests`
+checks with exact values. Floating point and the 64-row limit are not
+modeled.
 
 ## Pending scroll targets and readiness holds
 
@@ -1734,6 +1789,10 @@ Outside the model:
 - `ListContent.retimes_keep`, `retime_same`, `retime_unstarted`: inner
   content retimed with its row keeps a constant inset through any number of
   retimings, and the Swift's skipped and unstarted cases are that retiming.
+- `ListMount.delta_spec`, `mount_relative`, `mounted_as_moved`:
+  `ContinuationField.delta` is the change in a row's offset from its
+  witness, and a row mounted during a structural move with that change on
+  the pass's clock is where the pass would have put it at every frame.
 
 **Optimality**
 
