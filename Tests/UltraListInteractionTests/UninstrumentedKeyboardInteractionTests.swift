@@ -23,8 +23,11 @@ final class UninstrumentedKeyboardInteractionTests: XCTestCase {
             let composer = app.textViews["composer"], keyboard = app.keyboards.firstMatch
             XCTAssertTrue(composer.waitForExistence(timeout: 10))
             let restingComposerFrame = composer.frame, restingAppFrame = app.frame
-            let tabBarFrame = app.tabBars.firstMatch.frame.intersection(restingAppFrame)
-            XCTAssertFalse(tabBarFrame.isEmpty, "The resting tab bar must be visible before the keyboard")
+            // The strip below the resting composer: the tab bar on a phone,
+            // the home indicator's margin where the tab bar floats at the top.
+            let stripFrame = CGRect(x: restingAppFrame.minX, y: restingComposerFrame.maxY, width: restingAppFrame.width,
+                                    height: restingAppFrame.maxY - restingComposerFrame.maxY).intersection(restingAppFrame)
+            XCTAssertFalse(stripFrame.isEmpty, "The resting strip below the composer must be visible before the keyboard")
             let resting = KeyboardScreenCapture(screenSize: restingAppFrame.size)
             resting.capture()
             composer.tap(); XCTAssertTrue(keyboard.waitForExistence(timeout: 5))
@@ -65,28 +68,30 @@ final class UninstrumentedKeyboardInteractionTests: XCTestCase {
             let keyPatch = keyFrame.insetBy(dx: 4, dy: 5)
             let bar = try XCTUnwrap(KeyboardPixelTemplate(image: first, rect: barPatch, scale: scale))
             let letter = try XCTUnwrap(KeyboardPixelTemplate(image: first, rect: keyPatch, scale: scale))
-            let tabBar = try XCTUnwrap(KeyboardPixelTemplate(image: restingImage,
-                rect: tabBarFrame.insetBy(dx: 4, dy: 4), scale: scale))
-            // The tab bar is covered while the physical keyboard is present.
+            print("No-probe \(prefix): strip \(stripFrame), height \(stripFrame.height), inset height \(stripFrame.insetBy(dx: 4, dy: 4).height)")
+            let strip = try XCTUnwrap(KeyboardPixelTemplate(image: restingImage,
+                rect: stripFrame.insetBy(dx: 4, dy: 4), scale: scale))
+            // The strip is covered while the physical keyboard is present.
             // Its return is independent of either moving template's match.
-            XCTAssertGreaterThan(try XCTUnwrap(tabBar.difference(in: first)), 3,
-                                 "The tab bar pixels must distinguish the keyboard from rest")
+            let coveredDifference = try XCTUnwrap(strip.difference(in: first))
+            XCTAssertGreaterThan(coveredDifference, 3, "The strip's pixels must distinguish the keyboard from rest")
             let restingShift = Double(restingComposerFrame.minY - composerFrame.minY)
             let maximumTravel = max(travel + 80, restingShift + 12)
-            var moving = 0, hidden = 0, maximumGap = 0.0
+            var moving = 0, hidden = 0, maximumGap = 0.0, covered: [Double] = [], uncovered: [Double] = []
             for (index, data) in recorder.frames.enumerated() {
                 guard let image = UIImage(data: data)?.cgImage,
                       let barShift = bar.translation(in: image, maximum: maximumTravel),
-                      let tabBarDifference = tabBar.difference(in: image) else {
+                      let stripDifference = strip.difference(in: image) else {
                     XCTFail("\(prefix) frame \(index): a reference disappeared"); continue
                 }
-                if tabBarDifference <= 3 {
-                    hidden += 1
-                    print("No-probe \(prefix) frame \(index): keyboard absent, composer \(barShift), rest \(restingShift), tab bar difference \(tabBarDifference)")
+                if stripDifference <= 3 {
+                    hidden += 1; uncovered.append(stripDifference)
+                    print("No-probe \(prefix) frame \(index): keyboard absent, composer \(barShift), rest \(restingShift), strip difference \(stripDifference)")
                     XCTAssertEqual(barShift, restingShift, accuracy: 1.5,
                                    "\(prefix) frame \(index): composer must reach its pixel rest position with the keyboard gone")
                     continue
                 }
+                covered.append(stripDifference)
                 guard let keyShift = letter.translation(in: image, maximum: maximumTravel) else {
                     XCTFail("\(prefix) frame \(index): the visible keyboard reference disappeared"); continue
                 }
@@ -100,6 +105,7 @@ final class UninstrumentedKeyboardInteractionTests: XCTestCase {
             XCTAssertGreaterThan(moving, 2, "\(prefix): no physical keyboard movement was captured")
             XCTAssertGreaterThan(hidden, 0, "\(prefix): missing the keyboard's dismissal and the composer's pixel rest position")
             print("No-probe \(prefix): moving \(moving), hidden \(hidden), maximum gap \(maximumGap)")
+            print("No-probe \(prefix): strip difference with the keyboard up \(coveredDifference), covered frames \(covered.min() ?? -1)...\(covered.max() ?? -1), uncovered frames \(uncovered.min() ?? -1)...\(uncovered.max() ?? -1)")
             if maximumGap > 1.5, let last = recorder.frames.last {
                 let attachment = XCTAttachment(data: last, uniformTypeIdentifier: "public.png")
                 attachment.name = "no-probe-\(prefix)"; attachment.lifetime = .keepAlways; add(attachment)
@@ -109,7 +115,7 @@ final class UninstrumentedKeyboardInteractionTests: XCTestCase {
     }
 }
 
-@MainActor private final class KeyboardScreenCapture {
+@MainActor final class KeyboardScreenCapture {
     let screenSize: CGSize
     var frames: [Data] = []
     init(screenSize: CGSize) { self.screenSize = screenSize }
@@ -141,7 +147,7 @@ final class UninstrumentedKeyboardInteractionTests: XCTestCase {
 
 /// The empty composer's placeholder and one keyboard key translate as rigid
 /// pixel patches. Their relative translation measures the physical gap.
-private struct KeyboardPixelTemplate {
+struct KeyboardPixelTemplate {
     let rect: CGRect
     let scale: Double
     let pixels: [UInt8]

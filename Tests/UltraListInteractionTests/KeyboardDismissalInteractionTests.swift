@@ -1,5 +1,6 @@
 #if os(iOS) && canImport(XCTest)
 import XCTest
+import UIKit
 
 /// Automatic XCTest video is retained by the runner. The app has no geometry
 /// probes, markers, timers, or display links added for these interactions.
@@ -15,10 +16,15 @@ final class KeyboardDismissalInteractionTests: XCTestCase {
     @MainActor func testMidwayReleaseReturns() throws { try check(.midwayRelease) }
     @MainActor func testDismissalPreservesListInertia() throws {
         let app = XCUIApplication()
+        // The fling's release coasts on by about the distance UIKit's normal
+        // deceleration projects for its velocity, 598.8 points at 1,200
+        // points per second, on a screen of any size.
+        let velocities = [160.0, 1200], rate = Double(UIScrollView.DecelerationRate.normal.rawValue)
+        let projected = velocities[1] / 1000 * rate / (1 - rate)
         for mode in ["keyframe", "uiKit", "stepped"] {
             for system in [true, false] {
                 var displacement: [Double] = [], travel = 0.0
-                for velocity in [160.0, 1200] {
+                for velocity in velocities {
                     app.launchArguments = ["-screen", "lists", "-listScreen", "chat", "-listEngine", mode,
                                            "-listInitialRow", "25", "-chatCards", "YES", "-listSystemKeyboardDismissal", system ? "YES" : "NO"]
                     app.launch()
@@ -51,7 +57,9 @@ final class KeyboardDismissalInteractionTests: XCTestCase {
                     app.terminate()
                 }
                 let label = "\(mode)/\(system ? "system" : "driven")"
-                XCTAssertGreaterThan(displacement[1], 2 * travel, "\(label): fling displacement \(displacement), finger \(travel)")
+                print("Inertia \(label): displacement \(displacement), finger \(travel)")
+                XCTAssertGreaterThan(displacement[1] - travel, 0.6 * projected,
+                                     "\(label): fling displacement \(displacement), finger \(travel), projected coast \(projected)")
                 XCTAssertGreaterThan(displacement[1] - displacement[0], travel * 0.5,
                                      "\(label): the fling must coast farther than the same distance dragged slowly: \(displacement)")
             }
@@ -69,6 +77,7 @@ final class KeyboardDismissalInteractionTests: XCTestCase {
                 app.launch()
                 let composer = app.textViews["composer"], keyboard = app.keyboards.firstMatch
                 XCTAssertTrue(composer.waitForExistence(timeout: 10), label)
+                let restingComposer = composer.frame
                 composer.tap()
                 XCTAssertTrue(keyboard.waitForExistence(timeout: 5), label)
                 settle(0.8)
@@ -111,12 +120,42 @@ final class KeyboardDismissalInteractionTests: XCTestCase {
                     let after = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
                     after.name = "\(label)-after"; after.lifetime = .keepAlways; activity.add(after)
                 }
-                if !system {
+                if !system && (scenario.dismisses || UIDevice.current.userInterfaceIdiom == .phone) {
                     XCTAssertEqual(keyboard.exists, !scenario.dismisses, label)
+                } else if !system {
+                    try checkSettledRelease(app, label, composer: composer, keyboard: keyboard, docked: composerFrame, resting: restingComposer)
                 }
+                print("Release \(label): keyboard \(keyboard.exists ? "shown" : "hidden"), composer \(composer.frame), docked \(composerFrame), resting \(restingComposer)")
                 app.terminate()
             }
         }
+    }
+
+    /// A partial release away from a phone. The runner can't see whether
+    /// the app found the keyboard host it drives; a phone has one, so there
+    /// the release must return the keyboard. Elsewhere the app may fall back
+    /// to UIKit's interactive dismissal, which decides a partial release
+    /// itself, as on the system path. Whichever it chose, a second after the
+    /// release the composer rests: where it started with the keyboard gone,
+    /// or docked 8 points above the physical keyboard with it shown.
+    @MainActor private func checkSettledRelease(_ app: XCUIApplication, _ label: String, composer: XCUIElement, keyboard: XCUIElement,
+                                                docked: CGRect, resting: CGRect) throws {
+        settle(0.1)
+        guard keyboard.exists else {
+            print("Release \(label): dismissed (follows UIKit)")
+            XCTAssertEqual(composer.frame.minY, resting.minY, accuracy: 1, "\(label): the composer must rest where it started")
+            return
+        }
+        print("Release \(label): returned (follows UIKit)")
+        let frame = composer.frame
+        XCTAssertEqual(frame.minY, docked.minY, accuracy: 1, "\(label): the composer must dock where it was before the drag")
+        let capture = KeyboardScreenCapture(screenSize: app.frame.size)
+        capture.capture()
+        let image = try XCTUnwrap(capture.frames.first.flatMap(UIImage.init(data:))?.cgImage, label)
+        let top = try XCTUnwrap(KeyboardPixelTemplate.keyboardTop(in: image, after: frame.maxY, before: keyboard.frame.minY,
+                                                                  scale: Double(image.width) / app.frame.width),
+                                "\(label): no physical keyboard edge below the composer")
+        XCTAssertEqual(top - frame.maxY, 8, accuracy: 1.5, "\(label): the composer must sit 8 points above the physical keyboard")
     }
 
     /// The demo's three repeating card heights are measured from accessibility

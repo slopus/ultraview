@@ -412,7 +412,7 @@ final class KeyboardDismissalRuntimeTests: XCTestCase {
             hasInput: { [weak composer] in composer?.isFirstResponder == true },
             update: { [weak controller] in updates.values.append($0); controller?.applyDrivenKeyboard($0) })
         controller.keyboardDismissal = driver; driver.refresh()
-        XCTAssertTrue(driver.isAvailable)
+        guard driver.isAvailable else { throw XCTSkip("This runtime supplies no in-process keyboard host") }
         let host = try XCTUnwrap(KeyboardHostLookup.find(in: scene))
         let before = host.view.convert(host.view.bounds, to: window)
         let trace = KeyboardRecoveryTrace(window: window, bar: bar)
@@ -670,21 +670,20 @@ final class KeyboardDismissalRuntimeTests: XCTestCase {
         // native keyboard change, when UIKit refreshes it on both paths.
         if checksInitialGuide { XCTAssertEqual(controller.view.keyboardLayoutGuide.layoutFrame.minY, frame.minY, accuracy: 0.5) }
         XCTAssertEqual(bar.frame.maxY + 8, min(controller.view.bounds.maxY - controller.view.safeAreaInsets.bottom, frame.minY), accuracy: 0.5)
-        let endFrame = host.view.convert(host.view.bounds, to: window)
-        let showsBefore = trace.count(UIResponder.keyboardDidShowNotification, endingAt: endFrame)
-        let framesBefore = trace.count(UIResponder.keyboardDidChangeFrameNotification, endingAt: endFrame)
         XCTAssertTrue(composer.resignFirstResponder())
         CATransaction.flush(); try await Task.sleep(for: .milliseconds(35))
         XCTAssertTrue(hasPositionMotion(host.view.layer), "The next system hide must animate")
         try await Task.sleep(for: .milliseconds(650))
+        let cycleStart = trace.notificationCount
         XCTAssertTrue(composer.becomeFirstResponder())
         CATransaction.flush(); try await Task.sleep(for: .milliseconds(35))
         let shown = try XCTUnwrap(KeyboardHostLookup.find(in: scene))
         XCTAssertTrue(hasPositionMotion(shown.view.layer), "The next system show must animate")
         try await Task.sleep(for: .milliseconds(700))
         trace.record("after-next-native-cycle")
-        XCTAssertEqual(trace.count(UIResponder.keyboardDidShowNotification, endingAt: endFrame) - showsBefore, 1)
-        XCTAssertEqual(trace.count(UIResponder.keyboardDidChangeFrameNotification, endingAt: endFrame) - framesBefore, 1)
+        let shownLayer = try XCTUnwrap(shown.view.layer.presentation()), shownRoot = try XCTUnwrap(shown.window.layer.presentation())
+        let settled = window.convert(shownLayer.convert(shownLayer.bounds, to: shownRoot), from: shown.window)
+        XCTAssertEqual(KeyboardRecoveryTrace.nextCycleIssues(trace.finished(after: cycleStart), settled: settled), [])
         XCTAssertFalse(shown.window.isHidden)
         XCTAssertTrue(composer.isFirstResponder)
         controller.view.layoutIfNeeded()
@@ -701,6 +700,27 @@ final class KeyboardDismissalRuntimeTests: XCTestCase {
         trace.record("after-next-driven-dismissal")
         XCTAssertFalse(composer.isFirstResponder)
         XCTAssertFalse(driver.isDriving)
+    }
+
+    func testTheNextCycleCheckCatchesAMissingOrRepeatedNotification() {
+        let shown = CGRect(x: 0, y: 512, width: 390, height: 332)
+        let didShow = UIResponder.keyboardDidShowNotification, didChange = UIResponder.keyboardDidChangeFrameNotification
+        let cycle: [(Notification.Name, CGRect)] = [(didShow, shown), (didChange, shown)]
+        XCTAssertEqual(KeyboardRecoveryTrace.nextCycleIssues(cycle, settled: shown.offsetBy(dx: 0, dy: 0.4)), [])
+        // A device ends the show a point off the frame shown before it.
+        let moved = shown.offsetBy(dx: 0, dy: 1)
+        XCTAssertEqual(KeyboardRecoveryTrace.nextCycleIssues(cycle.map { ($0.0, moved) }, settled: moved), [])
+        for index in cycle.indices {
+            var missing = cycle; missing.remove(at: index)
+            XCTAssertEqual(KeyboardRecoveryTrace.nextCycleIssues(missing, settled: shown), ["\(cycle[index].0.rawValue) arrived 0 times"])
+            var repeated = cycle; repeated.insert(cycle[index], at: index)
+            XCTAssertEqual(KeyboardRecoveryTrace.nextCycleIssues(repeated, settled: shown), ["\(cycle[index].0.rawValue) arrived 2 times"])
+        }
+        XCTAssertEqual(KeyboardRecoveryTrace.nextCycleIssues([], settled: shown).count, 2)
+        XCTAssertEqual(KeyboardRecoveryTrace.nextCycleIssues(cycle, settled: moved).count, 2)
+        XCTAssertEqual(KeyboardRecoveryTrace.nextCycleIssues([(didShow, shown), (didChange, shown.offsetBy(dx: 0, dy: 332))], settled: shown).count, 1)
+        // A show that lands elsewhere and is corrected by a later change.
+        XCTAssertEqual(KeyboardRecoveryTrace.nextCycleIssues([(didShow, shown.offsetBy(dx: 0, dy: -40)), (didChange, shown)], settled: shown).count, 1)
     }
 
     private func hasPositionMotion(_ layer: CALayer) -> Bool {
@@ -779,6 +799,37 @@ private final class KeyboardRecoveryTrace: NSObject {
         if notification.name == UIResponder.keyboardWillChangeFrameNotification {
             DispatchQueue.main.async { [weak self] in self?.record("willChange-next-turn") }
         }
+    }
+
+    /// How many notifications with an end frame have arrived.
+    var notificationCount: Int { notificationFrames.count }
+
+    /// The did-show and did-change-frame notifications after the first
+    /// `index`, with their end frames in the window.
+    func finished(after index: Int) -> [(Notification.Name, CGRect)] {
+        notificationFrames.dropFirst(index).filter {
+            $0.0 == UIResponder.keyboardDidShowNotification || $0.0 == UIResponder.keyboardDidChangeFrameNotification
+        }
+    }
+
+    /// What's wrong with one native show's finishing notifications: there
+    /// must be one did-show and one did-change-frame, and the did-show and
+    /// the last of them must end at the frame the host settled at. A device
+    /// can end them a point off the frame the host showed before the show,
+    /// so neither is matched to that frame.
+    static func nextCycleIssues(_ finished: [(Notification.Name, CGRect)], settled: CGRect) -> [String] {
+        var issues: [String] = []
+        for name in [UIResponder.keyboardDidShowNotification, UIResponder.keyboardDidChangeFrameNotification] {
+            let count = finished.filter { $0.0 == name }.count
+            if count != 1 { issues.append("\(name.rawValue) arrived \(count) times") }
+        }
+        let settles = { (frame: CGRect) in abs(frame.minX - settled.minX) < 0.5 && abs(frame.minY - settled.minY) < 0.5
+            && abs(frame.width - settled.width) < 0.5 && abs(frame.height - settled.height) < 0.5 }
+        let firstShow = finished.first { $0.0 == UIResponder.keyboardDidShowNotification }
+        for (which, event) in [("the first", firstShow), ("the last", finished.last)] {
+            if let event, !settles(event.1) { issues.append("\(which) \(event.0.rawValue) ended at \(event.1), the host settled at \(settled)") }
+        }
+        return issues
     }
 
     func count(_ name: Notification.Name, endingAt frame: CGRect, after index: Int = 0) -> Int {

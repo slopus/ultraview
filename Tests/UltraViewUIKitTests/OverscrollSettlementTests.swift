@@ -43,8 +43,18 @@ private enum RestingPath: CaseIterable { case shiftAfterEdges, sameEdges, halt, 
             #expect(!list.isDecelerating)
             window.addSubview(list); list.layoutIfNeeded()
         }
+        print("\(mode)/\(path): offset \(list.currentScrollOffset), held \(held), scale \(list.traitCollection.displayScale)")
         if mode != .uiKit || path != .windowReentry {
-            #expect(abs(list.currentScrollOffset - held) < 1e-8)
+            var written = held
+            if mode == .uiKit && (path == .sameEdges || path == .halt) {
+                // UIKit rounds an offset set through setContentOffset to the
+                // display's pixels, -56.5 at 2x. The shift moves the bounds,
+                // which keeps the exact value.
+                let scale = list.traitCollection.displayScale
+                try #require(scale > 0)
+                written = (held * scale).rounded() / scale
+            }
+            #expect(abs(list.currentScrollOffset - written) < 1e-8)
         }
         for _ in 0..<100 where abs(list.overscrollDistance) > 0.5 || list.isDecelerating {
             try await Task.sleep(for: .milliseconds(30))
