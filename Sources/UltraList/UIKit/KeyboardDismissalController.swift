@@ -7,6 +7,7 @@ import UIKit
 /// transition uses the keyboard's release curve; the client resolves its resting inset.
 /// Private keyboard hierarchy access is optional; unsupported configurations retain
 /// the scroll view's ordinary system interactive dismissal.
+/// Release this controller on the main thread, as required by its UIKit resources.
 @MainActor
 public final class KeyboardDismissalController: NSObject {
     enum Ownership: Equatable { case idle, tracking, returning, dismissing, awaitingHide, recoveringShow }
@@ -65,15 +66,17 @@ public final class KeyboardDismissalController: NSObject {
         ownership = value
     }
 
-    isolated deinit {
-        NotificationCenter.default.removeObserver(self)
-        if let recognizer { attachedWindow?.removeGestureRecognizer(recognizer) }
-        layoutCommitView?.removeFromSuperview()
-        if isDriving, let host {
-            CATransaction.begin(); CATransaction.setDisableActions(true)
-            host.view.layer.removeAnimation(forKey: Self.animationKey)
-            host.view.layer.bounds.origin.y = 0
-            CATransaction.commit()
+    deinit {
+        MainActor.assumeIsolated {
+            NotificationCenter.default.removeObserver(self)
+            if let recognizer { attachedWindow?.removeGestureRecognizer(recognizer) }
+            layoutCommitView?.removeFromSuperview()
+            if isDriving, let host {
+                CATransaction.begin(); CATransaction.setDisableActions(true)
+                host.view.layer.removeAnimation(forKey: Self.animationKey)
+                host.view.layer.bounds.origin.y = 0
+                CATransaction.commit()
+            }
         }
     }
 

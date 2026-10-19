@@ -2805,6 +2805,45 @@ using identical Release binaries. Physical-device validation remains incomplete:
 the single attempt selected Release hosted tests without enabling testability
 and stopped at their test-module imports.
 
+The teardown follow-up after `a5f34ec` replaces the keyboard controller's
+isolated deinitializer with a plain deinitializer that checks main-actor
+isolation before the same synchronous UIKit cleanup. Its lifetime contract
+requires release on the main thread. This avoids the concurrency runtime's
+deinitializer executor hop; it changes no gesture, layout or scroll operation.
+The current `UIKit/KeyboardDismissalController.swift` SHA-256 is
+`0165b2b5fe4da2fa71fb5e21e3b96e17bed4382f83e477b439d95e874b70978e`,
+superseding that file's earlier source-review pin. Rechecking the controller
+rows found no changed model correspondence; no Lean definition or theorem
+changed. The hosted release regression covers idle, tracking and returning
+controllers in every engine, including release from a plain main-queue callback.
+Validation passed Linux's 333 tests in 55 suites and all 390 proof theorems.
+Simulator gates completed 81 seam, 1,130 unit, 29 runtime, 120 demo, five keyboard
+interaction, 41 other interaction and one Release performance tests. The only
+simulator assertions were the accepted `SwipeInteractionTests.swift:61` p99
+timing findings: delete/keyframe 2.208041667472571 ms and carousel/stepped
+2.1652916620951146 ms. Both are within the recorded 2.6 ms limit; all 12 swipe
+probes reported zero content work on the main thread, with no other failures.
+
+On iPhone 12 / iOS 26.1, the runtime suite passed 27/29 methods with zero
+crashes or new application crash reports. All nine release cells, the previously
+crashing empty-chat method and all three momentum methods passed. The two
+rotation/refocus assertions at lines 686/687 predate this change: Control D
+reproduced them with identical pre-fix products before their teardown crashes.
+Both notifications arrive once at `[0,181,844,209]`, while the existing test
+filters against the earlier `[0,182,844,208]` frame. The trace analysis is
+`.context/kdc-isolated-deinit-v1-rotation-trace-analysis.json`; assertions and
+skips remain unchanged. Device UI interactions not executed (automation mode
+timeout).
+
+Control A reproduced the invalid free on the exact `38f14a2` base. Minimal
+test-only Control C2, an empty isolated deinitializer released from a main-queue
+callback, reproduced the same task-local lookup scope fault in
+`swift_task_deinitOnExecutorImpl` without importing the list library. The source
+audit found no isolated deinitializer in `Sources` or `Tests`. The tested 195-file
+native input manifest is
+`04573a51665d2eb6fb0594f248bc69ffb34598ba0704b60a73ab6ac424c96684`;
+this final validation note changes no native input.
+
 ## Theorems
 
 **Correctness**

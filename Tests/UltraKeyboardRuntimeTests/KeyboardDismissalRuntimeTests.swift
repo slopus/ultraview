@@ -757,7 +757,7 @@ private final class KeyboardRecoveryTrace: NSObject {
         }
     }
 
-    isolated deinit { NotificationCenter.default.removeObserver(self) }
+    deinit { MainActor.assumeIsolated { NotificationCenter.default.removeObserver(self) } }
 
     @objc private func changed(_ notification: Notification) {
         if let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect,
