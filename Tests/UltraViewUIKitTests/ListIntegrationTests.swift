@@ -314,6 +314,32 @@ private actor MeasurementGate: NodeRowMeasuring {
         for _ in 0..<100 where list.settledFrame(at: 1)?.height != 80 { try await Task.sleep(for: .milliseconds(10)) }
         #expect(inserted.layer.animation(forKey: "ultraview.list.height") == nil)
     }
+    /// A prepared insertion and its inserted block reach the screen in one
+    /// commit. If the pass commits its rows alone, the render server can draw
+    /// a frame of the new row where it settles, before its motion arrives.
+    @Test func aPreparedInsertedBlockReachesTheScreenWithItsPass() async throws {
+        let window = makeWindow(); window.frame = .init(x: 0, y: 0, width: 320, height: 400); window.isHidden = false
+        defer { window.isHidden = true }
+        let list = UltraListView()
+        list.frame = window.bounds; window.addSubview(list); list.layoutIfNeeded()
+        var rows = (0..<40).map { AsyncFixedRow(identity: "a\($0)") }
+        list.applyChanges(items: rows, transition: .none)
+        for _ in 0..<100 where list.items.count != rows.count { try await Task.sleep(for: .milliseconds(10)) }
+        rows.insert(.init(identity: "block"), at: 0)
+        var committedAlone: [Bool] = []
+        list.onVisibleWindowChanged = { [weak list] in
+            guard let list, list.items.first?.identity == "block", let view = list.loadedItemView(at: 0) else { return }
+            // The pass has applied the row; a presentation means its commit already went out.
+            committedAlone.append(view.layer.presentation() != nil)
+        }
+        list.applyChanges(items: rows, transition: .easeInOut(0.4))
+        list.animateInsertedBlock(identities: ["block"], from: .top, transition: .easeInOut(0.4))
+        for _ in 0..<100 where list.items.count != rows.count { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(committedAlone.first == false, "the row was committed before its motion")
+        let view = try #require(list.loadedItemView(at: 0))
+        #expect(view.layer.animation(forKey: "ultraview.list.positionY") != nil)
+        #expect(view.layer.opacity == 1)
+    }
     @Test func nativeWindowMaintenanceDoesNotExplicitlyStopMomentum() {
         let scroll = ObservedScrollView(frame: .init(x: 0, y: 0, width: 320, height: 400))
         let engine = PlatformEngine(scroll: scroll), edges = ScrollEdges(minimum: 0, maximum: 10_000)

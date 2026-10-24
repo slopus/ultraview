@@ -1662,6 +1662,11 @@ public final class UltraListView: UltraScrollView {
             }
             applyingPreparedMutation = true
             applyingPreparedTarget = (ready.generation, resolutions[ready.generation])
+            // The pass and its inserted blocks commit together. Run on its
+            // own, the pass commits its rows at once; a block's motion added
+            // after it can reach the screen a frame later, and its rows show
+            // that frame where they settle.
+            CATransaction.begin()
             applyChanges(items: mutation.items, newSize: currentViewport ? mutation.size : nil, newInsets: currentViewport ? mutation.insets : nil,
                 intent: mutation.intent, additionalScrollDistance: mutation.additionalDistance, anchorMode: mutation.anchorMode,
                 compensatesInsetChange: mutation.compensates, absorbsEdgeChangeIntoOverscroll: mutation.absorbsOverscroll,
@@ -1669,6 +1674,7 @@ public final class UltraListView: UltraScrollView {
             applyingPreparedMutation = false
             if pendingItems != nil { pendingBlockAnimations += mutation.blocks }
             else { for block in mutation.blocks { animateInsertedBlockNow(block) } }
+            CATransaction.commit()
         }
         preparationKeys.removeAll(keepingCapacity: true)
         activePreparationItems.removeAll(keepingCapacity: true)
