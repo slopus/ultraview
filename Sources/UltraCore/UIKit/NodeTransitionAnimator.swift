@@ -198,7 +198,10 @@ final class NodeTransitionAnimator {
         func visit(_ node: UltraNode, parent: Int?) {
             guard let view = node.mountedView else { return }
             let layer = view.layer
-            let shown = presented ? (layer.presentation() ?? layer) : layer
+            // Not `presentation() ?? layer`: the optimized whole-module build reads that
+            // autoclosure as sending `layer` out of the main actor.
+            var shown = layer
+            if presented, let presentation = layer.presentation() { shown = presentation }
             let size = shown.bounds.size
             let frame = CGRect(
                 x: shown.position.x - size.width * shown.anchorPoint.x,
