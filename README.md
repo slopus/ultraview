@@ -242,6 +242,9 @@ UltraView is a clean-room reimplementation of ideas from three projects:
   components: flexbox through Yoga, and the View, Text and ScrollView
   component and style model.
 
-No code from these projects is copied or translated. UltraView is written
-independently from their published designs and observed behavior, and
-contains no code from any of them.
+No code from Texture or React Native is copied or translated; UltraView is
+written independently from their published designs and observed behavior.
+Telegram-iOS is the exception: Steve Korshakov has personal permission to use
+its code in UltraView (recorded 2026-10-31), so parts of the list may be
+adapted from it. Each commit that does so names the Telegram-iOS path it
+adapts.

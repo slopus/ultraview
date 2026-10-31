@@ -19,6 +19,14 @@ its own scroller. README.md explains what it is and how to use it.
      only in that README section and in this rule: never in code, comments,
      identifiers, test names, docs or commit messages. Public types don't use
      their prefixes (see rule 3).
+   - **Exception: Telegram-iOS.** Steve Korshakov has personal permission to
+     use Telegram-iOS code in UltraView (recorded 2026-10-31). You may read
+     its sources and adapt its code, but don't paste it verbatim: rewrite it
+     into our structure, names and Swift 6 strict concurrency, with no
+     dependency on its frameworks, no Telegram prefixes in identifiers and
+     no copied comments. Each commit that adapts its code says so in its
+     message: `Adapted from Telegram-iOS <path> (permission from Steve)`.
+     Texture and React Native stay clean-room as above.
 2. **Dependencies come through SwiftPM only.** Nothing is vendored. Yoga is
    pinned to an exact release in Package.swift; bump it on purpose and update
    Package.resolved with it. The repo has no LICENSE yet; don't add one.
