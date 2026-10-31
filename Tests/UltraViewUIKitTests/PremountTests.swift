@@ -91,6 +91,11 @@ private struct GatedRow: ListRow {
         let point = view.convert(CGPoint(x: view.bounds.midX, y: view.bounds.midY), to: list)
         #expect(list.hitTest(point, with: nil).map { $0 === view || $0.isDescendant(of: view) } != true)
         #expect(view.readinessObserver == nil)
+        // It waits where the scroll will place it, past the window and off screen.
+        let waiting = view.convert(view.bounds, to: list)
+        #expect(!waiting.intersects(list.bounds), "\(mode): premounted at \(waiting), list \(list.bounds)")
+        let container = try #require(view.superview)
+        #expect(abs(view.frame.minY - container.bounds.height) < 0.5, "\(mode): premounted at \(view.frame) in \(container.bounds)")
 
         // Placing it shows that view, without making another.
         let before = made.count, oldUpper = list.loadedIndexRange.upperBound
@@ -142,6 +147,9 @@ private struct GatedRow: ListRow {
         #expect(premounted.view.superview == nil)
         let other = try #require(list.premounted)
         #expect(other.index == list.loadedIndexRange.lowerBound - 1, "\(mode): premounted \(other.index), window \(list.loadedIndexRange)")
+        // Toward the start, it waits above the window.
+        #expect(!other.view.convert(other.view.bounds, to: list).intersects(list.bounds))
+        #expect(abs(other.view.frame.maxY) < 0.5, "\(mode): premounted at \(other.view.frame)")
 
         // A jump is a pass too.
         list.scrollTo(.init(index: 45), transition: .immediate)

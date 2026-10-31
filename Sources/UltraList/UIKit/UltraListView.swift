@@ -1338,7 +1338,11 @@ public final class UltraListView: UltraScrollView {
             container.addSubview(view)
         }
         precondition(height.isFinite && height >= 0)
-        view.place(in: .init(x: viewport.insets.left, y: 0, width: viewport.contentWidth, height: height))
+        // Where the scroll will mount it, just past the window and so past
+        // the viewport, so a row that checks whether it is on screen (to draw
+        // synchronously, say) doesn't take itself for a visible one.
+        let y = scrollDirection > 0 ? settledWindow.height : -height
+        view.place(in: .init(x: viewport.insets.left, y: y, width: viewport.contentWidth, height: height))
         // Its own layout, a nested list's included, happens now rather than in
         // the turn that shows it.
         view.layoutIfNeeded()
