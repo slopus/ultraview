@@ -37,6 +37,7 @@ public final class ListSwipeController: NSObject, UIGestureRecognizerDelegate {
     private var reveals: [String: Reveal] = [:]
     private var tracking: (identity: String, start: Double)?
     private let haptics = UIImpactFeedbackGenerator(style: .medium)
+    private let touchRate = FrameRateHold()
     private(set) var hapticCount = 0
     private var reconciled: (pass: UInt64, range: Range<Int>, count: Int)?
     private var labels: [LabelKey: CGImage] = [:]
@@ -105,10 +106,12 @@ public final class ListSwipeController: NSObject, UIGestureRecognizerDelegate {
         defer { MainThreadMonitor.shared.note("swipe pan \(phase) \((CACurrentMediaTime() - started) * 1000) ms") }
         let dx = pan.translation(in: list).x
         switch pan.state {
-        case .began: beginTracking(candidate, dx: dx)
+        case .began:
+            touchRate.hold(maximumFramesPerSecond: Float(list.window?.windowScene?.screen.maximumFramesPerSecond ?? 60))
+            beginTracking(candidate, dx: dx)
         case .changed: continueTracking(candidate, dx: dx)
-        case .ended: endTracking(candidate, velocity: pan.velocity(in: list).x)
-        case .cancelled: endTracking(candidate, velocity: 0)
+        case .ended: touchRate.release(); endTracking(candidate, velocity: pan.velocity(in: list).x)
+        case .cancelled: touchRate.release(); endTracking(candidate, velocity: 0)
         default: break
         }
     }

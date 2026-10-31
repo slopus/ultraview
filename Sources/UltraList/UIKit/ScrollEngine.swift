@@ -40,15 +40,59 @@ final class SamplingTarget: NSObject {
     @objc func tick(_ link: CADisplayLink) { engine?.tick(link) }
 }
 
+/// Keeps the display at its highest refresh rate while it is held. A finger
+/// moving content asks for every frame the screen can show, but bounds
+/// written from touch handlers request no rate of their own: on a
+/// variable-rate display the screen stays where the rest of the app leaves
+/// it, often 60 Hz, and touches arrive coalesced at that rate. A display
+/// link whose callback does nothing is the public way to ask for more.
+@MainActor
+final class FrameRateHold {
+    private var link: CADisplayLink?
+    private let target = HoldTarget()
+    private(set) var isHeld = false
+
+    func hold(maximumFramesPerSecond: Float) {
+        guard !isHeld else { return }
+        isHeld = true
+        let fps = max(60, maximumFramesPerSecond)
+        if let link {
+            link.preferredFrameRateRange = CAFrameRateRange(minimum: fps, maximum: fps, preferred: fps)
+            link.isPaused = false
+            return
+        }
+        let link = CADisplayLink(target: target, selector: #selector(HoldTarget.frame(_:)))
+        link.preferredFrameRateRange = CAFrameRateRange(minimum: fps, maximum: fps, preferred: fps)
+        link.add(to: .main, forMode: .common)
+        self.link = link
+    }
+
+    func release() {
+        guard isHeld else { return }
+        isHeld = false
+        link?.isPaused = true
+    }
+
+    func invalidate() {
+        isHeld = false
+        link?.invalidate(); link = nil
+    }
+
+    private final class HoldTarget: NSObject {
+        @objc func frame(_ link: CADisplayLink) {}
+    }
+}
+
 @MainActor
 final class InputPan: UIPanGestureRecognizer {
     var touchDown: ((Double) -> Bool)?
     var touchUp: (() -> Void)?
+    var didReset: (() -> Void)?
     private(set) var indirect = true
     var forced = false
     private var activeTouches = Set<ObjectIdentifier>()
     var hasActiveTouches: Bool { !activeTouches.isEmpty }
-    override func reset() { super.reset(); indirect = true; forced = false; activeTouches.removeAll() }
+    override func reset() { super.reset(); indirect = true; forced = false; activeTouches.removeAll(); didReset?() }
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
         super.touchesBegan(touches, with: event)
         let first = activeTouches.isEmpty
@@ -92,6 +136,7 @@ final class PhysicsEngine: NSObject, ScrollEngine, UIGestureRecognizerDelegate {
     weak var keyboardPanRecognizer: UIPanGestureRecognizer?
     private var link: CADisplayLink?
     private let target = SamplingTarget()
+    private let touchRate = FrameRateHold()
     private var baseline = CGPoint.zero
     private var sawDrag = false
     private var settleScheduled = false
@@ -118,6 +163,7 @@ final class PhysicsEngine: NSObject, ScrollEngine, UIGestureRecognizerDelegate {
         pan.touchDown = { [weak self] time in
             guard let self else { return false }
             sawDrag = false
+            touchRate.hold(maximumFramesPerSecond: maxFPS)
             onInput?(.init(time: time, phase: .touchDown))
             core.touchDown(at: time)
             didTouchDown?()
@@ -126,9 +172,14 @@ final class PhysicsEngine: NSObject, ScrollEngine, UIGestureRecognizerDelegate {
             return moving && gestureRecognizerShouldBegin(pan)
         }
         pan.touchUp = { [weak self] in
-            guard let self, !sawDrag, core.resumeBounce() else { return }
+            guard let self else { return }
+            if pan.state != .began && pan.state != .changed { touchRate.release() }
+            guard !sawDrag, core.resumeBounce() else { return }
             startMotion()
         }
+        // A recognizer that fails, as when a row's swipe takes the touch,
+        // resets without the touch ending.
+        pan.didReset = { [weak self] in self?.touchRate.release() }
     }
     func containerOrigin(height: Double, top: Bool, bottom: Bool) -> Double {
         ScrollCore.containerOrigin(height: height, topLoaded: top, bottomLoaded: bottom)
@@ -196,7 +247,7 @@ final class PhysicsEngine: NSObject, ScrollEngine, UIGestureRecognizerDelegate {
     func activate() { settlingEnabled = true; settleIfNeeded() }
     func teardown() {
         settlingEnabled = false
-        halt(); link?.invalidate(); link = nil
+        halt(); link?.invalidate(); link = nil; touchRate.invalidate()
         settleGeneration &+= 1; settleScheduled = false
     }
     func beginMomentum(velocity: Double) {
@@ -305,6 +356,7 @@ final class PhysicsEngine: NSObject, ScrollEngine, UIGestureRecognizerDelegate {
         }
         switch pan.state {
         case .began:
+            touchRate.hold(maximumFramesPerSecond: maxFPS)
             if pan.indirect { core.touchDown(at: CACurrentMediaTime()); catchMotion(braking: true) }
             core.viewport = host.bounds.height; core.scale = max(1, host.traitCollection.displayScale)
             core.coefficient = pan.indirect ? 0.715 : 0.55
@@ -317,6 +369,7 @@ final class PhysicsEngine: NSObject, ScrollEngine, UIGestureRecognizerDelegate {
             let suppressed = pan.state == .cancelled || shouldStopOnRelease?(velocity.y) == true
             let moving = core.endDrag(velocity: suppressed ? .zero : .init(x: velocity.x, y: velocity.y), at: CACurrentMediaTime())
             if moving { startMotion() }
+            if !pan.hasActiveTouches { touchRate.release() }
             didEndDragging?()
         default: break
         }
