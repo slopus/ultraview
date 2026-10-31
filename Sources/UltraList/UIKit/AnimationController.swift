@@ -28,6 +28,9 @@ final class AnimationController {
     private var layoutTrack: AnimationTrack?
     private var layoutOrigin: Double?
     weak var referenceLayer: CALayer?
+    /// The highest rate of the screen the list is on.
+    var maximumFramesPerSecond: () -> Float = { 60 }
+    private let rate = FrameRateHold()
     var now: Double { referenceLayer?.convertTime(CACurrentMediaTime(), from: nil) ?? CACurrentMediaTime() }
     func bind(_ owner: AnimationOwner, layer: CALayer) {
         if layers[owner] === layer { return }
@@ -340,6 +343,9 @@ final class AnimationController {
         animation.delegate = AnimationCompletion { [weak self] in self?.finalize(key, generation: track.generation) }
         layer.add(animation, forKey: key.animationKey)
         if key.owner == .viewport { for mirror in mirrors { mirror.add(animation, forKey: key.animationKey) } }
+        if abs(track.to - track.from) > 1e-6 {
+            rate.hold(maximumFramesPerSecond: maximumFramesPerSecond(), until: CACurrentMediaTime() + track.deadline - now)
+        }
         if abs(track.to - track.from) <= 1e-6 || referenceLayer?.presentation() == nil {
             let delay = max(0, track.deadline - now)
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.finalize(key, generation: track.generation) }

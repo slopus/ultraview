@@ -40,49 +40,6 @@ final class SamplingTarget: NSObject {
     @objc func tick(_ link: CADisplayLink) { engine?.tick(link) }
 }
 
-/// Keeps the display at its highest refresh rate while it is held. A finger
-/// moving content asks for every frame the screen can show, but bounds
-/// written from touch handlers request no rate of their own: on a
-/// variable-rate display the screen stays where the rest of the app leaves
-/// it, often 60 Hz, and touches arrive coalesced at that rate. A display
-/// link whose callback does nothing is the public way to ask for more.
-@MainActor
-final class FrameRateHold {
-    private var link: CADisplayLink?
-    private let target = HoldTarget()
-    private(set) var isHeld = false
-
-    func hold(maximumFramesPerSecond: Float) {
-        guard !isHeld else { return }
-        isHeld = true
-        let fps = max(60, maximumFramesPerSecond)
-        if let link {
-            link.preferredFrameRateRange = CAFrameRateRange(minimum: fps, maximum: fps, preferred: fps)
-            link.isPaused = false
-            return
-        }
-        let link = CADisplayLink(target: target, selector: #selector(HoldTarget.frame(_:)))
-        link.preferredFrameRateRange = CAFrameRateRange(minimum: fps, maximum: fps, preferred: fps)
-        link.add(to: .main, forMode: .common)
-        self.link = link
-    }
-
-    func release() {
-        guard isHeld else { return }
-        isHeld = false
-        link?.isPaused = true
-    }
-
-    func invalidate() {
-        isHeld = false
-        link?.invalidate(); link = nil
-    }
-
-    private final class HoldTarget: NSObject {
-        @objc func frame(_ link: CADisplayLink) {}
-    }
-}
-
 @MainActor
 final class InputPan: UIPanGestureRecognizer {
     var touchDown: ((Double) -> Bool)?
@@ -136,7 +93,7 @@ final class PhysicsEngine: NSObject, ScrollEngine, UIGestureRecognizerDelegate {
     weak var keyboardPanRecognizer: UIPanGestureRecognizer?
     private var link: CADisplayLink?
     private let target = SamplingTarget()
-    private let touchRate = FrameRateHold()
+    let touchRate = FrameRateHold()
     private var baseline = CGPoint.zero
     private var sawDrag = false
     private var settleScheduled = false

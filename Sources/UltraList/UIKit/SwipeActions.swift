@@ -318,6 +318,8 @@ public final class ListSwipeController: NSObject, UIGestureRecognizerDelegate {
         }
         CATransaction.commit()
         guard let transition, !transition.isImmediate else { return }
+        let screen = Float(view.window?.windowScene?.screen.maximumFramesPerSecond ?? 60)
+        touchRate.hold(maximumFramesPerSecond: screen, until: CACurrentMediaTime() + transition.duration)
         // Every animated value is affine in the reveal, so one normalized
         // velocity and curve keep the buttons on the content's edge.
         let normalized = motion?.normalizedVelocity ?? 0

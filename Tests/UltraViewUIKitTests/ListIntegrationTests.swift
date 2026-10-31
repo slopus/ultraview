@@ -949,6 +949,40 @@ private actor MeasurementGate: NodeRowMeasuring {
         #expect(!engine.gestureRecognizer(engine.pan, shouldRecognizeSimultaneouslyWith: UITapGestureRecognizer()))
         #expect(engine.pan.allowedScrollTypesMask == .continuous)
     }
+    @Test func aTouchHoldsTheDisplayRateUntilItEndsOrItsRecognizerResets() {
+        let engine = PhysicsEngine(mode: .keyframe)
+        defer { engine.teardown() }
+        #expect(!engine.touchRate.isHeld)
+        _ = engine.pan.touchDown?(CACurrentMediaTime())
+        #expect(engine.touchRate.isHeld)
+        engine.pan.touchUp?()
+        #expect(!engine.touchRate.isHeld)
+        _ = engine.pan.touchDown?(CACurrentMediaTime())
+        #expect(engine.touchRate.isHeld)
+        // A row's swipe takes the touch: the list's recognizer fails and resets.
+        engine.pan.didReset?()
+        #expect(!engine.touchRate.isHeld)
+        _ = engine.pan.touchDown?(CACurrentMediaTime())
+        engine.teardown()
+        #expect(!engine.touchRate.isHeld)
+    }
+    @Test func aTimedRateHoldOutlastsAnOpenOneAndEndsOnTime() async {
+        let hold = FrameRateHold()
+        defer { hold.invalidate() }
+        hold.hold(maximumFramesPerSecond: 120, until: CACurrentMediaTime() + 0.1)
+        hold.hold(maximumFramesPerSecond: 120)
+        // A timed hold doesn't end an open one.
+        try? await Task.sleep(for: .milliseconds(200))
+        #expect(hold.isHeld)
+        // Releasing the open one leaves a timed one running to its end.
+        hold.hold(maximumFramesPerSecond: 120, until: CACurrentMediaTime() + 0.1)
+        hold.release()
+        #expect(hold.isHeld)
+        try? await Task.sleep(for: .milliseconds(200))
+        #expect(!hold.isHeld)
+        hold.hold(maximumFramesPerSecond: 120, until: CACurrentMediaTime() - 1)
+        #expect(!hold.isHeld)
+    }
     @Test func flightParksModelAndTeardownCatchesLivePosition() async {
         let engine = PhysicsEngine(mode: .keyframe)
         engine.host.frame = .init(x: 0, y: 0, width: 320, height: 400)

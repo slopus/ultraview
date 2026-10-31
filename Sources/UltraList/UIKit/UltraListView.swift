@@ -239,6 +239,7 @@ public final class UltraListView: UltraScrollView {
         insertSubview(carousel, belowSubview: contentView)
         for view in [container, crossings, exits, attachmentsHost] { contentView.addSubview(view) }
         animations.referenceLayer = container.layer
+        animations.maximumFramesPerSecond = { [weak self] in Float(self?.window?.windowScene?.screen.maximumFramesPerSecond ?? 60) }
         animations.bind(.viewport, layer: contentView.layer)
         animations.mirrorViewport(on: carousel.layer)
         engine.onFlightChanged = { [weak self] flight in
