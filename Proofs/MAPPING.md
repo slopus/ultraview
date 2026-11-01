@@ -2917,6 +2917,60 @@ outside the momentum model. UIKit tests cover wheel distances and limits,
 release without a flight, unrelated events, layout changes and keyboard
 input installation/removal during a flight. No Lean model changed.
 
+## Width changes in place (the commit after `2b819af`)
+
+A width change now lays the rows out again in the turn of the change
+(`UltraListView.resizeInPlace`, see Docs/UltraList.md, "Width changes").
+This review supersedes the earlier pins of the files it changes:
+
+| Source | SHA-256 |
+| --- | --- |
+| `UltraList/UIKit/UltraListView.swift` | `6fb9b0215be1dc9d6b9b5201585dc035425ac232b85d2d02e60db5b313b8ab80` |
+| `UltraList/UIKit/NodeRow.swift` | `7c1c28ca7d9e65aaeb9e64fd78f607750a9456304b33fcc06698ddb5481120dd` |
+| `UltraList/UIKit/ListRow.swift` | `beacabe915b54b7c0aa9e48849cca2aca4d68e17b665fb0e0c860babaa97695b` |
+| `UltraList/WindowProjection.swift` | `538c2b8f905dab491298825a2537fbb305600cdab67a573450688194d4a1d86f` |
+| `UltraList/MeasurementCache.swift` | `8074a23e9b32917390829cf210dcf1e42825c15d1a94ea383a3d75b4c65aa9a0` |
+| `UltraList/UIKit/AnimationController.swift` | `92d71ff992185a54bc5442cf614c48f1b3da2740815693e624cf7eb3e3eb127b` |
+| `UltraCore/UIKit/NodeHostView.swift` | `ecdec2825140bcd9f8eecc1f11e20151ec807898c916455242250b47c00b2d59` |
+| `UltraCore/Pipeline/Renderer.swift` | `fc12f05ff4147b84ab890ea30469bde395b243a7470f803030b78afb1d585cdb` |
+| `UltraLayout/LayoutStyle.swift` | `6c6953695014cb446c094b62e6d88261ff742ed32b1b4c95b3c18618dda3cf2b` |
+
+| Model | Swift |
+| --- | --- |
+| `ListPass.readingY`, `reading_share_kept` | `PreservedWindowAnchor.resolveY` with `keepsReadingPosition` (WindowProjection.swift:55-69): `fixed + fraction * (survivorHeight - height)`, `fraction` the survivor's share above the reading edge, clamped to `[0, 1]` (:57). The theorem is the unclamped case, a survivor cut by the edge; at 0 the top keeps its place, as before. Only `resizeInPlace`'s pass sets it (UltraListView.swift:698, :1278-1280) |
+| `ListPass.compensated`, `inset_moves_content`, `inset_top_pinned` | unchanged: `keepsReadingPosition` defaults to `false`, and every other caller leaves `fraction` 0 |
+| `ListHosts.S.stage` | also `PreparedNodeContent.drawNow()` (NodeRow.swift:60-64), with `drawAhead`'s guard: a new `NodeHostView` only when `host ?? staged` is `nil`, kept in `staged` |
+| `ListHosts.S.reveal` | `showPreparedHost` (NodeRow.swift:238): a pending host laid out at another width than the shown one reveals without the pass-end wait (`revealDeadline = 0`). The step is the model's; only its timing changed |
+| `ListPreparation` keys | `MeasurementCache.seed` (MeasurementCache.swift:50) stores a height and drops the key's pending request, as a completed measurement does |
+
+Not covered:
+- `NodeRowView.accept` now discards a pending host laid out at another width
+  before starting the new candidate: it clears `pendingHost`,
+  `pendingCandidate` and `queuedCandidate` and removes the view. In
+  `ListHosts` this is `free` restricted to the pending slot, a step the model
+  doesn't have. It only empties a slot, so `twoSlots` and one-owner hold
+  after it, but no theorem states that.
+- The main thread's bounded wait (`ListInPlacePreparation.wait`,
+  `NodeHostView.waitForPipeline`) and `applyArrivedCommits`, which applies
+  the mailbox's commit through the same `applyTurn` the display link uses.
+  Scheduler fairness and the time limit are runtime assumptions.
+- Provisional heights: a row the change couldn't measure in time keeps its
+  old view and height in the pass until its measurement arrives
+  (UltraListView.swift:705-713). The window model takes measured heights as
+  given and doesn't distinguish them.
+- Width tracks for rows that mount during an animated change
+  (`joinWidthMotion`, `AnimationController.inheritSize`) and the transition
+  read from the layer's own resize animation (`inheritedResizeTransition`).
+
+Runtime checks: `WidthChangeTests` (UIKit, 20 cases) samples every display
+frame of animated, sprung, column and dragged width changes over fixed,
+variable and animated rows, and fails on a blank row or a row drawn at
+another width; it also checks that fixed rows keep their frames, variable
+rows keep the reading position, a flipped chat keeps its newest row, and
+late rows keep their old content. `FixedHeightTests` (Linux) checks
+`LayoutStyle.hasFixedHeight` against Yoga at three widths, and
+`WindowProjectionTests` the kept share.
+
 ## Theorems
 
 **Correctness**
@@ -2974,7 +3028,8 @@ input installation/removal during a flight. No Lean model changed.
   plus slack change in the same pass. `lockstep_iff`: content keeps its
   distance to an animated input iff their progresses agree.
   `inserted_once`: a row inserted with the pass touches its neighbour at every
-  frame.
+  frame. `reading_share_kept`: a width change keeps the share of the read
+  row above the edge.
 - `ListInsets.cheap_eq_full`: the inset-only path draws every row where the
   full pass does. `sum_covers`: covering the sum of the engine's and the
   viewport track's ranges keeps every row on screen.

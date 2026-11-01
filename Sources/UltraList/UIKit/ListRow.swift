@@ -20,6 +20,17 @@ public extension ListPreparedContent {
 @MainActor
 protocol DisplayPreparedContent: ListPreparedContent {
     var isDisplayPrepared: Bool { get }
+    /// Draws with the pass queued at once, for a list that waits for the
+    /// pipeline (`NodeHostView.waitForPipeline(until:)`) and then calls
+    /// `applyDrawn()`.
+    func drawNow()
+    /// Shows what was drawn for an in-place preparation now, in full,
+    /// rather than on later main-queue turns.
+    func applyDrawn()
+}
+extension DisplayPreparedContent {
+    func drawNow() {}
+    func applyDrawn() {}
 }
 
 /// What the list tells a row's `prepare` about the preparation, through
@@ -35,9 +46,62 @@ public enum ListPreparationHint {
 public struct ListPreparation: Sendable {
     public var height: Double
     public var content: (any ListPreparedContent)?
-    public init(height: Double, content: (any ListPreparedContent)? = nil) {
-        self.height = height; self.content = content
+    /// Whether the row has this height at every width, as `ListRow.hasFixedHeight`
+    /// says, learned while preparing: a node row's root with a height in points.
+    public var hasFixedHeight: Bool
+    public init(height: Double, content: (any ListPreparedContent)? = nil, hasFixedHeight: Bool = false) {
+        self.height = height; self.content = content; self.hasFixedHeight = hasFixedHeight
     }
+}
+
+/// What a list's width change did (`UltraListView.lastResize`).
+public struct ListResizeReport: Sendable, Equatable {
+    /// The new width of the rows.
+    public var width: Double
+    /// Main-thread milliseconds from the change to its applied pass,
+    /// waiting included.
+    public var milliseconds: Double
+    /// Of those, milliseconds spent waiting for rows off the main thread.
+    public var waitedMilliseconds: Double
+    /// Of `milliseconds`, the main thread's own CPU time. Far below the wall
+    /// time, outside the wait, the thread was waiting for a CPU.
+    public var cpuMilliseconds: Double
+    /// Of those, milliseconds spent showing what was drawn, and in the pass
+    /// that lays the rows out at the new width.
+    public var applyingMilliseconds: Double
+    public var passMilliseconds: Double
+    /// Rows measured at the new width while the list waited.
+    public var preparedRows: Int
+    /// Rows not measured or drawn in time, shown with their old content
+    /// until they are.
+    public var lateRows: Int
+    /// Rows on screen that can't prepare in place, shown with their old
+    /// content and height until measured.
+    public var keptRows: Int
+    /// Loaded rows with a fixed height, which kept their places without a
+    /// new measurement.
+    public var fixedRows: Int
+    /// Whether the rows followed an animation of the change.
+    public var animated: Bool
+}
+
+/// A row's preparation at a new width that runs off the main thread while
+/// the list waits for it on the main thread, when the list's width changes
+/// (see `ListRow.prepareInPlace`).
+@MainActor
+public final class ListInPlacePreparation {
+    private let waitForHeight: @Sendable (DispatchTime) -> Bool
+    private let complete: @MainActor () -> ListPreparation?
+    /// `wait` blocks until the row's height is known or the deadline passes,
+    /// and returns whether it is known. It is called on the main thread, so
+    /// the work it waits for must not need the main thread. `finish` runs
+    /// on the main thread once `wait` returned `true` and returns the
+    /// preparation, with its content drawing or drawn at that height.
+    public init(wait: @escaping @Sendable (DispatchTime) -> Bool, finish: @escaping @MainActor () -> ListPreparation?) {
+        waitForHeight = wait; complete = finish
+    }
+    func wait(until deadline: DispatchTime) -> Bool { waitForHeight(deadline) }
+    func finish() -> ListPreparation? { complete() }
 }
 
 /// Stable identity and content equality are separate: changed content reuses its row view.
@@ -54,6 +118,20 @@ public protocol ListRow {
     func isEqual(to other: any ListRow) -> Bool
     func measure(width: Double, environment: RenderEnvironment) async -> Double?
     func prepare(width: Double, environment: RenderEnvironment) async -> ListPreparation?
+    /// Whether the row's height is the same at every width. When the list's
+    /// width changes, such a row keeps its place and height, with no new
+    /// measurement to wait for; only its content is drawn again at the new
+    /// width. A preparation can also report it (`ListPreparation.hasFixedHeight`),
+    /// as a node row whose root has a height in points does.
+    var hasFixedHeight: Bool { get }
+    /// Starts preparing the row at `width` for a list whose width changed,
+    /// which waits for it on the main thread (with a time limit) so the row
+    /// shows at the new width in the same frame as the change. The work must
+    /// run off the main thread and must not need it. `nil`, the default,
+    /// leaves the row showing its old content until `prepare` finishes.
+    /// `NodeRow` implements it; a row that wraps one can return the node
+    /// row's.
+    func prepareInPlace(width: Double, environment: RenderEnvironment) -> ListInPlacePreparation?
     var leadingSwipeActions: [ListSwipeAction] { get }
     var trailingSwipeActions: [ListSwipeAction] { get }
 }
@@ -69,6 +147,8 @@ public extension ListRow {
     func prepare(width: Double, environment: RenderEnvironment) async -> ListPreparation? {
         await measure(width: width, environment: environment).map { ListPreparation(height: $0) }
     }
+    var hasFixedHeight: Bool { false }
+    func prepareInPlace(width: Double, environment: RenderEnvironment) -> ListInPlacePreparation? { nil }
     var leadingSwipeActions: [ListSwipeAction] { [] }
     var trailingSwipeActions: [ListSwipeAction] { [] }
 }

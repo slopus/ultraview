@@ -1,6 +1,7 @@
 #if canImport(UIKit)
 import UIKit
 import QuartzCore
+import Synchronization
 import UltraCore
 import UltraLayout
 
@@ -54,6 +55,16 @@ fileprivate final class PreparedNodeContent: DisplayPreparedContent {
         self.drawing = drawing
         return drawing
     }
+    /// Draws at the measured size with the pass queued at once, for a list
+    /// that waits for the pipeline and then calls `applyDrawn()`.
+    func drawNow() {
+        let target = host ?? staged ?? NodeHostView(rootNode: root)
+        if host == nil { staged = target }
+        target.prepareNow(size: .init(width: width, height: size.height), environment: environment)
+    }
+    func applyDrawn() {
+        (host ?? staged)?.applyArrivedCommits()
+    }
     func checkout(owner: NodeRowView) -> NodeHostView {
         let result: NodeHostView
         if let host {
@@ -65,6 +76,22 @@ fileprivate final class PreparedNodeContent: DisplayPreparedContent {
         staged = nil
         self.owner = owner
         return result
+    }
+}
+
+/// A tree built and measured for an in-place preparation, which the main
+/// thread waits for.
+private final class InPlaceMeasurement: Sendable {
+    private let measured = Mutex<(root: UltraNode, size: CGSize)?>(nil)
+    private let done = DispatchSemaphore(value: 0)
+    func finish(root: UltraNode, size: CGSize) {
+        measured.withLock { $0 = (root, size) }
+        done.signal()
+    }
+    var result: (root: UltraNode, size: CGSize)? { measured.withLock { $0 } }
+    func wait(until deadline: DispatchTime) -> Bool {
+        if measured.withLock({ $0 != nil }) { return true }
+        return done.wait(timeout: deadline) == .success
     }
 }
 
@@ -128,7 +155,25 @@ public final class NodeRow: ListRow {
             // transaction as its own geometry and animations.
             await content.drawAhead()?.value
         }
-        return ListPreparation(height: result.1.height, content: content)
+        return ListPreparation(height: result.1.height, content: content, hasFixedHeight: result.0.style.layout.hasFixedHeight)
+    }
+    /// Builds and measures the tree off the main thread, then draws it with
+    /// its pass queued at once: the list waits for both.
+    public func prepareInPlace(width: Double, environment: RenderEnvironment) -> ListInPlacePreparation? {
+        let resolved = self.environment ?? environment
+        let factory = factory, measurer = measurer
+        let job = InPlaceMeasurement()
+        Task.detached(priority: .high) {
+            let root = factory()
+            let size = await measurer.measure(root, width: width, environment: resolved)
+            job.finish(root: root, size: size)
+        }
+        return ListInPlacePreparation(wait: { job.wait(until: $0) }, finish: {
+            guard let measured = job.result, measured.size.height.isFinite, measured.size.height >= 0 else { return nil }
+            let content = PreparedNodeContent(root: measured.root, size: measured.size, width: width, environment: resolved)
+            content.drawNow()
+            return ListPreparation(height: measured.size.height, content: content, hasFixedHeight: measured.root.style.layout.hasFixedHeight)
+        })
     }
     public func makeView() -> ListRowView { NodeRowView(row: self) }
     public func apply(to view: ListRowView, transition: ListTransition) {
@@ -215,6 +260,10 @@ fileprivate final class NodeRowView: ListRowView {
             }
             return
         }
+        // Content laid out at another width is worse to keep than a short
+        // replacement: the list's width changed, so the new one shows now.
+        let sameWidth = abs((pendingCandidate?.size.width ?? host.bounds.width) - displayedSize.width) <= 0.5 || displayedHost == nil
+        if !sameWidth { revealDeadline = 0 }
         if revealDeadline == nil, let transition = passTransition, !transition.isImmediate, displayedHost != nil,
            (pendingCandidate?.size.height ?? host.bounds.height) < displayedSize.height {
             if !awaitsPassEnd {
@@ -291,6 +340,13 @@ fileprivate final class NodeRowView: ListRowView {
     private func accept(_ content: PreparedNodeContent, width: Double, height: Double) {
         let root = content.root
         let candidate = Candidate(content: content, size: .init(width: width, height: height))
+        if let pendingHost, let pending = pendingCandidate, pendingHost.rootNode !== root,
+           abs(pending.size.width - width) > 0.5 {
+            // The width changed again before the last one showed: that
+            // content is already out of date.
+            pendingHost.onCommit = nil; pendingHost.removeFromSuperview()
+            self.pendingHost = nil; pendingCandidate = nil; queuedCandidate = nil; revealDeadline = nil
+        }
         if let pendingHost {
             if pendingHost.rootNode !== root { queuedCandidate = candidate }
             else { queuedCandidate = nil }
@@ -311,7 +367,12 @@ fileprivate final class NodeRowView: ListRowView {
     }
     override func layoutSubviews() {
         super.layoutSubviews()
-        displayedHost?.frame = .init(origin: .zero, size: displayedSize)
+        // Content drawn for another width keeps its leading edge where it
+        // was until its replacement shows: stretched, text and circles would
+        // all change shape for those frames, and pinned, only what sits at
+        // the trailing edge is out of place.
+        let leading = effectiveUserInterfaceLayoutDirection == .rightToLeft ? bounds.width - displayedSize.width : 0
+        displayedHost?.frame = .init(origin: .init(x: leading, y: 0), size: displayedSize)
         if let pendingCandidate { pendingHost?.frame = .init(origin: .zero, size: pendingCandidate.size) }
     }
 }

@@ -266,6 +266,54 @@ public final class NodeHostView: UIView {
         }
     }
 
+    // MARK: Waiting for the pipeline
+
+    /// Lays the tree out at `size` in `environment` and draws it, queueing
+    /// the pass on the pipeline at once rather than after the main queue's
+    /// current turn. For a main thread that will wait for the result with
+    /// `waitForPipeline(until:)` and then show it with
+    /// `applyArrivedCommits()`, in the same turn; otherwise use `prepare(size:)`.
+    public func prepareNow(size: CGSize, environment: RenderEnvironment) {
+        if window == nil, preparedEnvironment != environment {
+            preparedEnvironment = environment
+            renderer.update { $0.environment = environment }
+        }
+        setSize(size)
+        renderer.queuePassNow()
+    }
+
+    /// Blocks the calling thread until the pipeline has finished the passes
+    /// and measurements queued before this call, or until `deadline`.
+    /// Returns whether it finished in time.
+    ///
+    /// The main thread never waits for the pipeline in ordinary work. This
+    /// is for the rare change that is worse to show in steps than to wait a
+    /// moment for, such as a list relaying its rows out at a new width on a
+    /// rotation: the work still runs off the main thread, and the wait is
+    /// bounded by `deadline`.
+    public nonisolated static func waitForPipeline(until deadline: DispatchTime) -> Bool {
+        let finished = DispatchSemaphore(value: 0)
+        // Queued at the waiting thread's priority, which lifts the passes
+        // ahead of it on the serial queue.
+        Pipeline.layoutQueue.async(qos: .userInteractive, flags: .enforceQoS) { finished.signal() }
+        return finished.wait(timeout: deadline) == .success
+    }
+
+    /// Applies the commits the pipeline has already handed over, now and in
+    /// full, views off screen included, rather than on the main queue's next
+    /// turn and within `mountBudget` per frame. Returns whether the host
+    /// then shows its content complete for its current size.
+    @discardableResult
+    public func applyArrivedCommits() -> Bool {
+        if let commit = mailbox.take() {
+            queue.add(commit)
+        }
+        while queue.hasWork {
+            applyTurn(budget: .infinity, minimum: 1)
+        }
+        return isContentComplete
+    }
+
     // MARK: Layout transitions
 
     /// The tree as it is on screen now, as a layout transition's start.

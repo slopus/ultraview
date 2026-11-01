@@ -234,6 +234,21 @@ theorem inset_top_pinned (count anchor : Nat) (vp : Viewport) (margin : Rat)
   rw [build_top_pinned count anchor vp margin pinned slackBaseline measure resolveY hg hm hlow]
   grind
 
+/-! ## A width change keeps the reading position -/
+
+/-- `resolveY` with `keepsReadingPosition`: the row being read, `share` of
+whose old height was above the reading edge, moves by that share of its
+height change. -/
+def readingY (oldY share oldHeight newHeight : Rat) : Rat :=
+  oldY + share * (oldHeight - newHeight)
+
+/-- **The same share of the read row stays above the edge.** If `share` of
+the old height was above the edge, `share` of the new height is. -/
+theorem reading_share_kept (oldY share oldHeight newHeight edge : Rat)
+    (hedge : edge = oldY + share * oldHeight) :
+    edge - readingY oldY share oldHeight newHeight = share * newHeight := by
+  rw [hedge, readingY]; grind
+
 /-- **Immediate means the same frame.** An immediate `replace` removes the
 track, so the key shows its new value at once: the viewport and every row
 are at their new places in the pass that changed the inset, which runs

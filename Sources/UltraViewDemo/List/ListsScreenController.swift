@@ -4,7 +4,7 @@ import UltraView
 
 @MainActor
 final class ListsScreenController: UIViewController {
-    private let tabs = UISegmentedControl(items: ["Chat", "10k feed", "Compare", "Record", "Across"])
+    private let tabs = UISegmentedControl(items: ["Chat", "10k feed", "Compare", "Record", "Across", "Width"])
     private let engines = UISegmentedControl(items: ["UIKit", "Stepped", "Keyframe"])
     private let blocker = UISegmentedControl(items: ["Main off", "50 ms", "100 ms", "250 ms"])
     private let controls = UIStackView()
@@ -14,7 +14,7 @@ final class ListsScreenController: UIViewController {
         super.viewDidLoad(); view.backgroundColor = .systemBackground
         tabs.accessibilityIdentifier = "listScreens"; engines.accessibilityIdentifier = "listEngines"
         let screen = UserDefaults.standard.string(forKey: "listScreen") ?? "feed"
-        tabs.selectedSegmentIndex = ["chat", "feed", "compare", "record", "horizontal"].firstIndex(of: screen) ?? 1
+        tabs.selectedSegmentIndex = ["chat", "feed", "compare", "record", "horizontal", "resize"].firstIndex(of: screen) ?? 1
         let initialEngine = UserDefaults.standard.string(forKey: "listEngine") ?? "keyframe"
         engines.selectedSegmentIndex = ScrollEngineMode.allCases.firstIndex(where: { $0.rawValue == initialEngine }) ?? 2
         tabs.addTarget(self, action: #selector(showScreen), for: .valueChanged)
@@ -66,6 +66,7 @@ final class ListsScreenController: UIViewController {
         case 2: next = ListComparisonController()
         case 3: next = GestureRecorderController()
         case 4: next = HorizontalListController(mode: mode)
+        case 5: next = ListResizeController(mode: mode)
         default: next = LargeListController(mode: mode)
         }
         addChild(next); next.view.translatesAutoresizingMaskIntoConstraints = false; view.addSubview(next.view)
@@ -132,6 +133,7 @@ struct DemoListRow: ListRow {
     }
     func measure(width: Double, environment: RenderEnvironment) async -> Double? { await nodeRow.measure(width: width, environment: environment) }
     func prepare(width: Double, environment: RenderEnvironment) async -> ListPreparation? { await nodeRow.prepare(width: width, environment: environment) }
+    func prepareInPlace(width: Double, environment: RenderEnvironment) -> ListInPlacePreparation? { nodeRow.prepareInPlace(width: width, environment: environment) }
 }
 @MainActor
 private final class DemoRowStorage { var rows: [UInt64: NodeRow] = [:] }

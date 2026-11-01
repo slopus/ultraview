@@ -173,6 +173,19 @@ final class AnimationController {
             install(owner, .positionY, track: inherited, explicitOrigin: origin)
         }
     }
+    /// Gives `owner` the width motion `reference` is in, on the same clock:
+    /// a row that mounts while the list's width animates.
+    func inheritSize(_ owner: AnimationOwner, from reference: AnimationOwner) {
+        for property in [AnimatedProperty.width, .positionX] {
+            let key = ListAnimationModel.Key(reference, property)
+            guard let track = model.tracks[key] else { continue }
+            let origin = clockOrigin(key, generation: track.generation, fallback: track.startTime)
+            if let inherited = model.replace(owner, property, from: track.from, to: track.to,
+                                             at: track.startTime, transition: track.transition) {
+                install(owner, property, track: inherited, explicitOrigin: origin)
+            }
+        }
+    }
     func joinPosition(_ owner: AnimationOwner, shown: Double, target: Double, at time: Double) {
         let key = ListAnimationModel.Key(owner, .positionY)
         let own = model.tracks[key]

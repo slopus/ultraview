@@ -44,6 +44,16 @@ public final class MeasurementCache: Sendable {
             state.heights[key] = height; return .stored
         }
     }
+    /// Stores a height measured outside a request, as a width change does
+    /// while the main thread waits. A request still running for the key
+    /// finds its ticket stale.
+    func seed(_ key: MeasurementKey, height: Double) {
+        guard height.isFinite && height >= 0 else { return }
+        state.withLock { state in
+            state.pending.removeValue(forKey: key)
+            state.heights[key] = height
+        }
+    }
     public func invalidate() { state.withLock { $0.heights.removeAll(); $0.pending.removeAll() } }
     public func cancelRequest(_ key: MeasurementKey, ticket: UInt64) {
         state.withLock { state in if state.pending[key] == ticket { state.pending.removeValue(forKey: key) } }

@@ -319,6 +319,7 @@ struct ChatBubbleRow: ListRow {
     }
     func measure(width: Double, environment: RenderEnvironment) async -> Double? { await node.measure(width: width, environment: environment) }
     func prepare(width: Double, environment: RenderEnvironment) async -> ListPreparation? { await node.prepare(width: width, environment: environment) }
+    func prepareInPlace(width: Double, environment: RenderEnvironment) -> ListInPlacePreparation? { node.prepareInPlace(width: width, environment: environment) }
 }
 
 /// A streamed reply, word by word.

@@ -157,6 +157,14 @@ final class Renderer: @unchecked Sendable {
         }
     }
 
+    /// Queues a pass on the layout queue now, even when one is already due
+    /// through the main queue's next turn: for a main thread that is about
+    /// to wait for it (see `NodeHostView.waitForPipeline(until:)`). The
+    /// pass that was due runs too, and finds little left to do.
+    func queuePassNow() {
+        Pipeline.layoutQueue.async(qos: .userInteractive, flags: .enforceQoS) { self.runPass() }
+    }
+
     /// Runs a pass on the layout queue and waits for it. Never call it on the
     /// main thread: the pass would run there.
     func runPassNow() {

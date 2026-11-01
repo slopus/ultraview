@@ -58,6 +58,20 @@ public struct LayoutStyle: Sendable, Equatable {
         insets.hasPercent || margins.hasPercent || paddings.hasPercent
     }
 
+    /// Whether a root laid out with this style, at a given width and with
+    /// no limit on its height, gets the same height at every width: its
+    /// height is in points and nothing that decides the height is a share
+    /// of the width. The vertical padding counts, because Yoga resolves a
+    /// percentage padding against the width, and so does an aspect ratio.
+    public var hasFixedHeight: Bool {
+        guard case .points = height, aspectRatio == nil else { return false }
+        func isPercent(_ value: Dimension?) -> Bool {
+            if case .percent? = value { true } else { false }
+        }
+        return !isPercent(minHeight) && !isPercent(maxHeight)
+            && ![paddings.all, paddings.vertical, paddings.top, paddings.bottom].contains(where: isPercent)
+    }
+
     public enum Direction: Sendable, Equatable, CaseIterable {
         case inherit
         case leftToRight

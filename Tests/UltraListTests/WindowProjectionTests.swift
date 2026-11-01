@@ -12,11 +12,12 @@ import Testing
     func anchor(oldWindow: ListWindow, oldBase: Double = 0, oldSettled: Double = 0, oldViewport: ListViewport? = nil,
                 newViewport: ListViewport? = nil, oldSlack: Double = 0, pinnedIndex: Int? = nil, holdsPinnedRow: Bool = false,
                 survivor: WindowRow? = nil, survivorNewIndex: Int? = nil, atTop: Bool = false, automatic: Bool = true,
-                additionalDistance: Double = 0, compensates: Bool = true) -> PreservedWindowAnchor {
+                additionalDistance: Double = 0, compensates: Bool = true, keepsReadingPosition: Bool = false) -> PreservedWindowAnchor {
         PreservedWindowAnchor(oldWindow: oldWindow, oldBase: oldBase, oldSettled: oldSettled, oldViewport: oldViewport ?? viewport,
                               newViewport: newViewport ?? viewport, oldSlack: oldSlack, pinnedIndex: pinnedIndex,
                               holdsPinnedRow: holdsPinnedRow, survivor: survivor, survivorNewIndex: survivorNewIndex, atTop: atTop,
-                              automatic: automatic, additionalDistance: additionalDistance, compensates: compensates)
+                              automatic: automatic, additionalDistance: additionalDistance, compensates: compensates,
+                              keepsReadingPosition: keepsReadingPosition)
     }
 
     func place(_ window: ListWindow, count: Int, viewport: ListViewport? = nil, pinnedIndex: Int? = nil, oldWindowIsEmpty: Bool = false,
@@ -44,6 +45,31 @@ import Testing
         #expect(survivor(settled: 1000) { _ in true } == 4)
         #expect(survivor { _ in false } == nil)
         #expect(PreservedWindowAnchor.survivor(in: .init(), base: 0, settled: 0, topInset: 0, automatic: true) { _ in true } == nil)
+    }
+
+    @Test func aWidthChangeKeepsTheShareOfTheReadRowAboveTheEdge() {
+        // Row 5 is 100 tall and shows from -40: 40% of it is above the top.
+        let old = ListWindow(rows: [WindowRow(index: 4, y: 0, height: 60), WindowRow(index: 5, y: 60, height: 100),
+                                    WindowRow(index: 6, y: 160, height: 80)])
+        let narrow = ListViewport(width: 200, height: 400, insets: .init(top: 20, bottom: 30))
+        func resolved(_ keeps: Bool, automatic: Bool = true, settled: Double = 100) -> PreservedWindowAnchor {
+            anchor(oldWindow: old, oldSettled: settled, newViewport: narrow, survivor: old.rows[1], survivorNewIndex: 5,
+                   automatic: automatic, keepsReadingPosition: keeps)
+        }
+        // Taller at the new width: 40% of 150 stays above the edge.
+        #expect(resolved(true).resolveY(150) == -60)
+        #expect(resolved(true).resolveY(100) == -40)
+        #expect(resolved(true).resolveY(50) == -20)
+        // Without it, the row's top keeps its place.
+        #expect(resolved(false).resolveY(150) == -40)
+        // Preserving visible content reads from the top inset: 60% above it.
+        #expect(resolved(true, automatic: false).resolveY(150) == 20 - 0.6 * 150)
+        // A row wholly below the edge keeps its top.
+        #expect(resolved(true, settled: 50).resolveY(150) == 10)
+        // A list resting on its top stays there.
+        let top = anchor(oldWindow: old, oldSettled: 100, newViewport: narrow, survivor: old.rows[1], survivorNewIndex: 5,
+                         atTop: true, keepsReadingPosition: true)
+        #expect(top.pinsTop)
     }
 
     @Test func aSurvivorKeepsItsScreenPositionAcrossInsetsAndDistance() {

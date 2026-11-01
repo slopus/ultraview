@@ -171,6 +171,57 @@ describe finite collection edges after the pass, rather than the preload band.
 `loadedEdgeMargin` can require an edge to enter further into the viewport before
 it is reported.
 
+## Width changes
+
+A rotation, a split view's column, a Stage Manager window drag or any
+`UIView.animate` around the list's frame changes the width every row is laid
+out at. The list lays the rows out again within the same turn, so the frame that
+shows the new width shows every visible row measured and drawn at it.
+
+`layoutSubviews`, or `applyChanges(newSize:)` with nothing else changing, runs
+the width change in place:
+
+1. Rows with a fixed height keep it. A `NodeRow` whose root style has a height
+   in points (`LayoutStyle.hasFixedHeight`: no percentage height bounds or
+   vertical padding, no aspect ratio) reports `ListPreparation.hasFixedHeight`;
+   another `ListRow` can return `true` from `hasFixedHeight`. These rows are
+   not measured again, don't move, and don't change the content height or the
+   anchor; only their content is drawn at the new width.
+2. The rows the new layout puts on screen, plus up to 48 points around it,
+   are measured and drawn at the new width off the main thread through
+   `ListRow.prepareInPlace(width:environment:)`, with the same text layout
+   used for drawing. Rows that the new heights bring on screen get a second
+   round. The main thread waits for them, then for the pipeline, at most
+   `inPlaceResizeTimeLimit` (0.1 s) in total.
+3. One pass applies the new size with the new heights. The row being read
+   keeps the share of its height that was above the top edge; in a flipped
+   chat that row is the newest one at the bottom.
+4. A row that isn't ready in time, or doesn't support `prepareInPlace`, keeps
+   its old height and drawing until its measurement arrives, like any late
+   measurement. Rows off screen are measured again as scrolling reaches them.
+
+When the size changes inside an animation, the rows' frames move on the curve
+the list's own layer animates with: a basic animation's timing function, a
+spring's stiffness and damping, or `UIView.inheritedAnimationDuration`. Rows
+that mount during the animation join it at the current width.
+
+Until the new drawing replaces it, a row's old drawing stays at its own size,
+at the leading edge, never stretched. Stretching distorts text, circles and
+corner radii in every frame of the change; at the leading edge only the
+trailing part is out of place, and only until the new drawing arrives, which
+is in the same frame unless the time limit passed.
+
+`lastResize` holds a `ListResizeReport` for the last in-place change: wall and
+CPU time on the main thread, time spent waiting, applying and in the pass, and
+the counts of prepared, late, kept and fixed rows. A wrapper row that holds a
+`NodeRow` forwards `prepareInPlace` to it; the default returns `nil`, which
+keeps the row's old drawing until its ordinary measurement arrives.
+
+The wait holds the main thread only for a width change. Scrolling, appends and
+streaming don't take this path. Over the 0.1 s limit, the list stops waiting
+and lets late rows catch up; under heavy host load the turn can still run
+longer than the limit, as the main thread itself waits to be scheduled.
+
 ## Scroll to top
 
 A tap on the status bar scrolls a list to the edge shown at the top: its first

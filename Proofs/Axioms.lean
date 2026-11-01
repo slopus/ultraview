@@ -105,6 +105,7 @@ open UltraProofs
 #print axioms ListPass.rigid
 #print axioms ListPass.inset_moves_content
 #print axioms ListPass.inset_top_pinned
+#print axioms ListPass.reading_share_kept
 #print axioms ListPass.immediate_same_frame
 #print axioms ListPass.lockstep
 #print axioms ListPass.lockstep_iff

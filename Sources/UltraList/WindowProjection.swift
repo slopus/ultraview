@@ -20,13 +20,22 @@ struct PreservedWindowAnchor: Sendable, Equatable {
     private let fixed: Double
     private let compensation: Double
     private let additionalDistance: Double
+    /// How much of the survivor was above the reading edge, and its height
+    /// then, when a resize keeps that share of it above the edge.
+    private let fraction: Double
+    private let survivorHeight: Double
 
     /// `survivor` is a row of `oldWindow`, and `survivorNewIndex` its index in
     /// the new collection; give both or neither. `pinnedIndex` is the new
     /// collection's, and `atTop` whether the old offset rested on its top edge.
+    /// With `keepsReadingPosition`, for a change of width, a survivor cut
+    /// by the reading edge (the screen's top, or the top inset when
+    /// `automatic` is false) keeps the same share of its height above that
+    /// edge at its new height, so the line being read stays about where it
+    /// was; otherwise its top keeps its place.
     init(oldWindow: ListWindow, oldBase: Double, oldSettled: Double, oldViewport: ListViewport, newViewport: ListViewport,
          oldSlack: Double, pinnedIndex: Int?, holdsPinnedRow: Bool, survivor: WindowRow?, survivorNewIndex: Int?,
-         atTop: Bool, automatic: Bool, additionalDistance: Double, compensates: Bool) {
+         atTop: Bool, automatic: Bool, additionalDistance: Double, compensates: Bool, keepsReadingPosition: Bool = false) {
         precondition((survivor == nil) == (survivorNewIndex == nil))
         let top = !holdsPinnedRow && automatic && atTop && additionalDistance == 0
         let anchor: Int
@@ -43,6 +52,13 @@ struct PreservedWindowAnchor: Sendable, Equatable {
         fixed = survivor.map { oldBase + $0.y - oldSettled } ?? newViewport.insets.top
         compensation = compensates ? newViewport.insets.top - oldViewport.insets.top + updatedSlack - oldSlack : 0
         self.additionalDistance = additionalDistance
+        if keepsReadingPosition, !top, !pinned, let survivor, survivor.height > 0 {
+            let edge = automatic ? 0 : oldViewport.insets.top
+            fraction = min(1, max(0, (edge - fixed) / survivor.height))
+            survivorHeight = survivor.height
+        } else {
+            fraction = 0; survivorHeight = 0
+        }
     }
 
     /// The anchor row's top on screen, given its height.
@@ -50,7 +66,7 @@ struct PreservedWindowAnchor: Sendable, Equatable {
         if pinned {
             return viewport.insets.top + viewport.visibleHeight + max(0, height - viewport.visibleHeight / 2) - height + additionalDistance
         }
-        return fixed + compensation + additionalDistance
+        return fixed + fraction * (survivorHeight - height) + compensation + additionalDistance
     }
 
     func window(count: Int, margin: Double, measure: (Int) -> (height: Double, top: Double, bottom: Double)?) -> ListWindow {

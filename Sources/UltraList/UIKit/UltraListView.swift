@@ -94,6 +94,23 @@ public final class UltraListView: UltraScrollView {
     private var pendingIdentityIndices: [String: Int] = [:]
     private var unavailableMeasurements: Set<MeasurementKey> = []
     private var measurementFailures: [MeasurementKey: Int] = [:]
+    /// Heights at a new width for rows a width change kept in place without
+    /// a measurement there: their last height, exact for a row with a fixed
+    /// height. The row keeps its view and old content until its measurement
+    /// at the new width arrives.
+    private var provisionalHeights: [MeasurementKey: Double] = [:]
+    /// Set while a width change's pass applies, which keeps the reading
+    /// position (`PreservedWindowAnchor`'s `keepsReadingPosition`).
+    private var resizingInPlace = false
+    /// How long a width change waits on the main thread for its visible
+    /// rows to be measured and drawn at the new width, so they show at that
+    /// width in the frame of the change. Rows not ready by then keep their
+    /// old content, and their old height until they are measured.
+    public var inPlaceResizeTimeLimit: TimeInterval = 0.1
+    /// What the latest width change did, for diagnostics and tests.
+    public private(set) var lastResize: ListResizeReport?
+    /// Width changes that took an ordinary pass instead, for tests.
+    private(set) var resizeFallbacks = 0
     private struct InsertedBlock {
         var identities: Set<String>
         var edge: BoundaryEdge
@@ -278,6 +295,9 @@ public final class UltraListView: UltraScrollView {
             declaredEdges = settledWindow.edges(origin: origin, count: items.count, viewport: viewport, pinnedIndex: pinnedIndex)
             engine.setEdges(declaredEdges)
             handleScroll(engine.offset)
+        } else if !changedEnvironment, abs(viewport.width - size.width) > 0.5,
+                  resizeInPlace(to: size, transition: inheritedResizeTransition()) {
+            // Laid out again at the new width in this turn.
         } else if changedEnvironment || abs(viewport.width - size.width) > 0.5 || abs(viewport.height - size.height) > 0.5 {
             applyChanges(newSize: size, transition: .immediate)
         }
@@ -463,7 +483,14 @@ public final class UltraListView: UltraScrollView {
     }
 
     /// All options are captured intact if a callback re-enters the pass.
+    /// A change of width alone relays the rows out in place, as a change of
+    /// the view's own width does (see `inPlaceResizeTimeLimit`).
     public func applyChanges(items newItems: [any ListRow]? = nil, newSize: CGSize? = nil, newInsets: ListInsets? = nil, scrollTo: ListScrollTarget? = nil, additionalScrollDistance: Double = 0, anchorMode: ListAnchorMode = .automatic, compensatesInsetChange: Bool = true, absorbsEdgeChangeIntoOverscroll: Bool = false, animatesInsertions: Bool = true, transition requestedTransition: ListTransition = .default) {
+        if let newSize, newItems == nil, newInsets == nil, scrollTo == nil, additionalScrollDistance == 0, anchorMode == .automatic,
+           abs(Double(newSize.width) - viewport.width) > 0.5,
+           resizeInPlace(to: newSize, transition: requestedTransition.inheritsDefault ? .immediate : requestedTransition) {
+            return
+        }
         // A newer explicit target supersedes a waiting one; a drag that
         // begins after this call cancels this one.
         let intent = scrollTo.map { target in
@@ -667,14 +694,23 @@ public final class UltraListView: UltraScrollView {
             oldViewport: oldViewport, newViewport: viewport, oldSlack: oldSlack, pinnedIndex: pinnedIndex,
             holdsPinnedRow: holdsPinnedRow, survivor: survivor,
             survivorNewIndex: survivor.flatMap { newLookup[oldItems[$0.index].identity] }, atTop: atTop,
-            automatic: anchorMode == .automatic, additionalDistance: additionalScrollDistance, compensates: compensatesInsetChange)
+            automatic: anchorMode == .automatic, additionalDistance: additionalScrollDistance, compensates: compensatesInsetChange,
+            keepsReadingPosition: resizingInPlace)
         let anchor = target.map { min(max(0, $0.index), items.count - 1) } ?? preserved.index
         requestAhead(anchor: anchor, direction: (engine.activeFlight?.settledOffset ?? engine.offset) >= engine.offset ? 1 : -1)
         var measuredViews: [String: ListRowView] = [:]
         func measure(_ index: Int) -> (height: Double, top: Double, bottom: Double)? {
             let item = items[index], identity = item.identity
             let key = MeasurementKey(identity: identity, revision: item.revision, width: viewport.contentWidth, environment: measurementEnvironmentKey &+ item.measurementEnvironment &* 0x9e3779b97f4a7c15)
-            if item.measuresAsynchronously, measurements.height(for: key) == nil { requestMeasurement(index); return nil }
+            if item.measuresAsynchronously, measurements.height(for: key) == nil {
+                requestMeasurement(index)
+                // A width change keeps a shown row it couldn't measure in time,
+                // with its old content, until its measurement arrives.
+                guard let kept = provisionalHeights[key], let view = oldViews[identity] else { return nil }
+                measuredViews[identity] = view
+                let reserve = reservedHeights(at: index)
+                return (kept, reserve.0, reserve.1)
+            }
             let view = oldViews[identity] ?? carried[identity]?.view ?? measuredViews[identity] ?? pendingDisplayViews[key] ?? item.makeView()
             if oldViews[identity] == nil && measuredViews[identity] == nil { item.apply(to: view, transition: .immediate) }
             measuredViews[identity] = view
@@ -827,7 +863,7 @@ public final class UltraListView: UltraScrollView {
             view.onContentDidChange = { [weak self] animated in self?.markDirty(id, animated: animated) }
             view.readinessObserver = { [weak self] in self?.accessibilityCoordinator.reconcile() }
             animations.bind(.row(id), layer: view.layer)
-            if oldSnapshot[id] == nil { animations.seed(.row(id), width: viewport.contentWidth, height: row.height) }
+            if oldSnapshot[id] == nil { animations.seed(.row(id), width: viewport.contentWidth, height: row.height); joinWidthMotion(id) }
         }
         for (id, view) in oldViews where !nextIDs.contains(id) { view.visibleRectUpdated(nil) }
         engine.setEdges(newEdges); declaredEdges = newEdges
@@ -883,6 +919,17 @@ public final class UltraListView: UltraScrollView {
             animations.transition(owner, .positionX, old: oldViewport.insets.left + oldPlacement.x, new: viewport.insets.left + newPlacement.x, at: time, transition: transition)
             animations.transition(owner, .width, old: oldViewport.contentWidth, new: viewport.contentWidth, at: time, transition: transition)
             animations.transition(owner, .height, old: old.height, new: row.height, at: time, transition: transition)
+        }
+        // A row that joins the window as the width animates comes in at
+        // the width its neighbours are passing through.
+        if !transition.isImmediate, abs(oldViewport.contentWidth - viewport.contentWidth) > 1e-6 {
+            for row in settledWindow.rows where oldSnapshot[items[row.index].identity] == nil && oldLookup[items[row.index].identity] != nil {
+                let id = items[row.index].identity, owner = AnimationOwner.row(id)
+                let oldPlacement = views[id]?.placementOffset(size: .init(width: oldViewport.contentWidth, height: row.height)) ?? .zero
+                let newPlacement = views[id]?.placementOffset(size: .init(width: viewport.contentWidth, height: row.height)) ?? .zero
+                animations.replace(owner, .positionX, from: oldViewport.insets.left + oldPlacement.x - viewport.insets.left - newPlacement.x, to: 0, at: time, transition: transition)
+                animations.replace(owner, .width, from: oldViewport.contentWidth, to: viewport.contentWidth, at: time, transition: transition)
+            }
         }
         let heightMotions = animations.heightMotions(at: time)
         let sizeGeometry = SizePositionGeometry(anchor: anchor,
@@ -1153,6 +1200,158 @@ public final class UltraListView: UltraScrollView {
         CATransaction.commit()
     }
 
+    // MARK: Width changes
+
+    /// Lays the rows out again at a new width within this turn, so the frame
+    /// that shows the new width shows every visible row at it: the rows the
+    /// new layout puts on screen are measured and drawn at the new width
+    /// while the main thread waits, up to `inPlaceResizeTimeLimit`, and the
+    /// pass then swaps them in with their new heights. The work runs off the
+    /// main thread as always; only the wait is on it, and only for a width
+    /// change. A row that isn't ready in time, or can't prepare in place,
+    /// keeps its old content and height until its measurement arrives; a row
+    /// with a fixed height keeps its place in any case. Rows off screen are
+    /// measured again later, as scrolling reaches them, without moving what
+    /// is shown. Returns `false` when an ordinary pass should apply the size.
+    private func resizeInPlace(to size: CGSize, transition: ListTransition) -> Bool {
+        guard !passing, !settledWindow.rows.isEmpty, pendingItems == nil, viewport.contentWidth > 0 else {
+            if !settledWindow.rows.isEmpty { resizeFallbacks += 1 }
+            return false
+        }
+        var next = viewport
+        next.width = Double(size.width); next.height = Double(size.height)
+        let width = next.contentWidth
+        guard width > 0, next.visibleHeight > 0 else { return false }
+        let started = CACurrentMediaTime()
+        let deadline = DispatchTime.now() + inPlaceResizeTimeLimit
+        let startedCPU = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID)
+        // A row with a fixed height has it at the new width before anything
+        // is measured: it keeps its place, and only its content is drawn
+        // again. The other loaded rows keep their heights until measured.
+        provisionalHeights.removeAll()
+        var fixedRows = 0
+        for row in settledWindow.rows where items[row.index].measuresAsynchronously {
+            let item = items[row.index], key = measurementKey(item, width: width)
+            guard measurements.height(for: key) == nil else { continue }
+            if item.hasFixedHeight || preparations[measurementKey(item, width: viewport.contentWidth)]?.hasFixedHeight == true {
+                measurements.seed(key, height: row.height); fixedRows += 1
+            } else { provisionalHeights[key] = row.height }
+        }
+        var requested: Set<MeasurementKey> = [], prepared: [MeasurementKey] = []
+        var late = 0, unsupported = 0, waited = 0.0
+        // Rows that new heights bring on screen are prepared in a next round.
+        for attempt in 0..<3 where attempt == 0 || DispatchTime.now() < deadline {
+            var round: [(key: MeasurementKey, preparation: ListInPlacePreparation)] = []
+            for index in rowsShownAfterResize(to: next) where items[index].measuresAsynchronously {
+                let item = items[index], key = measurementKey(item, width: width)
+                guard requested.insert(key).inserted else { continue }
+                if measurements.height(for: key) != nil, let content = preparations[key]?.content {
+                    // Prepared at this width before: drawn again if its drawing went.
+                    if let content = content as? any DisplayPreparedContent, !content.isDisplayPrepared {
+                        content.drawNow(); prepared.append(key)
+                    }
+                    continue
+                }
+                if let preparation = item.prepareInPlace(width: width, environment: measurementEnvironment) {
+                    round.append((key, preparation))
+                } else { unsupported += 1 }
+            }
+            guard !round.isEmpty else { break }
+            // Every row of a round starts before the list waits for any.
+            for (key, preparation) in round {
+                let before = CACurrentMediaTime()
+                let measured = preparation.wait(until: deadline)
+                waited += CACurrentMediaTime() - before
+                guard measured, let result = preparation.finish() else { late += 1; continue }
+                measurements.seed(key, height: result.height)
+                preparations[key] = result
+                provisionalHeights.removeValue(forKey: key)
+                prepared.append(key)
+            }
+        }
+        let before = CACurrentMediaTime()
+        let drawn = prepared.isEmpty || NodeHostView.waitForPipeline(until: deadline)
+        waited += CACurrentMediaTime() - before
+        let applying = CACurrentMediaTime()
+        for key in prepared { (preparations[key]?.content as? any DisplayPreparedContent)?.applyDrawn() }
+        let passStarted = CACurrentMediaTime()
+        resizingInPlace = true
+        applyChanges(newSize: size, intent: nil, transition: transition)
+        resizingInPlace = false
+        let finished = CACurrentMediaTime()
+        let undrawn = prepared.filter { key in
+            (preparations[key]?.content as? any DisplayPreparedContent)?.isDisplayPrepared == false
+        }.count
+        let report = ListResizeReport(width: width, milliseconds: (finished - started) * 1000,
+            waitedMilliseconds: waited * 1000, cpuMilliseconds: Double(clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) - startedCPU) / 1e6, applyingMilliseconds: (passStarted - applying) * 1000, passMilliseconds: (finished - passStarted) * 1000, preparedRows: prepared.count, lateRows: late + (drawn ? 0 : undrawn),
+            keptRows: unsupported, fixedRows: fixedRows, animated: !transition.isImmediate)
+        lastResize = report
+        MainThreadMonitor.shared.note(String(format: "list resize %.0f pt: %d rows, %d late, %.1f ms (waited %.1f)",
+            width, report.preparedRows, report.lateRows, report.milliseconds, report.waitedMilliseconds))
+        return true
+    }
+
+    /// The rows a width change's pass puts on screen at `next`, with a small
+    /// margin: the window it would build from the heights known at the new
+    /// width, the ones kept for it and, for the rest, the loaded rows' mean.
+    private func rowsShownAfterResize(to next: ListViewport) -> [Int] {
+        engine.sync()
+        let width = next.contentWidth, margin = min(preloadMargin, 48)
+        let offset = engine.offset, settled = declaredEdges.clamped(offset), base = origin - settledWindow.minY
+        let survivor = PreservedWindowAnchor.survivor(in: settledWindow, base: base, settled: settled,
+            topInset: viewport.insets.top, automatic: true) { _ in true }
+        let atTop = settledWindow.range.lowerBound == 0 && abs(settled - (declaredEdges.minimum ?? .infinity)) < 1e-6
+        let preserved = PreservedWindowAnchor(oldWindow: settledWindow, oldBase: base, oldSettled: settled,
+            oldViewport: viewport, newViewport: next, oldSlack: currentBottomEdgePinSlack, pinnedIndex: pinnedIndex,
+            holdsPinnedRow: holdsPinnedRow, survivor: survivor, survivorNewIndex: survivor?.index, atTop: atTop,
+            automatic: true, additionalDistance: 0, compensates: true, keepsReadingPosition: true)
+        let loaded = Dictionary(uniqueKeysWithValues: settledWindow.rows.map { ($0.index, $0.height) })
+        let mean = settledWindow.height / Double(settledWindow.rows.count)
+        let window = preserved.window(count: items.count, margin: margin) { index in
+            let item = items[index], key = measurementKey(item, width: width)
+            let height = item.measuresAsynchronously
+                ? measurements.height(for: key) ?? provisionalHeights[key] ?? mean
+                : loaded[index] ?? mean
+            let reserve = reservedHeights(at: index)
+            return (height, reserve.0, reserve.1)
+        }
+        return window.rows.filter { $0.bandBottom > -margin && $0.bandTop < next.height + margin }.map(\.index)
+    }
+
+    /// A row that mounts while the rows' width animates toward the current
+    /// one joins that motion, so it doesn't stand out at the final width.
+    private func joinWidthMotion(_ identity: String) {
+        let owner = AnimationOwner.row(identity)
+        let reference = settledWindow.rows.lazy.map { AnimationOwner.row(self.items[$0.index].identity) }.first { other in
+            other != owner && self.animations.model.tracks[.init(other, .width)].map { abs($0.to - self.viewport.contentWidth) < 1e-6 } == true
+        }
+        if let reference { animations.inheritSize(owner, from: reference) }
+    }
+
+    /// The timing of the animation that changes this view's size, if one
+    /// does: a rotation, a split view's column, `UIView.animate`. The rows
+    /// then move and resize on the same curve as the view.
+    private func inheritedResizeTransition() -> ListTransition {
+        let resize = (layer.animationKeys() ?? []).lazy.compactMap { self.layer.animation(forKey: $0) as? CABasicAnimation }
+            .first { ["bounds", "bounds.size", "position"].contains($0.keyPath ?? "") }
+        if let resize, resize.duration > 0 {
+            let duration = resize.duration / Double(resize.speed > 0 ? resize.speed : 1)
+            if let spring = resize as? CASpringAnimation, spring.mass > 0 {
+                // The list's spring has a stiffness of 180; the same motion
+                // at another stiffness is that one played faster.
+                let stiffness = Double(spring.stiffness / spring.mass), damping = Double(spring.damping / spring.mass)
+                let rate = (stiffness / 180).squareRoot()
+                return ListTransition(duration: duration, curve: .dampedSpring(damping: damping / rate), durationFactor: 1 / rate)
+            }
+            var first: [Float] = [0, 0], second: [Float] = [1, 1]
+            let timing = resize.timingFunction ?? CAMediaTimingFunction(name: .linear)
+            timing.getControlPoint(at: 1, values: &first); timing.getControlPoint(at: 2, values: &second)
+            return ListTransition(duration: duration, curve: .bezier(Double(first[0]), Double(first[1]), Double(second[0]), Double(second[1])))
+        }
+        let duration = UIView.inheritedAnimationDuration
+        return duration > 0 ? .easeInOut(duration) : .immediate
+    }
+
     public override func handleScroll(_ offset: Double) {
         guard !passing, !settledWindow.rows.isEmpty else { return }
         let started = CACurrentMediaTime(), oldRange = settledWindow.range
@@ -1229,7 +1428,7 @@ public final class UltraListView: UltraScrollView {
                 view.onContentDidChange = { [weak self] animated in self?.markDirty(id, animated: animated) }
                 animations.bind(.row(id), layer: view.layer)
                 view.readinessObserver = { [weak self] in self?.accessibilityCoordinator.reconcile() }
-                if !previous.range.contains(row.index) { animations.seed(.row(id), width: viewport.contentWidth, height: row.height) }
+                if !previous.range.contains(row.index) { animations.seed(.row(id), width: viewport.contentWidth, height: row.height); joinWidthMotion(id) }
             }
             mountMotion(previous: previous, carriedPositions: mountedCarries, at: time)
             declaredEdges = settledWindow.edges(origin: origin, count: items.count, viewport: viewport, pinnedIndex: pinnedIndex)
@@ -1783,6 +1982,7 @@ public final class UltraListView: UltraScrollView {
             let result = measurements.store(key, height: preparation?.height ?? .nan, ticket: ticket)
             if result == .stored, let preparation {
                 preparations[key] = preparation
+                provisionalHeights.removeValue(forKey: key)
                 measurementFailures.removeValue(forKey: key)
                 let awaited = finishAwaitedMeasurement(key)
                 if !retainsPreparation(key), preparation.content?.hasLiveHost != true {

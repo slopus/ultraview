@@ -109,7 +109,10 @@ the update supplies its own transition. Linear, easing, custom Bézier and
 damped spring curves compile to Core Animation layer animations.
 Use `settledFrame(at:)` for
 destinations and `presentedFrame(at:)` for animated positions. Floating or
-reserving headers implement `ListAttachment`. See [the list design](Docs/UltraList.md)
+reserving headers implement `ListAttachment`. When the list's width changes
+(rotation, split view columns, window resizing), visible rows are laid out and
+drawn at the new width in the same frame; rows whose root has a fixed height in
+points keep their places and are only redrawn. See [the list design](Docs/UltraList.md)
 for threading, measurement, animation and host behavior.
 
 On iPhone, set `CADisableMinimumFrameDurationOnPhone` to `YES` in the host app's
@@ -205,7 +208,10 @@ The demo has four tabs: Layout (flexbox, borders, text, presses), Feed
 nodes, with the main thread's cost per commit on screen), and Lists (streaming
 chat, a 10,000-row feed, three engine modes and a public gesture recorder).
 Launch with `-screen lists -listScreen chat`, `feed`, `compare` or `record` for
-the list demos. The other tabs accept `-screen layout`, `feed` or `stress`.
+the list demos, or `resize` for the Width screen: fixed-height cards and a
+chat beside a sliding sidebar, with rotation and a dragged width
+(`-resizeScenario YES` plays them, `-resizeSlow <n>` slows them down). The
+other tabs accept `-screen layout`, `feed` or `stress`.
 
 From the command line:
 
