@@ -5,8 +5,9 @@ import UIKit
 /// Call `refresh()` after layout and `invalidate()` when the owner leaves its window.
 /// The callback must apply its inset and accessory frame synchronously. Its supplied
 /// transition uses the keyboard's release curve; the client resolves its resting inset.
-/// Private keyboard hierarchy access is optional; unsupported configurations retain
-/// the scroll view's ordinary system interactive dismissal.
+/// Private keyboard hierarchy access is optional. A docked keyboard it can't move
+/// is left to the scroll view's system interactive dismissal; with no keyboard up
+/// the scroll view keeps no keyboard input.
 /// Release this controller on the main thread, as required by its UIKit resources.
 @MainActor
 public final class KeyboardDismissalController: NSObject {
@@ -29,6 +30,8 @@ public final class KeyboardDismissalController: NSObject {
     private var keyboardTop = 0.0
     private var offset = 0.0
     private var touchHasClaimed = false
+    /// The last `begin` found the keyboard still on its way into place.
+    fileprivate private(set) var beginWaitsForHost = false
     private let hasInput: () -> Bool
     private let lookupHost: (UIWindowScene?) -> KeyboardHostLookup.Host?
     private let accessoryHeight: () -> Double
@@ -94,12 +97,17 @@ public final class KeyboardDismissalController: NSObject {
         guard !isDriving else { return }
         host = lookupHost(window.windowScene)
         if let found = host {
-            let frame = found.view.convert(found.view.bounds, to: window)
+            let frame = KeyboardHostLookup.frame(of: found, in: window)
             if frame.width < window.bounds.width - 1 || abs(frame.maxY - window.bounds.maxY) > 1 { host = nil }
         }
         isAvailable = host != nil
-        let mode: UIScrollView.KeyboardDismissMode = isAvailable ? .none : .interactive
-        if scrollView?.keyboardDismissMode != mode { scrollView?.keyboardDismissMode = mode }
+        let docked = KeyboardFrameTracker.shared.dockedTop(in: window) != nil
+        setScrollMode(KeyboardInputPolicy.controllerMode(drivesKeyboard: isAvailable, keyboardDocked: docked))
+    }
+
+    private func setScrollMode(_ mode: KeyboardInputPolicy.Mode) {
+        let value: UIScrollView.KeyboardDismissMode = mode == .interactive ? .interactive : .none
+        if scrollView?.keyboardDismissMode != value { scrollView?.keyboardDismissMode = value }
     }
 
     /// Converts a notified screen frame to the client's coordinates. A visible
@@ -110,7 +118,7 @@ public final class KeyboardDismissalController: NSObject {
         guard result.minY < view.convert(window.bounds, from: window).maxY,
               let found = lookupHost(window.windowScene),
               abs(found.view.bounds.height - screenFrame.height) <= 0.5 else { return result }
-        let actual = found.view.convert(found.view.bounds, to: window)
+        let actual = KeyboardHostLookup.frame(of: found, in: window)
         guard abs(actual.maxY - window.bounds.maxY) <= 1,
               abs(actual.width - window.bounds.width) <= 1 else { return result }
         result.origin.y = view.convert(actual, from: window).minY
@@ -171,7 +179,7 @@ public final class KeyboardDismissalController: NSObject {
                     finish()
                     return
                 }
-                let frame = self.presentedHostFrame() ?? host.view.convert(host.view.bounds, to: window)
+                let frame = self.presentedHostFrame() ?? KeyboardHostLookup.frame(of: host, in: window)
                 let held = -(host.view.layer.presentation()?.bounds.origin.y ?? host.view.layer.bounds.origin.y)
                 self.offset = max(0, Double(frame.minY + held) - self.keyboardTop)
                 self.apply(offset: 0, duration: duration, phase: .returning,
@@ -197,7 +205,7 @@ public final class KeyboardDismissalController: NSObject {
     private func presentedHostFrame() -> CGRect? {
         guard let host, let window = attachedWindow, let shown = host.view.layer.presentation(),
               let root = host.window.layer.presentation() else { return nil }
-        return window.convert(shown.convert(shown.bounds, to: root), from: host.window)
+        return KeyboardHostLookup.transfer(shown.convert(shown.bounds, to: root), from: host.window, to: window)
     }
     private func keyboardFrameInWindow(_ frame: CGRect, window: UIWindow) -> CGRect {
         if let screen = window.windowScene?.screen { return window.convert(frame, from: screen.coordinateSpace) }
@@ -217,7 +225,8 @@ public final class KeyboardDismissalController: NSObject {
             CATransaction.commit()
         }
         host = nil; isAvailable = false; offset = 0
-        scrollView?.keyboardDismissMode = .interactive
+        // Until the next refresh nothing claims the keyboard for this scroll view.
+        setScrollMode(.none)
     }
 
     /// Removes keyboard motion during an immediate navigation dismissal.
@@ -245,28 +254,51 @@ public final class KeyboardDismissalController: NSObject {
         return begin(y: touch.location(in: window).y, time: CACurrentMediaTime(), touchedView: touch.view)
     }
 
+    /// Tries again for a touch whose view was accepted when it began.
+    fileprivate func resumeBegin(_ touch: UITouch) -> Bool {
+        guard let window = coordinateView?.window else { return false }
+        return begin(y: touch.location(in: window).y, time: CACurrentMediaTime(), touchedView: nil, viewAccepted: true)
+    }
+
     fileprivate func resetTouchOutcome() { gesture.beginTouchSequence() }
 
     func begin(y: Double, time: Double, touchedView: UIView?) -> Bool {
+        begin(y: y, time: time, touchedView: touchedView, viewAccepted: false)
+    }
+
+    private func begin(y: Double, time: Double, touchedView: UIView?, viewAccepted: Bool) -> Bool {
         resetTouchOutcome()
         refresh()
         touchHasClaimed = false
+        beginWaitsForHost = false
         if !isDriving { gesture = .init() }
-        guard ownership != .awaitingHide, ownership != .dismissing, let window = attachedWindow, let host,
-              let view = coordinateView, hasInput(), let touchedView,
-              touchedView === view || touchedView.isDescendant(of: view) else { return false }
-        var ancestor: UIView? = touchedView
-        while let current = ancestor {
-            if shouldBegin?(current) == false { return false }
-            if current === window { break }
-            ancestor = current.superview
+        guard ownership != .awaitingHide, ownership != .dismissing, let window = attachedWindow,
+              let view = coordinateView, hasInput() else { return false }
+        if !viewAccepted {
+            guard let touchedView, touchedView === view || touchedView.isDescendant(of: view) else { return false }
+            var ancestor: UIView? = touchedView
+            while let current = ancestor {
+                if shouldBegin?(current) == false { return false }
+                if current === window { break }
+                ancestor = current.superview
+            }
         }
-        let frame = host.view.convert(host.view.bounds, to: window)
+        // A phone's keyboard with no docked host yet, or one still moving
+        // into place, is on its way: the finger's moves try again.
+        let onItsWay = UIDevice.current.userInterfaceIdiom == .phone
+        guard let host else { beginWaitsForHost = onItsWay; return false }
+        let frame = KeyboardHostLookup.frame(of: host, in: window)
         let top = Double(frame.minY), screenHeight = Double(window.bounds.maxY)
         // An out-of-process or floating keyboard cannot be driven by this path.
-        guard frame.width >= window.bounds.width - 1, abs(frame.maxY - window.bounds.maxY) <= 1 else { return false }
+        guard frame.width >= window.bounds.width - 1, abs(frame.maxY - window.bounds.maxY) <= 1 else {
+            beginWaitsForHost = onItsWay
+            return false
+        }
         if let presented = presentedHostFrame(),
-           abs(Double(presented.minY) - top) > 0.5 || abs(presented.height - frame.height) > 0.5 { return false }
+           abs(Double(presented.minY) - top) > 0.5 || abs(presented.height - frame.height) > 0.5 {
+            beginWaitsForHost = true
+            return false
+        }
         let armed = gesture.begin(y: y, time: time,
                                   geometry: .init(screenHeight: screenHeight, keyboardTop: top, accessoryHeight: accessoryHeight()),
                                   hasFirstResponder: true)
@@ -374,7 +406,7 @@ public final class KeyboardDismissalController: NSObject {
     @discardableResult private func synchronizeGeometry(lookupCurrentHost: Bool = false) -> Double? {
         guard hasInput(), let window = attachedWindow,
               let current = lookupCurrentHost ? lookupHost(window.windowScene) : host else { return nil }
-        let frame = current.view.convert(current.view.bounds, to: window)
+        let frame = KeyboardHostLookup.frame(of: current, in: window)
         guard frame.width >= window.bounds.width - 1, abs(frame.maxY - window.bounds.maxY) <= 1 else { return nil }
         let top = Double(frame.minY)
         if !lookupCurrentHost || abs(top - keyboardTop) > 0.5 { keyboardTop = top }
@@ -479,6 +511,10 @@ private final class KeyboardDismissalLayoutView: UIView {
 private final class KeyboardDismissalRecognizer: UIGestureRecognizer, UIGestureRecognizerDelegate {
     private weak var owner: KeyboardDismissalController?
     private var primary = KeyboardPrimaryTouch()
+    /// The touch began while the keyboard was still on its way: each move
+    /// tries again, from where the finger is, until one arms. The view the
+    /// touch began on may be gone by then.
+    private var waitsToBegin = false
     init(owner: KeyboardDismissalController) {
         self.owner = owner
         super.init(target: nil, action: nil)
@@ -488,13 +524,20 @@ private final class KeyboardDismissalRecognizer: UIGestureRecognizer, UIGestureR
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
         guard !primary.isActive else { return }
         owner?.resetTouchOutcome()
-        guard touches.count == 1, let touch = touches.first, primary.begin(ObjectIdentifier(touch)), owner?.begin(touch) == true else {
+        guard touches.count == 1, let touch = touches.first, primary.begin(ObjectIdentifier(touch)), let owner else {
             primary = .init(); state = .failed; return
         }
+        if owner.begin(touch) { return }
+        if owner.beginWaitsForHost { waitsToBegin = true; return }
+        primary = .init(); state = .failed
     }
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
-        guard let touch = touches.first(where: { primary.matches(ObjectIdentifier($0)) }) else { return }
-        if owner?.move(touch) == true { state = state == .possible ? .began : .changed }
+        guard let touch = touches.first(where: { primary.matches(ObjectIdentifier($0)) }), let owner else { return }
+        if waitsToBegin {
+            if owner.resumeBegin(touch) { waitsToBegin = false }
+            return
+        }
+        if owner.move(touch) { state = state == .possible ? .began : .changed }
     }
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) { finish(touches, cancelled: false) }
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) { finish(touches, cancelled: true) }
@@ -503,7 +546,7 @@ private final class KeyboardDismissalRecognizer: UIGestureRecognizer, UIGestureR
         owner?.end(touch, cancelled: cancelled)
         state = state == .possible ? .failed : (cancelled ? .cancelled : .ended)
     }
-    override func reset() { primary = .init(); super.reset() }
+    override func reset() { primary = .init(); waitsToBegin = false; super.reset() }
     override func canPrevent(_ preventedGestureRecognizer: UIGestureRecognizer) -> Bool { false }
     override func canBePrevented(by preventingGestureRecognizer: UIGestureRecognizer) -> Bool { false }
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool { true }

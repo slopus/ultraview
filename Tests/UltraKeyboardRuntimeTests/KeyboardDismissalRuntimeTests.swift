@@ -414,7 +414,7 @@ final class KeyboardDismissalRuntimeTests: XCTestCase {
         controller.keyboardDismissal = driver; driver.refresh()
         guard driver.isAvailable else { throw XCTSkip("This runtime supplies no in-process keyboard host") }
         let host = try XCTUnwrap(KeyboardHostLookup.find(in: scene))
-        let before = host.view.convert(host.view.bounds, to: window)
+        let before = KeyboardHostLookup.frame(of: host, in: window)
         let trace = KeyboardRecoveryTrace(window: window, bar: bar)
         defer {
             composer.inputAccessoryView = nil
@@ -441,7 +441,7 @@ final class KeyboardDismissalRuntimeTests: XCTestCase {
         var changed: CGRect?
         for _ in 0..<100 {
             if let current = KeyboardHostLookup.find(in: scene) {
-                let frame = current.view.convert(current.view.bounds, to: window)
+                let frame = KeyboardHostLookup.frame(of: current, in: window)
                 if abs(frame.height - before.height) > 32 { changed = frame; break }
             }
             try await Task.sleep(for: .milliseconds(10))
@@ -469,7 +469,7 @@ final class KeyboardDismissalRuntimeTests: XCTestCase {
         let finalHost = try XCTUnwrap(KeyboardHostLookup.find(in: scene))
         XCTAssertTrue(finalHost.view === host.view)
         XCTAssertEqual(finalHost.view.layer.bounds.origin.y, 0, accuracy: 0.5)
-        let final = finalHost.view.convert(finalHost.view.bounds, to: window)
+        let final = KeyboardHostLookup.frame(of: finalHost, in: window)
         XCTAssertEqual(final.height, changedFrame.height, accuracy: 0.5)
         let height = Double(controller.view.bounds.maxY - controller.view.convert(final, from: window).minY)
         let inset = max(height, controller.view.safeAreaInsets.bottom) + bar.bounds.height + 8
@@ -560,7 +560,7 @@ final class KeyboardDismissalRuntimeTests: XCTestCase {
         driver.refresh()
         guard driver.isAvailable else { throw XCTSkip("This runtime supplies no in-process keyboard host") }
         let host = try XCTUnwrap(KeyboardHostLookup.find(in: scene))
-        let frame = host.view.convert(host.view.bounds, to: window)
+        let frame = KeyboardHostLookup.frame(of: host, in: window)
         let bar = try XCTUnwrap(controller.view.subviews.first { $0.accessibilityIdentifier == "composerBar" })
         let trace = KeyboardRecoveryTrace(window: window, bar: bar)
         defer {
@@ -624,9 +624,9 @@ final class KeyboardDismissalRuntimeTests: XCTestCase {
             let shown = try XCTUnwrap(returned.view.layer.presentation())
             let keyboardRoot = try XCTUnwrap(returned.window.layer.presentation())
             let contentTop = shown.convert(CGPoint.zero, to: keyboardRoot)
-            let physicalTop = window.convert(contentTop, from: returned.window).y
-            let containerFrame = window.convert(shown.convert(shown.bounds, to: keyboardRoot), from: returned.window)
-            let targetFrame = returned.view.convert(returned.view.bounds, to: window)
+            let physicalTop = KeyboardHostLookup.transfer(CGRect(origin: contentTop, size: .zero), from: returned.window, to: window).minY
+            let containerFrame = KeyboardHostLookup.transfer(shown.convert(shown.bounds, to: keyboardRoot), from: returned.window, to: window)
+            let targetFrame = KeyboardHostLookup.frame(of: returned, in: window)
             XCTAssertEqual(containerFrame.minY, targetFrame.minY, accuracy: 0.5,
                            "The replaced host frame must stay settled at phase \(phase)")
             let shownBar = try XCTUnwrap(bar.layer.presentation()), root = try XCTUnwrap(window.layer.presentation())
@@ -643,7 +643,7 @@ final class KeyboardDismissalRuntimeTests: XCTestCase {
         XCTAssertEqual(returned.view.layer.bounds.origin.y, 0, accuracy: 0.5)
         let keyboardTop = hostFrame(returned, in: controller.view, window: window).minY
         XCTAssertEqual(bar.frame.maxY + 8, min(controller.view.bounds.maxY - controller.view.safeAreaInsets.bottom, keyboardTop), accuracy: 0.5)
-        let endFrame = returned.view.convert(returned.view.bounds, to: window)
+        let endFrame = KeyboardHostLookup.frame(of: returned, in: window)
         XCTAssertEqual(trace.count(UIResponder.keyboardDidShowNotification, endingAt: endFrame, after: trace.showStart), 1, "Refocus must finish once")
         XCTAssertEqual(trace.count(UIResponder.keyboardDidChangeFrameNotification, endingAt: endFrame, after: trace.showStart), 1, "Refocus must report its shown frame once")
         try await checkTheNextKeyboardCycle(controller, window: window, composer: composer, bar: bar, trace: trace)
@@ -663,7 +663,7 @@ final class KeyboardDismissalRuntimeTests: XCTestCase {
         controller.view.layoutIfNeeded()
         let frame = hostFrame(host, in: controller.view, window: window)
         let presented = try XCTUnwrap(host.view.layer.presentation()), keyboardRoot = try XCTUnwrap(host.window.layer.presentation())
-        let physical = controller.view.convert(window.convert(presented.convert(CGPoint.zero, to: keyboardRoot), from: host.window), from: window)
+        let physical = controller.view.convert(KeyboardHostLookup.transfer(CGRect(origin: presented.convert(CGPoint.zero, to: keyboardRoot), size: .zero), from: host.window, to: window).origin, from: window)
         XCTAssertEqual(physical.y, frame.minY, accuracy: 0.5)
         // The hosted native control also retains a portrait guide frame after
         // rotation. Check the physical host now and the guide after its next
@@ -682,7 +682,7 @@ final class KeyboardDismissalRuntimeTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(700))
         trace.record("after-next-native-cycle")
         let shownLayer = try XCTUnwrap(shown.view.layer.presentation()), shownRoot = try XCTUnwrap(shown.window.layer.presentation())
-        let settled = window.convert(shownLayer.convert(shownLayer.bounds, to: shownRoot), from: shown.window)
+        let settled = KeyboardHostLookup.transfer(shownLayer.convert(shownLayer.bounds, to: shownRoot), from: shown.window, to: window)
         XCTAssertEqual(KeyboardRecoveryTrace.nextCycleIssues(trace.finished(after: cycleStart), settled: settled), [])
         XCTAssertFalse(shown.window.isHidden)
         XCTAssertTrue(composer.isFirstResponder)
@@ -692,7 +692,7 @@ final class KeyboardDismissalRuntimeTests: XCTestCase {
         XCTAssertEqual(bar.frame.maxY + 8, min(controller.view.bounds.maxY - controller.view.safeAreaInsets.bottom, top), accuracy: 0.5)
         let driver = try XCTUnwrap(controller.keyboardDismissal)
         driver.refresh()
-        let windowTop = shown.view.convert(shown.view.bounds, to: window).minY
+        let windowTop = KeyboardHostLookup.frame(of: shown, in: window).minY
         XCTAssertTrue(driver.begin(y: windowTop - bar.bounds.height - 48, time: 0, touchedView: controller.list))
         driver.move(y: windowTop + 100, time: 0.06)
         driver.end(y: windowTop + 110, time: 0.07)
@@ -728,8 +728,7 @@ final class KeyboardDismissalRuntimeTests: XCTestCase {
     }
 
     private func hostFrame(_ host: KeyboardHostLookup.Host, in view: UIView, window: UIWindow) -> CGRect {
-        let keyboard = host.view.convert(host.view.bounds, to: host.window)
-        return view.convert(window.convert(keyboard, from: host.window), from: window)
+        view.convert(KeyboardHostLookup.frame(of: host, in: window), from: window)
     }
 
     private func rotate(_ scene: UIWindowScene, controller: UIViewController, landscape: Bool) async throws {
@@ -850,12 +849,12 @@ private final class KeyboardRecoveryTrace: NSObject {
             var ancestry: [[String: Any]] = [], current: UIView? = host.view
             while let view = current { ancestry.append(snapshot(view)); current = view.superview }
             event["hostAncestry"] = ancestry
-            event["hostModelFrameInApp"] = rect(host.view.convert(host.view.bounds, to: window))
+            event["hostModelFrameInApp"] = rect(KeyboardHostLookup.frame(of: host, in: window))
             if let shown = host.view.layer.presentation(), let root = host.window.layer.presentation() {
                 let content = shown.convert(CGPoint.zero, to: root)
-                let point = window.convert(content, from: host.window)
+                let point = KeyboardHostLookup.transfer(CGRect(origin: content, size: .zero), from: host.window, to: window).origin
                 event["physicalContentTop"] = point.y
-                event["presentedContainerFrame"] = rect(window.convert(shown.convert(shown.bounds, to: root), from: host.window))
+                event["presentedContainerFrame"] = rect(KeyboardHostLookup.transfer(shown.convert(shown.bounds, to: root), from: host.window, to: window))
             }
         }
         events.append(event)

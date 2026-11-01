@@ -2844,6 +2844,56 @@ native input manifest is
 `04573a51665d2eb6fb0594f248bc69ffb34598ba0704b60a73ab6ac424c96684`;
 this final validation note changes no native input.
 
+## Keyboard input fallback and cross-scene host frames (the commit after `67e4c5e`)
+
+This review supersedes the driven keyboard dismissal pins above for the
+three files it changes and adds two new sources. The source pins are
+SHA-256:
+
+| Source | SHA-256 |
+| --- | --- |
+| `UltraList/KeyboardInputPolicy.swift` | `5246558c2465f23037c7beeabc1181d5f0645a90661418e34dc8e035384c6756` |
+| `UltraList/UIKit/KeyboardFrameTracker.swift` | `9e0522c76110fe1231e83f99bba1a53af0b290eb17f1de7b1876777feded17f8` |
+| `UltraList/UIKit/KeyboardDismissalController.swift` | `3a8dce670576d017efc4864c4b87027f5a11ce25a4bf453d25f9301b1a28388f` |
+| `UltraList/UIKit/KeyboardHostLookup.swift` | `8c7b984c14e951b17db05fc37122509991fd6b8283a26f06a77b448504d28212` |
+| `UltraList/UIKit/KeyboardHostMotion.swift` | `74a4f9bcbe788346f53ed988667cafa757b717eb2a5eb83047be9d37a32604b5` |
+| `UltraList/UIKit/UltraScrollView.swift` | `0f5cd850580baecda1fb3171181c18c5715512a365a275871820a9f6f4ab4bba` |
+
+The hidden system scroll view that carries `interactive` dismissal on our
+engines is now installed only while `KeyboardInputPolicy.keepsSystemInput`
+holds: interactive mode, a window, and a docked keyboard announced by the
+keyboard's notifications (`KeyboardFrameTracker`). A keyboard announced as
+leaving the screen keeps its last frame until it has hidden, so the
+system's own dismissal finishes with its input in place. The input leaves
+one main-queue turn after that, so a hide announced inside its own pan
+callback doesn't remove the recognizer mid-callback. `onDrag` resigns the
+first responder as our pan begins and installs nothing. The controller's
+`refresh` asks for `interactive` only for a docked keyboard it can't drive
+(`controllerMode`), and `invalidate` leaves `none`. Linux tests cover the
+policy's exact cases.
+
+Every host frame the controller and `KeyboardHostMotion` read now goes
+through `KeyboardHostLookup.frame(of:in:)`: the host's frame in its own
+window, offset by the two windows' frames. On iOS 27 `convert(_:to:)`
+between windows of the app's scene and the keyboard's returns a null
+rectangle, so the controller rejected every host and never drove the
+keyboard. The offset assumes untransformed windows on one screen, a
+runtime condition outside the models.
+
+A touch that begins while a phone's keyboard is still on its way (no
+host yet, a host not yet docked, or a presented frame that differs from
+the model frame) no longer gives up: the window recognizer tries `begin`
+again on each move, from where the finger is, until one arms or the touch
+ends. The view the touch began on was
+already accepted, so the retries skip that check; a list pass can remove
+that view mid-touch. This is the first-touch path of the pure gesture
+started later, at a later `y`. The gesture, release decisions, ownership
+protocol and transitions are unchanged, and so are the controller rows of
+the source review above; no Lean definition or theorem changed.
+The hosted runtime suite's own cross-window reads use the same helper. On
+the iOS 27.0 simulator its 30 cases now all run and pass; at `9e23f8c`
+five of them skipped for want of a host.
+
 ## Theorems
 
 **Correctness**

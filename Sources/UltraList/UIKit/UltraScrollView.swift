@@ -12,10 +12,30 @@ open class UltraScrollView: UIView {
     public var isDecelerating: Bool { engine.decelerating }
     public var isTracking: Bool { engine.tracking }
     private var keyboardInput: UIScrollView?
-    /// Uses the system's keyboard interaction while the selected engine owns list motion.
+    private weak var inputSurface: UIView?
+    private var keyboardInputRemoval: UInt64 = 0
+    private var resignsOnDrag = false
+    /// What a drag does to the keyboard. The UIKit engine is a scroll view
+    /// and uses the system's own modes. Our engines resign the first
+    /// responder as a drag begins for `onDrag`. For `interactive` they keep
+    /// the system's interactive input only while a docked keyboard is up:
+    /// a hidden scroll view whose pan runs beside ours. A
+    /// `KeyboardDismissalController` sets `none` wherever it moves the
+    /// keyboard itself.
     public var keyboardDismissMode: UIScrollView.KeyboardDismissMode = .none {
-        didSet { configureKeyboardInput() }
+        didSet { if keyboardDismissMode != oldValue { configureKeyboardInput() } }
     }
+    private var keyboardInputMode: KeyboardInputPolicy.Mode {
+        switch keyboardDismissMode {
+        case .onDrag, .onDragWithAccessory: .onDrag
+        case .interactive, .interactiveWithAccessory: .interactive
+        default: .none
+        }
+    }
+    /// Whether the hidden system keyboard input is installed now, for
+    /// diagnostics: only in `interactive` mode on our engines, while a docked
+    /// keyboard is up.
+    public var hasKeyboardInput: Bool { keyboardInput != nil }
     public let engineMode: ScrollEngineMode
     public var onScroll: ((Double) -> Void)?
     public var willBeginDragging: (() -> Void)?
@@ -55,6 +75,7 @@ open class UltraScrollView: UIView {
         engine.shouldStopOnRelease = { [weak self] value in self?.shouldStopScrolling?(value) ?? false }
         insertSubview(scrollToTopProxy, at: 0)
         ScrollToTopClaims.register(self)
+        if engineMode != .uiKit { _ = KeyboardFrameTracker.shared }
     }
     @available(*, unavailable)
     public required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
@@ -72,12 +93,32 @@ open class UltraScrollView: UIView {
             return
         }
         guard let physics = engine as? PhysicsEngine else { return }
-        if keyboardDismissMode == .none {
-            if let input = keyboardInput { input.panGestureRecognizer.view?.removeGestureRecognizer(input.panGestureRecognizer) }
-            keyboardInput?.removeFromSuperview(); keyboardInput = nil
-            physics.keyboardPanRecognizer = nil
+        if keyboardInputMode == .interactive { KeyboardFrameTracker.shared.add(self) }
+        else { KeyboardFrameTracker.shared.remove(self) }
+        if resignsOnDrag != (keyboardInputMode == .onDrag) {
+            resignsOnDrag.toggle()
+            if resignsOnDrag { physics.pan.addTarget(self, action: #selector(dragChanged(_:))) }
+            else { physics.pan.removeTarget(self, action: #selector(dragChanged(_:))) }
+        }
+        updateKeyboardInput()
+    }
+    func keyboardFrameChanged() { updateKeyboardInput() }
+    private func updateKeyboardInput() {
+        guard let physics = engine as? PhysicsEngine else { return }
+        let docked = window.map { KeyboardFrameTracker.shared.dockedTop(in: $0) != nil } ?? false
+        guard KeyboardInputPolicy.keepsSystemInput(mode: keyboardInputMode, inWindow: window != nil, keyboardDocked: docked) else {
+            guard keyboardInput != nil else { return }
+            // A hide can be announced from inside the input's own gesture
+            // callback; it leaves once that callback has returned.
+            keyboardInputRemoval &+= 1
+            let removal = keyboardInputRemoval
+            DispatchQueue.main.async { [weak self] in
+                guard let self, keyboardInputRemoval == removal else { return }
+                removeKeyboardInput(from: physics)
+            }
             return
         }
+        keyboardInputRemoval &+= 1
         if keyboardInput == nil {
             // An empty system scroll view brokers the public interactive keyboard API.
             // Its content offset never controls the list or its render-server flight.
@@ -89,16 +130,26 @@ open class UltraScrollView: UIView {
             input.showsVerticalScrollIndicator = false; input.showsHorizontalScrollIndicator = false
             input.isAccessibilityElement = false; input.accessibilityElementsHidden = true
             insertSubview(input, at: 0)
-            addGestureRecognizer(input.panGestureRecognizer)
+            (inputSurface ?? self).addGestureRecognizer(input.panGestureRecognizer)
             physics.keyboardPanRecognizer = input.panGestureRecognizer
             keyboardInput = input
         }
         keyboardInput?.keyboardDismissMode = keyboardDismissMode
     }
+    private func removeKeyboardInput(from physics: PhysicsEngine) {
+        guard let input = keyboardInput else { return }
+        input.panGestureRecognizer.view?.removeGestureRecognizer(input.panGestureRecognizer)
+        input.removeFromSuperview(); keyboardInput = nil
+        physics.keyboardPanRecognizer = nil
+    }
+    @objc private func dragChanged(_ pan: UIPanGestureRecognizer) {
+        if pan.state == .began { window?.endEditing(true) }
+    }
     open override func didMoveToWindow() {
         super.didMoveToWindow()
         if window == nil { engine.teardown() }
         else { engine.activate() }
+        updateKeyboardInput()
         let previous = claimedWindow
         claimedWindow = window
         if window == nil { claimScrollToTop(false) }
@@ -136,6 +187,7 @@ open class UltraScrollView: UIView {
     /// Moves the input recognizers to a common ancestor for a shared gesture surface.
     public func attachScrollInput(to view: UIView) {
         engine.attachInput(to: view)
+        inputSurface = view
         if let keyboardInput { view.addGestureRecognizer(keyboardInput.panGestureRecognizer) }
     }
 }

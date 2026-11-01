@@ -2,6 +2,7 @@
 import UIKit
 import QuartzCore
 import UltraView
+import os
 
 /// Opt-in measurements for the keyboard interaction tests.
 @MainActor
@@ -43,6 +44,10 @@ final class ListKeyboardGeometryProbe: NSObject {
     private var keyboardSpringCorrect = true
     private var keyboardTransition: ListTransition?
     private var worstRowState: [String: Double] = [:]
+    /// Drags begun with the keyboard down and up, and of each those that
+    /// found the hidden system keyboard input installed.
+    private var keyboardInputDrags = ["down": 0, "up": 0, "downWithInput": 0, "upWithInput": 0]
+    private let signposter = OSSignposter(subsystem: "dev.ultraview.keyboarddrag", category: "PointsOfInterest")
 
     init(owner: UIView, composer: UIView, list: UltraListView, keyboardEdge: UIView, followsComposer: @escaping () -> Bool = { true }) {
         self.owner = owner; self.composer = composer; self.list = list
@@ -95,7 +100,14 @@ final class ListKeyboardGeometryProbe: NSObject {
     }
     private func input(_ event: GestureRecording.Event) {
         // Observe input phases independently of the controller's tracking guard.
-        if event.phase == .began { inputIsDragging = true }
+        if event.phase == .began {
+            inputIsDragging = true
+            let keyboard = (marker.superview.map { Double($0.bounds.maxY - marker.frame.minY) } ?? 0) > Double(owner?.safeAreaInsets.bottom ?? 0) + 1 ? "up" : "down"
+            keyboardInputDrags[keyboard, default: 0] += 1
+            if list?.hasKeyboardInput == true { keyboardInputDrags[keyboard + "WithInput", default: 0] += 1 }
+            signposter.emitEvent("touch-began", "\(keyboard, privacy: .public)")
+        }
+        if event.phase == .ended || event.phase == .cancelled { signposter.emitEvent("touch-ended") }
         if event.phase == .ended || event.phase == .cancelled { inputIsDragging = false }
         if event.phase == .began { recentSpeeds.removeAll(keepingCapacity: true); handoffUntil = 0; keyboardHideTime = 0 }
         if event.phase == .changed {
@@ -274,7 +286,7 @@ final class ListKeyboardGeometryProbe: NSObject {
             "releasePosition": releasePosition, "position": position(), "decelerating": list.isDecelerating,
             "composerLineHeight": composer.subviews.compactMap { ($0 as? UITextView)?.font?.lineHeight }.first ?? 0,
             "insetP99": insetDurations.isEmpty ? 0 : insetDurations.sorted()[Int(Double(insetDurations.count - 1) * 0.99)],
-            "worstRowState": worstRowState,
+            "worstRowState": worstRowState, "keyboardInputDrags": keyboardInputDrags,
         ]
         if let data = try? JSONSerialization.data(withJSONObject: document, options: [.sortedKeys]) {
             report.accessibilityValue = String(decoding: data, as: UTF8.self)

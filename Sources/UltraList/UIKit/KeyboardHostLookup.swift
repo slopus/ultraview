@@ -29,6 +29,22 @@ enum KeyboardHostLookup {
         return nil
     }
 
+    /// The host's frame in `window`. The host's window belongs to the
+    /// keyboard's own scene. Converting straight between windows of two
+    /// scenes returns a null rectangle on iOS 27, and converting through the
+    /// screen's coordinate space takes UIKit's slow invalid-conversion path,
+    /// so this offsets by both windows' screen frames.
+    static func frame(of host: Host, in window: UIWindow) -> CGRect {
+        transfer(host.view.convert(host.view.bounds, to: host.window), from: host.window, to: window)
+    }
+
+    /// `rect` in `source`'s coordinates, in `window`'s. Both windows are
+    /// untransformed and on one screen.
+    static func transfer(_ rect: CGRect, from source: UIWindow, to window: UIWindow) -> CGRect {
+        guard source !== window else { return rect }
+        return rect.offsetBy(dx: source.frame.minX - window.frame.minX, dy: source.frame.minY - window.frame.minY)
+    }
+
     private static func matches(_ view: UIView, suffixes: [String]) -> Bool {
         let name = NSStringFromClass(type(of: view))
         return name.hasPrefix("UI") && suffixes.contains(where: name.hasSuffix)

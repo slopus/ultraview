@@ -9,7 +9,7 @@ enum KeyboardHostMotion {
         let layer = host.view.layer
         guard layer.contents == nil, (layer.backgroundColor?.alpha ?? 0) == 0,
               layer.shadowOpacity == 0 else { return nil }
-        let modelTop = Double(host.view.convert(host.view.bounds, to: window).minY)
+        let modelTop = Double(KeyboardHostLookup.frame(of: host, in: window).minY)
         guard abs(modelTop - targetTop) <= 0.5 else { return nil }
         var ancestor = host.view.superview
         while let view = ancestor {
