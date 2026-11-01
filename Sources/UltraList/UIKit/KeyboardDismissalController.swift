@@ -97,8 +97,7 @@ public final class KeyboardDismissalController: NSObject {
         guard !isDriving else { return }
         host = lookupHost(window.windowScene)
         if let found = host {
-            let frame = KeyboardHostLookup.frame(of: found, in: window)
-            if frame.width < window.bounds.width - 1 || abs(frame.maxY - window.bounds.maxY) > 1 { host = nil }
+            if !Self.drives(KeyboardHostLookup.frame(of: found, in: window), in: window) { host = nil }
         }
         isAvailable = host != nil
         let docked = KeyboardFrameTracker.shared.dockedTop(in: window) != nil
@@ -119,8 +118,7 @@ public final class KeyboardDismissalController: NSObject {
               let found = lookupHost(window.windowScene),
               abs(found.view.bounds.height - screenFrame.height) <= 0.5 else { return result }
         let actual = KeyboardHostLookup.frame(of: found, in: window)
-        guard abs(actual.maxY - window.bounds.maxY) <= 1,
-              abs(actual.width - window.bounds.width) <= 1 else { return result }
+        guard Self.drives(actual, in: window) else { return result }
         result.origin.y = view.convert(actual, from: window).minY
         return result
     }
@@ -207,6 +205,19 @@ public final class KeyboardDismissalController: NSObject {
               let root = host.window.layer.presentation() else { return nil }
         return KeyboardHostLookup.transfer(shown.convert(shown.bounds, to: root), from: host.window, to: window)
     }
+
+    /// Whether a host at `frame` in `window` is one this controller moves.
+    private static func drives(_ frame: CGRect, in window: UIWindow) -> Bool {
+        let screen = window.windowScene?.screen.bounds.size ?? window.bounds.size
+        return KeyboardHostPolicy.drives(host: .init(frame), window: .init(window.bounds),
+                                         screenWidth: screen.width, screenHeight: screen.height)
+    }
+
+    private static func coversScreen(_ window: UIWindow) -> Bool {
+        let screen = window.windowScene?.screen.bounds.size ?? window.bounds.size
+        return KeyboardHostPolicy.coversScreen(window: .init(window.bounds), screenWidth: screen.width, screenHeight: screen.height)
+    }
+
     private func keyboardFrameInWindow(_ frame: CGRect, window: UIWindow) -> CGRect {
         if let screen = window.windowScene?.screen { return window.convert(frame, from: screen.coordinateSpace) }
         return frame.offsetBy(dx: -window.frame.minX, dy: -window.frame.minY)
@@ -283,14 +294,15 @@ public final class KeyboardDismissalController: NSObject {
                 ancestor = current.superview
             }
         }
-        // A phone's keyboard with no docked host yet, or one still moving
-        // into place, is on its way: the finger's moves try again.
-        let onItsWay = UIDevice.current.userInterfaceIdiom == .phone
+        // A keyboard with no docked host yet under a window covering the
+        // screen, or one still moving into place, is on its way: the
+        // finger's moves try again.
+        let onItsWay = Self.coversScreen(window)
         guard let host else { beginWaitsForHost = onItsWay; return false }
         let frame = KeyboardHostLookup.frame(of: host, in: window)
         let top = Double(frame.minY), screenHeight = Double(window.bounds.maxY)
         // An out-of-process or floating keyboard cannot be driven by this path.
-        guard frame.width >= window.bounds.width - 1, abs(frame.maxY - window.bounds.maxY) <= 1 else {
+        guard Self.drives(frame, in: window) else {
             beginWaitsForHost = onItsWay
             return false
         }
@@ -407,7 +419,7 @@ public final class KeyboardDismissalController: NSObject {
         guard hasInput(), let window = attachedWindow,
               let current = lookupCurrentHost ? lookupHost(window.windowScene) : host else { return nil }
         let frame = KeyboardHostLookup.frame(of: current, in: window)
-        guard frame.width >= window.bounds.width - 1, abs(frame.maxY - window.bounds.maxY) <= 1 else { return nil }
+        guard Self.drives(frame, in: window) else { return nil }
         let top = Double(frame.minY)
         if !lookupCurrentHost || abs(top - keyboardTop) > 0.5 { keyboardTop = top }
         gesture.updateGeometry(screenHeight: Double(window.bounds.maxY), keyboardTop: keyboardTop)
@@ -487,6 +499,10 @@ public final class KeyboardDismissalController: NSObject {
         offset = 0
         refresh()
     }
+}
+
+private extension KeyboardInputPolicy.Frame {
+    init(_ rect: CGRect) { self.init(minX: rect.minX, minY: rect.minY, maxX: rect.maxX, maxY: rect.maxY) }
 }
 
 @MainActor

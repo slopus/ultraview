@@ -13,12 +13,22 @@ final class UninstrumentedKeyboardInteractionTests: XCTestCase {
         try checkTracking(orientation: .landscapeLeft)
     }
 
-    @MainActor private func checkTracking(orientation: UIDeviceOrientation) throws {
+    /// The app moves the keyboard itself, here as on a full-screen iPad. The
+    /// drag stops short of dismissing, so only the moving frames are checked.
+    @MainActor func testPortraitComposerFollowsTheDrivenKeyboardWithoutProbes() throws {
+        try checkTracking(orientation: .portrait, system: false)
+    }
+
+    @MainActor func testLandscapeComposerFollowsTheDrivenKeyboardWithoutProbes() throws {
+        try checkTracking(orientation: .landscapeLeft, system: false)
+    }
+
+    @MainActor private func checkTracking(orientation: UIDeviceOrientation, system: Bool = true) throws {
         XCUIDevice.shared.orientation = orientation
         defer { XCUIDevice.shared.orientation = .portrait }
         let app = XCUIApplication()
         for mode in ["keyframe", "uiKit", "stepped"] {
-            app.launchArguments = ["-screen", "lists", "-listScreen", "chat", "-listEngine", mode, "-listSystemKeyboardDismissal", "YES"]
+            app.launchArguments = ["-screen", "lists", "-listScreen", "chat", "-listEngine", mode, "-listSystemKeyboardDismissal", system ? "YES" : "NO"]
             app.launch()
             let composer = app.textViews["composer"], keyboard = app.keyboards.firstMatch
             XCTAssertTrue(composer.waitForExistence(timeout: 10))
@@ -52,7 +62,7 @@ final class UninstrumentedKeyboardInteractionTests: XCTestCase {
             start.press(forDuration: 0.1, thenDragTo: end, withVelocity: .init(rawValue: 120), thenHoldForDuration: 0.5)
             timer.invalidate()
             recorder.capture()
-            let prefix = "\(orientation.rawValue)/\(mode)"
+            let prefix = "\(orientation.rawValue)/\(mode)\(system ? "" : "/driven")"
             print("No-probe \(prefix): captured \(recorder.frames.count) screens")
             XCTAssertGreaterThan(recorder.frames.count, 4, "\(prefix): missing screens during the finger movement")
             let first = try XCTUnwrap(recorder.frames.first.flatMap(UIImage.init(data:))?.cgImage)
@@ -103,7 +113,7 @@ final class UninstrumentedKeyboardInteractionTests: XCTestCase {
                 XCTAssertLessThanOrEqual(abs(gap), 1.5, "\(prefix) frame \(index): composer left the physical keyboard")
             }
             XCTAssertGreaterThan(moving, 2, "\(prefix): no physical keyboard movement was captured")
-            XCTAssertGreaterThan(hidden, 0, "\(prefix): missing the keyboard's dismissal and the composer's pixel rest position")
+            if system { XCTAssertGreaterThan(hidden, 0, "\(prefix): missing the keyboard's dismissal and the composer's pixel rest position") }
             print("No-probe \(prefix): moving \(moving), hidden \(hidden), maximum gap \(maximumGap)")
             print("No-probe \(prefix): strip difference with the keyboard up \(coveredDifference), covered frames \(covered.min() ?? -1)...\(covered.max() ?? -1), uncovered frames \(uncovered.min() ?? -1)...\(uncovered.max() ?? -1)")
             if maximumGap > 1.5, let last = recorder.frames.last {

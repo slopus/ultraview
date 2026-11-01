@@ -3,6 +3,8 @@ import UIKit
 
 /// Optional private hierarchy access. Every failure leaves dismissal to UIKit.
 /// These selectors and class suffixes can change between operating-system releases.
+/// Phones and iPads share this hierarchy on iOS 26 and 27; KeyboardHostPolicy
+/// decides which hosts found here are moved.
 @MainActor
 enum KeyboardHostLookup {
     struct Host {
@@ -11,7 +13,7 @@ enum KeyboardHostLookup {
     }
 
     static func find(in scene: UIWindowScene?) -> Host? {
-        guard UIDevice.current.userInterfaceIdiom == .phone, let scene else { return nil }
+        guard let scene else { return nil }
         let delegateSelector = NSSelectorFromString("keyboardSceneDelegate")
         let windowSelector = NSSelectorFromString("keyboardWindow")
         guard scene.responds(to: delegateSelector),

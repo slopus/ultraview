@@ -120,7 +120,7 @@ final class KeyboardDismissalInteractionTests: XCTestCase {
                     let after = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
                     after.name = "\(label)-after"; after.lifetime = .keepAlways; activity.add(after)
                 }
-                if !system && (scenario.dismisses || UIDevice.current.userInterfaceIdiom == .phone) {
+                if !system && (scenario.dismisses || coversScreen(app)) {
                     XCTAssertEqual(keyboard.exists, !scenario.dismisses, label)
                 } else if !system {
                     try checkSettledRelease(app, label, composer: composer, keyboard: keyboard, docked: composerFrame, resting: restingComposer)
@@ -131,9 +131,17 @@ final class KeyboardDismissalInteractionTests: XCTestCase {
         }
     }
 
-    /// A partial release away from a phone. The runner can't see whether
-    /// the app found the keyboard host it drives; a phone has one, so there
-    /// the release must return the keyboard. Elsewhere the app may fall back
+    /// The app's window covers the screen, as on a phone or an iPad app
+    /// running full screen: the app moves a docked keyboard itself there.
+    @MainActor private func coversScreen(_ app: XCUIApplication) -> Bool {
+        let screen = XCUIApplication(bundleIdentifier: "com.apple.springboard").frame.size, window = app.frame.size
+        return abs(window.width - screen.width) <= 1 && abs(window.height - screen.height) <= 1
+    }
+
+    /// A partial release in a window smaller than the screen. The runner
+    /// can't see whether the app found the keyboard host it drives; with a
+    /// full-screen window it does, so there the release must return the
+    /// keyboard. Elsewhere the app falls back
     /// to UIKit's interactive dismissal, which decides a partial release
     /// itself, as on the system path. Whichever it chose, a second after the
     /// release the composer rests: where it started with the keyboard gone,
