@@ -99,6 +99,37 @@ import UltraCore
         #expect(surface.gestureRecognizers?.count == panCount)
     }
 
+    @Test(arguments: [CGSize(width: 1024, height: 1366), .init(width: 600, height: 700)])
+    func installingAndRemovingKeyboardInputKeepsAFlight(size: CGSize) async throws {
+        announce(nil)
+        let window = makeWindow()
+        window.frame = .init(origin: .zero, size: size)
+        let scroll = UltraScrollView()
+        scroll.frame = window.bounds; scroll.contentHeight = 100_000
+        window.addSubview(scroll); window.isHidden = false
+        defer { scroll.engine.teardown(); window.isHidden = true; announce(nil) }
+        scroll.layoutIfNeeded()
+        scroll.keyboardDismissMode = .interactive
+        scroll.layer.speed = 0; scroll.layer.timeOffset = 100
+        scroll.setScrollOffset(2000); scroll.beginMomentum(velocity: 3000)
+        let flight = try #require(scroll.engine.activeFlight)
+        let keyboard = CGRect(x: 0, y: size.height - 300, width: size.width, height: 300)
+        let screenFrame = window.windowScene.map { window.convert(keyboard, to: $0.screen.coordinateSpace) } ?? keyboard
+        for _ in 0..<3 {
+            announce(screenFrame)
+            #expect(scroll.hasKeyboardInput)
+            #expect(scroll.engine.activeFlight == flight)
+            let engine = try #require(scroll.engine as? PhysicsEngine)
+            let input = try #require(engine.keyboardPanRecognizer)
+            #expect(engine.gestureRecognizer(engine.pan, shouldRecognizeSimultaneouslyWith: input))
+            #expect(engine.gestureRecognizer(engine.wheel, shouldRecognizeSimultaneouslyWith: input))
+            announce(nil)
+            await settle()
+            #expect(!scroll.hasKeyboardInput)
+            #expect(scroll.engine.activeFlight == flight)
+        }
+    }
+
     @Test func aHostFrameCrossesWindowsThroughTheirScreenFrames() {
         let keyboardWindow = makeWindow(), window = makeWindow()
         keyboardWindow.frame = .init(x: 0, y: 0, width: 428, height: 926)

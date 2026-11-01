@@ -995,6 +995,22 @@ private actor MeasurementGate: NodeRowMeasuring {
         #expect(engine.host.layer.animationKeys()?.isEmpty ?? true)
         #expect(engine.offset > 10)
     }
+    @Test func resizingAnIPadListKeepsMomentum() throws {
+        let list = list(count: 1000)
+        defer { list.engine.teardown() }
+        list.layer.speed = 0; list.layer.timeOffset = 100
+        list.beginMomentum(velocity: 3000)
+        let flight = try #require(list.engine.activeFlight)
+        for size in [CGSize(width: 1024, height: 1366), .init(width: 1366, height: 1024),
+                     .init(width: 744, height: 1133), .init(width: 1133, height: 744),
+                     .init(width: 600, height: 700)] {
+            list.frame.size = size
+            list.setNeedsLayout(); list.layoutIfNeeded()
+            #expect(list.engine.activeFlight != nil)
+            #expect(list.contentView.layer.animationKeys()?.isEmpty == false)
+        }
+        #expect(list.engine.activeFlight?.trajectory == flight.trajectory)
+    }
     @Test(arguments: [false, true]) func aFlightShowsItsStartingPositionBeforeItsLayerStart(repark: Bool) async throws {
         let window = makeWindow()
         window.frame = .init(x: 0, y: 0, width: 320, height: 400)

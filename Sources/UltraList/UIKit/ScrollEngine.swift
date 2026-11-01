@@ -73,15 +73,16 @@ final class InputPan: UIPanGestureRecognizer {
 final class PhysicsEngine: NSObject, ScrollEngine, UIGestureRecognizerDelegate {
     let host = UIView()
     let pan = InputPan()
+    let wheel = UIPanGestureRecognizer()
     let mode: ScrollEngineMode
     var core = ScrollCore()
     var flightState: FlightState?
     private var coveragePrediction: ScrollFlight?
     var offset: Double { core.offset }
     var activeFlight: ScrollFlight? { flightState?.flight }
-    var dragging: Bool { core.isDragging }
+    var dragging: Bool { core.isDragging || wheel.state == .began || wheel.state == .changed }
     var decelerating: Bool { core.isDecelerating }
-    var tracking: Bool { pan.hasActiveTouches || pan.state == .began || pan.state == .changed }
+    var tracking: Bool { pan.hasActiveTouches || pan.state == .began || pan.state == .changed || wheel.state == .began || wheel.state == .changed }
     var onScroll: ((Double) -> Void)?
     var onFlightChanged: ((ScrollFlight?) -> Void)?
     var willBeginDragging: (() -> Void)?
@@ -95,6 +96,7 @@ final class PhysicsEngine: NSObject, ScrollEngine, UIGestureRecognizerDelegate {
     private let target = SamplingTarget()
     let touchRate = FrameRateHold()
     private var baseline = CGPoint.zero
+    private var wheelBaseline = 0.0
     private var sawDrag = false
     private var settleScheduled = false
     private var settleGeneration: UInt64 = 0
@@ -117,6 +119,13 @@ final class PhysicsEngine: NSObject, ScrollEngine, UIGestureRecognizerDelegate {
         pan.delegate = self; pan.delaysTouchesEnded = false
         pan.allowedScrollTypesMask = .continuous
         host.addGestureRecognizer(pan)
+        // Wheel ticks carry distance, not a release velocity. A separate
+        // recognizer distinguishes them using the public scroll-type mask.
+        wheel.allowedTouchTypes = []
+        wheel.allowedScrollTypesMask = .discrete
+        wheel.delegate = self
+        wheel.addTarget(self, action: #selector(wheeled(_:)))
+        host.addGestureRecognizer(wheel)
         pan.touchDown = { [weak self] time in
             guard let self else { return false }
             sawDrag = false
@@ -141,7 +150,10 @@ final class PhysicsEngine: NSObject, ScrollEngine, UIGestureRecognizerDelegate {
     func containerOrigin(height: Double, top: Bool, bottom: Bool) -> Double {
         ScrollCore.containerOrigin(height: height, topLoaded: top, bottomLoaded: bottom)
     }
-    func attachInput(to view: UIView) { view.addGestureRecognizer(pan) }
+    func attachInput(to view: UIView) {
+        view.addGestureRecognizer(pan)
+        view.addGestureRecognizer(wheel)
+    }
     private func writeBase(_ value: Double) {
         CATransaction.begin(); CATransaction.setDisableActions(true)
         host.bounds.origin.y = value
@@ -359,7 +371,26 @@ final class PhysicsEngine: NSObject, ScrollEngine, UIGestureRecognizerDelegate {
         core.drag(translation: delta, velocity: .init(x: velocity.x, y: velocity.y))
         writeBase(offset); onScroll?(offset)
     }
+    @objc func wheeled(_ recognizer: UIPanGestureRecognizer) {
+        switch recognizer.state {
+        case .began:
+            catchMotion(braking: false)
+            core.noteDecelerationEnded()
+            wheelBaseline = offset
+            didTouchDown?(); willBeginDragging?()
+        case .changed: break
+        case .ended, .cancelled:
+            core.setOffset(edges.clamped(wheelBaseline - recognizer.translation(in: host).y))
+            writeBase(offset); onScroll?(offset)
+            didEndDragging?(); didEndScrolling?(); settleIfNeeded()
+            return
+        default: return
+        }
+        core.setOffset(edges.clamped(wheelBaseline - recognizer.translation(in: host).y))
+        writeBase(offset); onScroll?(offset)
+    }
     func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        if gestureRecognizer === wheel { return true }
         if host.gestureRecognizers?.contains(where: { $0 !== pan && ($0 as? UIPanGestureRecognizer)?.minimumNumberOfTouches == 2 }) == true { return pan.numberOfTouches < 2 }
         if let control = host.hitTest(pan.location(in: host), with: nil) as? UIControl, control.isTracking { return false }
         return true
@@ -373,7 +404,7 @@ final class PhysicsEngine: NSObject, ScrollEngine, UIGestureRecognizerDelegate {
         return true
     }
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive event: UIEvent) -> Bool {
-        if pan.indirect, pan.state == .possible, flightState != nil || core.isDecelerating {
+        if gestureRecognizer === pan, event.type == .scroll, pan.indirect, pan.state == .possible, flightState != nil || core.isDecelerating {
             pan.delaysTouchesBegan = true
             core.touchDown(at: event.timestamp); didTouchDown?(); catchMotion(braking: true)
             if gestureRecognizerShouldBegin(pan) { pan.forceBegin() }

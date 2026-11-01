@@ -2853,7 +2853,7 @@ SHA-256:
 | Source | SHA-256 |
 | --- | --- |
 | `UltraList/KeyboardInputPolicy.swift` | `5246558c2465f23037c7beeabc1181d5f0645a90661418e34dc8e035384c6756` |
-| `UltraList/UIKit/KeyboardFrameTracker.swift` | `9e0522c76110fe1231e83f99bba1a53af0b290eb17f1de7b1876777feded17f8` |
+| `UltraList/UIKit/KeyboardFrameTracker.swift` | `a6988bc1d9f39251945c1bf3d7cfcd236b141b563250e5f1fb15f1a40698c4bc` (actor-isolation-only update at `827d784`) |
 | `UltraList/UIKit/KeyboardDismissalController.swift` | `3a8dce670576d017efc4864c4b87027f5a11ce25a4bf453d25f9301b1a28388f` |
 | `UltraList/UIKit/KeyboardHostLookup.swift` | `8c7b984c14e951b17db05fc37122509991fd6b8283a26f06a77b448504d28212` |
 | `UltraList/UIKit/KeyboardHostMotion.swift` | `74a4f9bcbe788346f53ed988667cafa757b717eb2a5eb83047be9d37a32604b5` |
@@ -2893,6 +2893,29 @@ the source review above; no Lean definition or theorem changed.
 The hosted runtime suite's own cross-window reads use the same helper. On
 the iOS 27.0 simulator its 30 cases now all run and pass; at `9e23f8c`
 five of them skipped for want of a host.
+
+## Pointer input and glide interruption (the commit after `ac81d2b`)
+
+At `827d784`, reading the notification's screen bounds moved inside the
+existing main-actor isolation block. Its filtering and notification
+delivery are unchanged, and the keyboard frame source pin above is updated.
+
+`UltraList/UIKit/ScrollEngine.swift` is pinned by SHA-256
+`8b1a9f7f5f2e37dd98b9ed873e2c7f5142eb8613201847eefed15312fec0ec07`.
+The momentum mapping's touch, drag, release, sync and rebake operations
+retain their algorithms. The indirect-input delegate now catches a flight
+only for a scroll event; hover, transform and key events cannot take that
+path. The direct-touch callback still catches an existing flight.
+
+A separate discrete-only pan accepts mouse-wheel distance and clamps it to
+the declared edges. It catches an existing flight before applying the
+distance and never calls `endDrag` or starts momentum from wheel velocity.
+The existing continuous pan retains trackpad and touch physics. Their
+combined scroll-type masks equal the system scroll view's mask. UIKit's
+classification and recognizer arbitration remain runtime assumptions,
+outside the momentum model. UIKit tests cover wheel distances and limits,
+release without a flight, unrelated events, layout changes and keyboard
+input installation/removal during a flight. No Lean model changed.
 
 ## Theorems
 
