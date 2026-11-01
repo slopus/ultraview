@@ -19,9 +19,9 @@ final class KeyboardFrameTracker {
         let center = NotificationCenter.default
         observers.append(center.addObserver(forName: UIResponder.keyboardWillChangeFrameNotification, object: nil, queue: .main) { notification in
             let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect
-            let screen = (notification.object as? UIScreen)?.bounds
+            let screen = notification.object as? UIScreen
             MainActor.assumeIsolated {
-                if let frame, let screen, !frame.intersects(screen) { return }
+                if let frame, let screen, !frame.intersects(screen.bounds) { return }
                 KeyboardFrameTracker.shared.update(frame)
             }
         })
