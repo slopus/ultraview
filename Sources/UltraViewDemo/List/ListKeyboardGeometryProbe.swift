@@ -150,10 +150,11 @@ final class ListKeyboardGeometryProbe: NSObject {
         let target = owner.layer.presentation() ?? owner.layer
         let rowLayer = row.layer.presentation() ?? row.layer, composerLayer = composer.layer.presentation() ?? composer.layer
         let rect = rowLayer.convert(rowLayer.bounds, to: target)
-        let y = Double(rect.maxY) + rows[index].y + origin
+        // The row's screen position less its content position: the scroll motion.
+        let y = Double(rect.minY) - (rows[index].y + origin)
         let bar = Double(composerLayer.convert(composerLayer.bounds, to: target).minY)
         if envelopeOrigin == nil {
-            let modelRow = Double(row.layer.convert(row.layer.bounds, to: owner.layer).maxY) + rows[index].y + origin
+            let modelRow = Double(row.layer.convert(row.layer.bounds, to: owner.layer).minY) - (rows[index].y + origin)
             let modelBar = Double(composer.layer.convert(composer.layer.bounds, to: owner.layer).minY)
             envelopeOrigin = (modelRow, modelBar, time)
         }
@@ -227,19 +228,20 @@ final class ListKeyboardGeometryProbe: NSObject {
             dragSamples += 1; dragMinimum = min(dragMinimum, keyboardY); dragMaximum = max(dragMaximum, keyboardY)
             if list.contentView.layer.animation(forKey: "ultraview.list.viewportOffset") != nil { trackingViewportAnimations += 1 }
             if list.loadedItemViews.contains(where: { $0.layer.animation(forKey: "ultraview.list.positionY") != nil }) { rowAnimationSamples += 1 }
-        } else if !list.isScrollFlightActive, let frame = list.settledFrame(at: 0), abs(frame.minY - list.viewportInsets.top) < 0.5,
-                  let row = list.loadedItemView(at: 0) {
+        } else if !list.isScrollFlightActive, let newest = list.items.indices.last, let frame = list.settledFrame(at: newest),
+                  abs(Double(frame.maxY) - (Double(list.bounds.height) - list.viewportInsets.bottom)) < 0.5,
+                  let row = list.loadedItemView(at: newest) {
             let layer = row.layer.presentation() ?? row.layer
             let rect = layer.convert(layer.bounds, to: owner.layer.presentation() ?? owner.layer)
             let gap = abs(rect.maxY - bar.minY)
             if gap > maximumRestingRowGap {
                 maximumRestingRowGap = gap
                 worstRowState = ["row": rect.maxY, "bar": bar.minY, "keyboard": keyboardY,
-                    "offset": list.currentScrollOffset, "inset": list.viewportInsets.top,
+                    "offset": list.currentScrollOffset, "inset": list.viewportInsets.bottom,
                     "presentedOffset": list.contentView.layer.presentation().map { Double($0.bounds.minY) } ?? 0]
             }
         }
-        let newestGap = list.loadedItemView(at: 0).map { row -> Double in
+        let newestGap = list.items.indices.last.flatMap { list.loadedItemView(at: $0) }.map { row -> Double in
             let layer = row.layer.presentation() ?? row.layer
             return abs(Double(layer.convert(layer.bounds, to: destination).maxY - bar.minY))
         } ?? -1
@@ -276,7 +278,7 @@ final class ListKeyboardGeometryProbe: NSObject {
             "keyboardPasses": keyboardPasses, "viewportHeightChange": maximumViewportHeight - minimumViewportHeight,
             "stoppedReleases": 0, "keyboardSpringSamples": keyboardSpringSamples, "keyboardSpringCorrect": keyboardSpringCorrect,
             "newestSnaps": 0, "newestGap": newestGap, "followsComposer": followsComposerMotion(),
-            "firstIndex": list.loadedIndexRange.lowerBound,
+            "firstIndex": list.items.count - list.loadedIndexRange.upperBound,
             "handoffSamples": Array(handoffSamples.prefix(4)), "releaseFrames": handoffSamples, "handoffExcess": maximumHandoffExcess,
             "handoffEnvelopeExcess": maximumEnvelopeExcess, "detachedAnimationAmplitude": maximumDetachedAnimation,
             "catchUpEvents": catchUpEvents,

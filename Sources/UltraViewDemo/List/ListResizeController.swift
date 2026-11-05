@@ -2,11 +2,12 @@
 import UIKit
 import UltraView
 
-/// Lists whose width changes: a feed of fixed-height cards and a flipped
-/// chat of bubbles, side by side beside a sidebar column that slides in and
-/// out like a split view's. Rotate the device, toggle the sidebar, or drag
-/// the width a little every frame as a resized window does; each list
-/// relays its rows out at the new width in the frame of the change.
+/// Lists whose width changes: a feed of fixed-height cards and a chat of
+/// bubbles that reads from its end, side by side beside a sidebar column
+/// that slides in and out like a split view's. Rotate the device, toggle
+/// the sidebar, or drag the width a little every frame as a resized window
+/// does; each list relays its rows out at the new width in the frame of the
+/// change.
 ///
 /// `-listScreen resize` opens it. `-resizeScenario YES` plays the sidebar,
 /// a drag, and a rotation there and back, for recordings;
@@ -55,7 +56,7 @@ final class ListResizeController: UIViewController {
         chat.autoresizingMask = [.flexibleWidth, .flexibleLeftMargin, .flexibleHeight]
         divider.autoresizingMask = [.flexibleLeftMargin, .flexibleRightMargin, .flexibleHeight]
         feed.accessibilityIdentifier = "resizeFeed"; chat.accessibilityIdentifier = "resizeChat"
-        chat.contentView.transform = .init(scaleX: 1, y: -1)
+        chat.bottomGravity = .lines(lineHeight: UIFont.preferredFont(forTextStyle: .body).lineHeight)
 
         feed.applyChanges(items: (0..<400).map { index in
             DemoListRow(identity: "card-\(index)", title: "Card \(index)",

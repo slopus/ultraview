@@ -67,7 +67,7 @@ let screen = doubles(log["screenPoints"])
 let widthPoints = screen.count == 2 ? screen[0] : 390, heightPoints = screen.count == 2 ? screen[1] : 844
 let W = Int(widthPoints / 2), H = Int(heightPoints)
 let scenario = log["scenario"] as? String ?? "", engine = log["engine"] as? String ?? ""
-let lists = (log["lists"] as? [[String: Any]] ?? []).map { (frame: doubles($0["frame"]), inverted: ($0["inverted"] as? Bool) ?? false, engine: $0["engine"] as? String ?? "") }
+let lists = (log["lists"] as? [[String: Any]] ?? []).map { (frame: doubles($0["frame"]), bottomGravity: ($0["bottomGravity"] as? Bool) ?? false, engine: $0["engine"] as? String ?? "") }
 let samples = log["samples"] as? [[String: Any]] ?? []
 let events = log["events"] as? [[String: Any]] ?? []
 let recorder = log["recorder"] as? [String: Any]
@@ -582,7 +582,7 @@ func run() throws {
         }
         let moving = (1..<frameCount).filter { abs(results[$0].displacement[list].shift) > 0.5 && results[$0].displacement[list].ok }
         listSummaries.append([
-            "engine": lists[list].engine, "inverted": lists[list].inverted,
+            "engine": lists[list].engine, "bottomGravity": lists[list].bottomGravity,
             "maxSpeedPointsPerSecond": speeds.max() ?? 0, "movingFrames": moving.count,
             "travelPoints": (1..<frameCount).reduce(0.0) { $0 + (results[$1].displacement[list].ok ? results[$1].displacement[list].shift : 0) },
             "modelErrorMedian": median(errors) ?? 0, "modelErrorP95": errors.isEmpty ? 0 : errors.sorted()[Int(Double(errors.count - 1) * 0.95)],

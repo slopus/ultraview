@@ -56,7 +56,7 @@ final class ListComposerMotionProbe: NSObject {
             engines.selectedSegmentIndex = index; engines.sendActions(for: .valueChanged)
             let loaded = await wait(6) { [weak lists] in
                 guard let next = lists?.children.first as? ListChatController else { return false }
-                return next.list.engineMode == mode && next.list.loadedIndexRange.contains(25)
+                return next.list.engineMode == mode && next.list.loadedIndexRange.contains(next.list.items.count - 26)
                     && next.list.loadedItemViews.allSatisfy(\.isDisplayReady)
             }
             guard loaded, let next = lists.children.first as? ListChatController,
@@ -110,15 +110,15 @@ final class ListComposerMotionProbe: NSObject {
 
     private func measure(_ phase: String, mode: ScrollEngineMode, seconds: Double, action: () -> Void) async {
         guard let chat, let value = positions() else { failure = "\(mode)/\(phase): missing witness"; return }
-        let motion = Motion(engine: mode.rawValue, phase: phase, row: value.row, bar: value.bar, inset: chat.list.viewportInsets.top)
+        let motion = Motion(engine: mode.rawValue, phase: phase, row: value.row, bar: value.bar, inset: chat.list.viewportInsets.bottom)
         active = motion; action()
         try? await Task.sleep(for: .seconds(seconds))
         sample(); active = nil
         records.append(["engine": motion.engine, "phase": motion.phase, "samples": motion.samples,
                         "nonFinite": motion.nonFinite, "maxRelativeGap": motion.maximum,
                         "rowDelta": motion.rowDelta, "composerDelta": motion.barDelta,
-                        "insetDelta": chat.list.viewportInsets.top - motion.inset,
-                        "firstIndex": chat.list.loadedIndexRange.lowerBound, "trace": motion.trace])
+                        "insetDelta": chat.list.viewportInsets.bottom - motion.inset,
+                        "firstIndex": chat.list.items.count - chat.list.loadedIndexRange.upperBound, "trace": motion.trace])
         publish()
     }
 

@@ -9,6 +9,8 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
     let list: UltraListView
     private let composer = UITextView(), send = UIButton(type: .system), stream = UIButton(type: .system)
     private let composerBar = UIStackView()
+    /// Shown while the newest messages are out of view; scrolls back to them.
+    private let jumpToNewest = UIButton(type: .system)
     private let keyboardLayoutInput = UIView()
     private let placeholder = UILabel()
     private var composerHeight: NSLayoutConstraint?
@@ -49,7 +51,8 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
     override func viewDidLoad() {
         super.viewDidLoad(); view.backgroundColor = .systemGroupedBackground; view.clipsToBounds = true
-        list.contentView.transform = .init(scaleX: 1, y: -1)
+        // Oldest at the top; growth at the end is followed by two lines.
+        list.bottomGravity = .lines(lineHeight: UIFont.preferredFont(forTextStyle: .body).lineHeight)
         list.keyboardDismissMode = .interactive
         list.accessibilityIdentifier = "chatList"
         // Chaos runs mutate card rows; `-chatCards YES` shows them too.
@@ -67,12 +70,12 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
             self.thread = thread
             rows = thread.rows
         } else {
-            rows = (0..<60).map { index -> DemoListRow in
+            rows = (0..<60).reversed().map { index -> DemoListRow in
                 let title = index % 2 == 0 ? "You" : "Assistant"
                 let body = index == 0 ? "Tap Stream to watch this reply grow while the conversation stays in place." : "Message \(60 - index). The list keeps only the nearby conversation loaded."
                 let height: Double = 92 + Double(index % 3) * 24
                 let tint: UIColor = index % 2 == 0 ? .systemIndigo : .systemTeal
-                var row = DemoListRow(identity: "message-\(index)", title: title, body: body, height: height, tint: tint, inverted: true)
+                var row = DemoListRow(identity: "message-\(index)", title: title, body: body, height: height, tint: tint)
                 if hostProbe { row.extraAttachments = headers(group: index / 5, sender: title) }
                 return withSwipeActions(row)
             }
@@ -97,7 +100,11 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
         }
         for control in [composer, stream, send] { composerBar.addArrangedSubview(control) }
         composerBar.spacing = 8; composerBar.alignment = .bottom; composerBar.accessibilityIdentifier = "composerBar"
-        for v in [list, composerBar] { v.translatesAutoresizingMaskIntoConstraints = false; view.addSubview(v) }
+        jumpToNewest.setImage(UIImage(systemName: "arrow.down.circle.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: 32)), for: .normal)
+        jumpToNewest.accessibilityIdentifier = "jumpToNewest"; jumpToNewest.accessibilityLabel = "Newest messages"
+        jumpToNewest.isHidden = true
+        jumpToNewest.addAction(UIAction { [weak self] _ in self?.list.scrollToBottom() }, for: .touchUpInside)
+        for v in [list, composerBar, jumpToNewest] { v.translatesAutoresizingMaskIntoConstraints = false; view.addSubview(v) }
         let initialHeight = max(44, ceil((composer.font?.lineHeight ?? 21) + composer.textContainerInset.top + composer.textContainerInset.bottom))
         let height = composerBar.heightAnchor.constraint(equalToConstant: initialHeight); composerHeight = height
         let bottom = composerBar.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -8); composerBottom = bottom
@@ -105,7 +112,11 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
             list.topAnchor.constraint(equalTo: view.topAnchor), list.leadingAnchor.constraint(equalTo: view.leadingAnchor), list.trailingAnchor.constraint(equalTo: view.trailingAnchor), list.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             composerBar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12), composerBar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12), bottom, height,
             composer.heightAnchor.constraint(equalTo: composerBar.heightAnchor), composer.widthAnchor.constraint(greaterThanOrEqualToConstant: 60),
+            jumpToNewest.trailingAnchor.constraint(equalTo: composerBar.trailingAnchor),
+            jumpToNewest.bottomAnchor.constraint(equalTo: composerBar.topAnchor, constant: -12),
         ])
+        list.onScroll = { [weak self] _ in self?.updateJumpToNewest() }
+        list.onBottomFollowChanged = { [weak self] _ in self?.updateJumpToNewest() }
         // A dependent view makes interactive guide movement lay out the chat.
         // It supplies finger samples; the owned inset still positions the bar.
         keyboardLayoutInput.translatesAutoresizingMaskIntoConstraints = false
@@ -121,14 +132,20 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
         ])
         list.onVisibleWindowChanged = { [weak self] in
             guard let self, waitsForSentCollection, let height = pendingComposerHeight,
-                  list.items.first?.identity == rows.first?.identity,
+                  list.items.last?.identity == rows.last?.identity,
                   !list.loadedIndexRange.isEmpty else { return }
             waitsForSentCollection = false; pendingComposerHeight = nil
-            composerInset = list.viewportInsets.top
+            composerInset = list.viewportInsets.bottom
             resizeComposer(to: height, animated: true, duration: 0.3, synchronizesWithList: true)
         }
+        // `-listInitialRow n` opens with the message n back from the newest
+        // on the composer.
         let initialIndex = UserDefaults.standard.integer(forKey: "listInitialRow")
-        list.applyChanges(items: rows, scrollTo: initialIndex > 0 ? .init(index: initialIndex) : nil)
+        let initial = ListScrollTarget(index: max(0, rows.count - 1 - initialIndex)) { [weak self] height, _ in
+            guard let list = self?.list else { return 0 }
+            return Double(list.bounds.height) - list.viewportInsets.top - list.viewportInsets.bottom - height
+        }
+        list.applyChanges(items: rows, scrollTo: initialIndex > 0 ? initial : nil)
         list.onScrollInput = { [weak self] event in
             if event.phase == .touchDown { self?.keyboardDragHasEnded = false }
         }
@@ -181,6 +198,7 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
         ListComposerMotionProbe.startIfRequested(chat: self)
         ListComposerKeystrokeProbe.startIfRequested(chat: self)
         ChatBubbleProbe.startIfRequested(chat: self)
+        ListGravityProbe.startIfRequested(chat: self)
         if UserDefaults.standard.bool(forKey: "listProbe") {
             Task { [weak self] in
                 let delay = UserDefaults.standard.double(forKey: "listProbeDelay")
@@ -192,7 +210,7 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
                 self?.beginStreaming()
                 try? await Task.sleep(for: .seconds(1))
                 if self?.hostProbe == true { self?.recordHostState("stream-pin") }
-                else { self?.list.beginMomentum(velocity: 3500) }
+                else { self?.list.beginMomentum(velocity: -3500) }
                 if UserDefaults.standard.bool(forKey: "listKeyboardProbe") {
                     try? await Task.sleep(for: .seconds(2))
                     self?.monitor.measureAction("keyboard-show") { self?.composer.becomeFirstResponder() }
@@ -309,7 +327,7 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
         CATransaction.begin(); CATransaction.setDisableActions(true)
         let start = CACurrentMediaTime()
         let compensates = compensatesInsetChange ?? (!isTrackingKeyboard && followsComposer)
-        list.applyChanges(newInsets: .init(top: inset), compensatesInsetChange: compensates, transition: transition)
+        list.applyChanges(newInsets: .init(bottom: inset), compensatesInsetChange: compensates, transition: transition)
         UIView.performWithoutAnimation {
             composerBar.frame = .init(x: oldFrame.minX, y: top, width: oldFrame.width, height: height)
         }
@@ -527,21 +545,27 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
             }
         } else { view.setNeedsLayout() }
     }
+    /// More than a line of newer content below the composer, and the list
+    /// isn't following it.
+    private func updateJumpToNewest() {
+        let hidden = list.isFollowingBottom || (list.distanceFromBottom ?? .infinity) <= 24
+        if jumpToNewest.isHidden != hidden { jumpToNewest.isHidden = hidden }
+    }
     private func headers(group: Int, sender: String) -> [String: any ListAttachment] {
         ["date": ChatHeader(group: group, title: group < 0 ? "Now" : "Today", isSender: false), "sender": ChatHeader(group: group, title: sender, isSender: true)]
     }
     private func probeFlingTowardNewest() async {
-        list.scrollTo(.init(index: 40), transition: .none)
+        list.scrollTo(.init(index: max(0, list.items.count - 41)), transition: .none)
         try? await Task.sleep(for: .seconds(1))
-        monitor.recordState("fling-start", values: ["index": list.loadedIndexRange.lowerBound])
-        list.beginMomentum(velocity: -9000)
+        monitor.recordState("fling-start", values: ["index": list.items.count - list.loadedIndexRange.upperBound])
+        list.beginMomentum(velocity: 9000)
         try? await Task.sleep(for: .milliseconds(150))
         if UserDefaults.standard.bool(forKey: "listStall") {
             monitor.measureAction("fling-main-stall") { ListFrameMonitor.stallForProbe(milliseconds: 250) }
         }
         for index in 0..<60 {
             try? await Task.sleep(for: .milliseconds(50))
-            let first = list.loadedIndexRange.lowerBound
+            let first = list.items.count - list.loadedIndexRange.upperBound
             let finite = list.loadedIndexRange.allSatisfy { row in
                 guard let frame = list.settledFrame(at: row) else { return false }
                 return frame.minY.isFinite && frame.maxY.isFinite
@@ -553,7 +577,7 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
     private func recordHostState(_ name: String) {
         guard hostProbe else { return }
         let rects = list.loadedAttachmentViews.map { $0.convert($0.bounds, to: list) }
-        monitor.recordState(name, values: ["inset": composerInset, "pinHeld": list.holdsPinnedRow, "pinStrict": list.isStrictlyPinnedToBottomEdge, "attachmentCount": rects.count, "attachmentsFinite": rects.allSatisfy { $0.minY.isFinite && $0.maxY.isFinite }])
+        monitor.recordState(name, values: ["inset": composerInset, "following": list.isFollowingBottom, "distanceFromBottom": list.distanceFromBottom ?? -1, "attachmentCount": rects.count, "attachmentsFinite": rects.allSatisfy { $0.minY.isFinite && $0.maxY.isFinite }])
     }
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
@@ -595,7 +619,6 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
         let body = monitor.measureAction("send-read-composer") { let text = composer.text ?? ""; return text.isEmpty ? "A new message" : text }
         let transition: ListTransition
         if let thread {
-            thread.pinnedID = nil
             // The bubble grows out of the draft where it is now; until the
             // bubble shows, a snapshot keeps the draft in the field.
             let source = draftFrames()
@@ -609,10 +632,9 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
             transition = thread.config.send
         } else {
             var cards = chaosRows
-            if let pinned = cards.firstIndex(where: \.pinsToBottomEdge) { cards[pinned].pinsToBottomEdge = false }
-            var row = DemoListRow(identity: "sent-\(nextID)", title: "You", body: body, height: 100, tint: .systemIndigo, inverted: true)
+            var row = DemoListRow(identity: "sent-\(nextID)", title: "You", body: body, height: 100, tint: .systemIndigo)
             if hostProbe { row.extraAttachments = headers(group: -1, sender: "You") }
-            cards.insert(withSwipeActions(row), at: 0)
+            cards.append(withSwipeActions(row))
             rows = cards
             transition = .easeInOut(0.3)
         }
@@ -622,7 +644,8 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
         monitor.measureAction("send-clear-composer") { composer.text = ""; updateComposerHeight() }
         let singleLine = max(44, ceil((composer.font?.lineHeight ?? 21) + composer.textContainerInset.top + composer.textContainerInset.bottom))
         let inset = max(keyboardHeight, view.safeAreaInsets.bottom) + singleLine + 8
-        monitor.measureAction("send-apply-list") { list.applyChanges(items: rows, newInsets: .init(top: inset), scrollTo: .init(index: 0), animatesInsertions: false, transition: transition) }
+        // What the person sent is always brought into view, and followed afresh.
+        monitor.measureAction("send-apply-list") { list.applyChanges(items: rows, newInsets: .init(bottom: inset), scrollTo: .bottom, animatesInsertions: false, transition: transition) }
     }
     @objc private func beginStreaming() {
         followsComposer = true
@@ -631,22 +654,21 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
         let id = "stream-\(nextID)"
         let transition: ListTransition, interval: Duration
         if let thread {
-            if hostProbe { thread.pinnedID = id }
             let appearance = NodeAppearance(key: "bubble", scale: thread.config.appearScale, anchor: CGPoint(x: 0, y: 1))
             thread.insert(ChatMessage(id: id, text: ChatStreamScript.opening, outgoing: false, time: ChatThread.now()), appearance: .appearing([appearance]))
             rows = thread.rows
             transition = thread.config.incoming; interval = thread.config.streamInterval
         } else {
             var cards = chaosRows
-            var row = DemoListRow(identity: id, title: "Assistant · streaming", body: "A reply", height: hostProbe ? 420 : 84, tint: .systemTeal, inverted: true, pinsToBottomEdge: hostProbe)
+            var row = DemoListRow(identity: id, title: "Assistant · streaming", body: "A reply", height: hostProbe ? 420 : 84, tint: .systemTeal)
             if hostProbe { row.extraAttachments = headers(group: -1, sender: "Assistant") }
-            cards.insert(withSwipeActions(row), at: 0)
+            cards.append(withSwipeActions(row))
             rows = cards
             transition = .easeInOut(0.3); interval = .milliseconds(100)
         }
-        let visibleHeight = max(0, list.bounds.height - composerInset)
-        let target = hostProbe ? ListScrollTarget(index: 0, resolve: { height, _ in visibleHeight + max(0, height - visibleHeight / 2) - height }) : ListScrollTarget(index: 0)
-        list.applyChanges(items: rows, scrollTo: target, transition: transition)
+        // An incoming reply: followed by two lines at the bottom, left below
+        // the composer when the person reads further up.
+        list.applyChanges(items: rows, transition: transition)
         streaming = Task { [weak self] in
             for token in 1...ChatStreamScript.tokenCount {
                 try? await Task.sleep(for: interval)
@@ -666,6 +688,7 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
                     rows = cards
                     list.applyChanges(items: rows, anchorMode: .preserveVisibleContent, transition: .easeInOut(0.2))
                 }
+                updateJumpToNewest()
             }
         }
     }
@@ -719,14 +742,14 @@ private struct ChatHeader: ListAttachment {
     let group: Int
     let title: String
     let isSender: Bool
-    var edge: BoundaryEdge { .bottom }
+    var edge: BoundaryEdge { .top }
     var reservesSpace: Bool { !isSender }
     var stackingGroup: String? { isSender ? "sender" : "date" }
     var yieldsTo: String? { isSender ? "date" : nil }
     var yieldGap: Double { 32 }
     func makeView() -> ListAttachmentView { DemoHeaderView() }
     func apply(to view: ListAttachmentView, transition: ListTransition) {
-        (view as? DemoHeaderView)?.title = title; (view as? DemoHeaderView)?.inverted = true
+        (view as? DemoHeaderView)?.title = title
     }
     func combines(with other: any ListAttachment) -> Bool {
         guard let other = other as? ChatHeader else { return false }

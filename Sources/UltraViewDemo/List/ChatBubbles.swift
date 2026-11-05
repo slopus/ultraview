@@ -62,7 +62,7 @@ enum BubbleGroupPosition: Sendable, Equatable {
     var endsGroup: Bool { self == .single || self == .last }
 }
 
-/// The conversation, newest first, and the list rows that show it. A
+/// The conversation, oldest first, and the list rows that show it. A
 /// message's revision changes whenever what its bubble shows changes,
 /// including its corners when a neighbor arrives.
 @MainActor
@@ -82,7 +82,6 @@ final class ChatThread {
     private var entries: [String: Entry] = [:]
     private var appearances: [String: NodeRowAppearance] = [:]
     var config = BubbleAnimationConfig.current
-    var pinnedID: String?
     var attachments: ((ChatMessage, Int) -> [String: any ListAttachment])?
     /// Called on the main thread when a bubble is tapped.
     var onTap: ((String) -> Void)?
@@ -94,6 +93,7 @@ final class ChatThread {
         var outgoing = false
         var run = 0
         var minutes = 14 * 60 + 20
+        // Seeded from the newest back: message-0 is the newest.
         for index in 0..<count {
             if run == 0 {
                 outgoing.toggle()
@@ -108,6 +108,7 @@ final class ChatThread {
             ))
             minutes -= 1 + index % 4
         }
+        messages.reverse()
     }
 
     func index(of id: String) -> Int? { messages.firstIndex { $0.id == id } }
@@ -116,7 +117,7 @@ final class ChatThread {
 
     /// Adds `message` as the newest, shown the first time with `appearance`.
     func insert(_ message: ChatMessage, appearance: NodeRowAppearance?) {
-        messages.insert(message, at: 0)
+        messages.append(message)
         if let appearance { appearances[message.id] = appearance }
     }
 
@@ -160,7 +161,6 @@ final class ChatThread {
             let swipes = swipeActions?(message.id) ?? (leading: [], trailing: [])
             rows.append(ChatBubbleRow(
                 message: message, revision: entry.revision, node: entry.row,
-                pinsToBottomEdge: message.id == pinnedID,
                 attachments: attachments?(message, index) ?? [:],
                 leadingSwipeActions: swipes.leading, trailingSwipeActions: swipes.trailing
             ))
@@ -171,8 +171,8 @@ final class ChatThread {
 
     private func position(at index: Int) -> BubbleGroupPosition {
         let outgoing = messages[index].outgoing
-        let older = index + 1 < messages.count && messages[index + 1].outgoing == outgoing
-        let newer = index > 0 && messages[index - 1].outgoing == outgoing
+        let older = index > 0 && messages[index - 1].outgoing == outgoing
+        let newer = index + 1 < messages.count && messages[index + 1].outgoing == outgoing
         switch (older, newer) {
         case (false, false): return .single
         case (false, true): return .first
@@ -293,14 +293,12 @@ enum ChatBubbleTree {
     }
 }
 
-/// One message as a list row: an animated node row, flipped upright in the
-/// chat's inverted list.
+/// One message as a list row: an animated node row.
 @MainActor
 struct ChatBubbleRow: ListRow {
     let message: ChatMessage
     let revision: UInt64
     let node: NodeRow
-    var pinsToBottomEdge: Bool
     var attachments: [String: any ListAttachment]
     var leadingSwipeActions: [ListSwipeAction] = []
     var trailingSwipeActions: [ListSwipeAction] = []
@@ -310,7 +308,6 @@ struct ChatBubbleRow: ListRow {
     func makeView() -> ListRowView { node.makeView() }
     func apply(to view: ListRowView, transition: ListTransition) {
         node.apply(to: view, transition: transition)
-        view.transform = .init(scaleX: 1, y: -1)
         view.accessibilityIdentifier = "row-\(identity)"
         view.accessibilityLabel = message.outgoing ? "You" : "Assistant"
         // A row with swipe actions is one element, so VoiceOver offers its actions.

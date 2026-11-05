@@ -43,7 +43,7 @@ final class ListComposerKeystrokeProbe: NSObject {
             let initialRow = UserDefaults.standard.integer(forKey: "listInitialRow")
             for _ in 0..<300 {
                 if let next = lists.children.first as? ListChatController,
-                   next.list.engineMode == mode, next.list.loadedItemView(at: initialRow)?.isDisplayReady == true { break }
+                   next.list.engineMode == mode, next.list.loadedItemView(at: max(0, next.list.items.count - 1 - initialRow))?.isDisplayReady == true { break }
                 try? await Task.sleep(for: .milliseconds(20))
             }
             guard let next = lists.children.first as? ListChatController,
@@ -85,7 +85,7 @@ final class ListComposerKeystrokeProbe: NSObject {
         try? await Task.sleep(for: .milliseconds(500))
         sample("end"); active = false
         records.append(["engine": mode.rawValue, "phase": phase,
-                        "firstIndex": chat?.list.loadedIndexRange.lowerBound ?? -1, "trace": trace])
+                        "firstIndex": chat.map { $0.list.items.count - $0.list.loadedIndexRange.upperBound } ?? -1, "trace": trace])
         publish()
     }
 
@@ -123,7 +123,7 @@ final class ListComposerKeystrokeProbe: NSObject {
             "textTop": t.minY, "textBottom": t.maxY, "textHeight": t.height,
             "caretTop": c.minY, "caretBottom": c.maxY, "caretLeft": c.minX, "caretLocal": caret.minY,
             "textBoundsY": textLayer.bounds.minY, "contentOffset": text.contentOffset.y,
-            "modelHeight": bar.bounds.height, "inset": chat.list.viewportInsets.top,
+            "modelHeight": bar.bounds.height, "inset": chat.list.viewportInsets.bottom,
             "text": text.text ?? ""]
         if let nativeCaret, let nativeRect {
             entry["nativeCaretTop"] = nativeRect.minY; entry["nativeCaretBottom"] = nativeRect.maxY

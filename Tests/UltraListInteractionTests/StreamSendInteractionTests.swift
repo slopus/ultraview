@@ -45,8 +45,15 @@ final class StreamSendInteractionTests: XCTestCase {
                 XCTAssertLessThanOrEqual(scenario["settledMax"] as? Double ?? 1000, 0.5, "\(name): model differs from settled frames")
                 XCTAssertEqual(scenario["heightMismatch"] as? Int, 0, name)
                 XCTAssertEqual(scenario["finalNonFinite"] as? Int, 0, name)
-                XCTAssertLessThanOrEqual(abs(scenario["newestGapToInset"] as? Double ?? 1000), 0.5, "\(name): newest row is off the inset line")
-                XCTAssertLessThanOrEqual(abs(scenario["newestGapToComposer"] as? Double ?? 1000), 0.5, "\(name): newest row does not meet the composer")
+                // Following, the newest row meets the composer. Once the
+                // follow budget is spent, growth goes on below it, never above.
+                if scenario["following"] as? Bool == true {
+                    XCTAssertLessThanOrEqual(abs(scenario["newestGapToInset"] as? Double ?? 1000), 0.5, "\(name): newest row is off the inset line")
+                    XCTAssertLessThanOrEqual(abs(scenario["newestGapToComposer"] as? Double ?? 1000), 0.5, "\(name): newest row does not meet the composer")
+                } else {
+                    XCTAssertLessThanOrEqual(scenario["newestGapToInset"] as? Double ?? -1000, 0.5, "\(name): newest row rests above the inset line")
+                    XCTAssertGreaterThan(scenario["distanceFromBottom"] as? Double ?? 0, 0.5, "\(name): stopped following at the end")
+                }
                 XCTAssertEqual(scenario["modelOK"] as? Bool, true, "\(name): \(scenario["modelProblems"] ?? "")")
                 if title.lowercased().contains("multiline") {
                     let composer = scenario["composerSend"] as? [String: Any] ?? [:]

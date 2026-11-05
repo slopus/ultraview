@@ -125,7 +125,7 @@ final class ListVideoScenario: NSObject {
     /// Puts the screen in its starting state before recording begins.
     private func setUp() async {
         switch name {
-        case "fling-newest": lists.first?.scrollTo(.init(index: 40), transition: .none)
+        case "fling-newest": lists.first.map { $0.scrollTo(.init(index: max(0, $0.items.count - 41)), transition: .none) }
         case "mutations":
             if defaults.string(forKey: "listScenarioTransition") == "none" { lists.first?.defaultTransition = .none }
         case "blocker": selectBlocker(milliseconds: defaults.integer(forKey: "listScenarioBlocker"))
@@ -144,7 +144,8 @@ final class ListVideoScenario: NSObject {
                 await wait(show ? 1.0 : 1.6)
             }
         case "fling-newest", "fling-oldest":
-            let velocity = name == "fling-newest" ? -9000.0 : 9000
+            // The chat's newest rows are at its end.
+            let velocity = name == "fling-newest" ? 9000.0 : -9000
             mark("fling", ["velocity": velocity])
             lists.first?.beginMomentum(velocity: velocity)
             await stallIfRequested(after: 0.15)
@@ -337,7 +338,7 @@ final class ListVideoScenario: NSObject {
         }
         if let chat = screen as? ListChatController {
             attachKeyboardMarker()
-            if let row = chat.list.loadedItemView(at: 0), let rect = presented(row) { sample["newestRow"] = Self.array(rect) }
+            if let newest = chat.list.items.indices.last, let row = chat.list.loadedItemView(at: newest), let rect = presented(row) { sample["newestRow"] = Self.array(rect) }
             if let bar = composer?.superview, let rect = presented(bar) { sample["composerBar"] = Self.array(rect) }
             if let keyboardMarker, let rect = presented(keyboardMarker) { sample["keyboardTop"] = rect.minY }
             sample["firstResponder"] = composer?.isFirstResponder ?? false
@@ -466,7 +467,7 @@ final class ListVideoScenario: NSObject {
             "keyboardWindows": keyboardWindows, "applicationStates": states, "resignedActive": resignedActive,
             "lists": lists.map { list in
                 ["frame": Self.array(list.convert(list.bounds, to: nil)), "engine": list.engineMode.rawValue,
-                 "inverted": list.contentView.transform.d < 0] as [String: Any]
+                 "bottomGravity": list.bottomGravity != nil] as [String: Any]
             },
         ]
         let gaps = callbackGaps.sorted()

@@ -21,11 +21,13 @@ import UltraView
 /// from the transition curve, so it isn't a violation. After the
 /// screen rests, the probe compares presentation, model and settled frames,
 /// the newest row against the composer, and the collection against the taps.
+/// The newest row meets the composer while the list follows its end; once
+/// the follow budget is spent it may rest below the composer, never above.
 /// The report is JSON in the accessibility value of `streamSendGeometry` and
 /// in Documents/list-stream-send-geometry.json.
 ///
-/// Chat contract the probe relies on: Send inserts `sent-*` and Stream inserts
-/// `stream-*` at index 0; a stream ends at revision 40 (override with
+/// Chat contract the probe relies on: Send appends `sent-*` and Stream appends
+/// `stream-*` (the newest row is the last); a stream ends at revision 40 (override with
 /// `-listStreamSendFinalRevision`); rows conforming to `ListProbeDeclaredHeight`
 /// also have their resting height checked. Multiline scenarios grow a draft
 /// before Send and measure the newest row against the shrinking composer.
@@ -452,8 +454,8 @@ final class ListStreamSendProbe: NSObject {
         guard let result, let chat, chat.view.window != nil, let listLayer = chat.list.layer.presentation() else { return }
         let list = chat.list, time = elapsed
         result.frames += 1
-        let inverted = list.contentView.transform.d < 0, insets = list.viewportInsets, height = Double(list.bounds.height)
-        let band = inverted ? (insets.bottom, height - insets.top) : (insets.top, height - insets.bottom)
+        let insets = list.viewportInsets, height = Double(list.bounds.height)
+        let band = (insets.top, height - insets.bottom)
         for item in list.items where !known.contains(item.identity) {
             known.insert(item.identity); result.inserted.append(item.identity); firstSeen[item.identity] = time
             if item.identity.hasPrefix("stream-") { streamed.insert(item.identity) }
@@ -472,7 +474,7 @@ final class ListStreamSendProbe: NSObject {
             let visible = Double(rect.maxY) > band.0 && Double(rect.minY) < band.1
             let row = Row(identity: list.items[index].identity, rect: rect, settled: settled, visible: visible)
             if capturesContinuity { sampleContinuity(view, row, index: index, time: time, result: result, list: list, listLayer: listLayer) }
-            if let previous { check(previous, row, inverted: inverted, time: time, result: result) }
+            if let previous { check(previous, row, time: time, result: result) }
             previous = row
         }
         if let send = result.composer { sampleComposer(send, list, result: result) }
@@ -596,10 +598,10 @@ final class ListStreamSendProbe: NSObject {
             for (index, child) in view.subviews.enumerated() { inspect(child, parent: name, order: index) }
         }
         inspect(list, parent: "", order: 0)
-        let inverted = list.contentView.transform.d < 0, insets = list.viewportInsets
+        let insets = list.viewportInsets
         result.sceneFrames.append(["t": time, "clock": CACurrentMediaTime(), "displayTime": displayTime,
             "loaded": [list.loadedIndexRange.lowerBound, list.loadedIndexRange.upperBound],
-            "band": inverted ? [insets.bottom, list.bounds.height - insets.top] : [insets.top, list.bounds.height - insets.bottom],
+            "band": [insets.top, list.bounds.height - insets.bottom],
             "views": entries])
     }
 
@@ -612,13 +614,14 @@ final class ListStreamSendProbe: NSObject {
         var viewport: Double
     }
     private func measureNewest(_ list: UltraListView, bar: UIView) -> NewestSample? {
-        guard let listLayer = list.layer.presentation(), let barLayer = bar.layer.presentation(), list.loadedIndexRange.contains(0),
-              let view = list.loadedItemView(at: 0), let layer = view.layer.presentation(),
+        let newest = list.items.count - 1
+        guard let listLayer = list.layer.presentation(), let barLayer = bar.layer.presentation(), list.loadedIndexRange.contains(newest),
+              let view = list.loadedItemView(at: newest), let layer = view.layer.presentation(),
               let parent = view.layer.superlayer?.presentation() else { return nil }
         let barRect = barLayer.convert(barLayer.bounds, to: listLayer), rect = layer.convert(layer.bounds, to: listLayer)
         let scale = Double(parent.convert(CGPoint(x: 0, y: 1), to: listLayer).y - parent.convert(CGPoint.zero, to: listLayer).y)
         let content = list.contentView.layer
-        let sample = NewestSample(identity: list.items[0].identity, gap: Double(barRect.minY - rect.maxY),
+        let sample = NewestSample(identity: list.items[newest].identity, gap: Double(barRect.minY - rect.maxY),
                                   slide: scale * Double(layer.position.y - view.layer.position.y), scale: scale, bar: barRect,
                                   viewport: Double((content.presentation() ?? content).bounds.minY - content.bounds.minY))
         let values = [sample.gap, sample.slide, sample.scale, Double(barRect.minY), Double(barRect.height), sample.viewport]
@@ -634,14 +637,14 @@ final class ListStreamSendProbe: NSObject {
         if shrinking { send.lastShrinking = t; send.shrinkEnd = nil }
         else if send.lastShrinking != nil, send.shrinkEnd == nil { send.shrinkEnd = t }
         if sent, send.firstSent == nil { send.firstSent = t }
-        if sent, send.curve == nil, let first = send.firstSent, let view = list.loadedItemView(at: 0) {
+        if sent, send.curve == nil, let first = send.firstSent, let view = list.loadedItemView(at: list.items.count - 1) {
             if let slide = insertCurve("rowSlide", view.layer, "ultraview.list.positionY", sendTime: send.sendTime) {
                 send.curve = slide; send.distance = abs(slide.to - slide.from)
             } else if let track = insertCurve("viewport", list.contentView.layer, "ultraview.list.viewportOffset", sendTime: send.sendTime) {
                 send.curve = track
             } else if t - first > 0.1 { send.curve = .fallback(begin: first) }
             if let curve = send.curve {
-                if send.distance == nil { send.distance = list.settledFrame(at: 0).map { Double($0.height) } }
+                if send.distance == nil { send.distance = list.settledFrame(at: list.items.count - 1).map { Double($0.height) } }
                 send.insertStart = curve.begin
                 send.insertEnd = max(curve.begin + curve.duration, first + 0.3)
             }
@@ -692,9 +695,9 @@ final class ListStreamSendProbe: NSObject {
                            from: from, to: to, points: (start + end).map(Double.init))
     }
 
-    private func check(_ low: Row, _ high: Row, inverted: Bool, time: Double, result: ScenarioResult) {
-        // `low` has the smaller index. Inverted, it sits below `high` on screen.
-        let actual = Double(inverted ? low.rect.minY - high.rect.maxY : high.rect.minY - low.rect.maxY)
+    private func check(_ low: Row, _ high: Row, time: Double, result: ScenarioResult) {
+        // `low` has the smaller index and sits above `high` on screen.
+        let actual = Double(high.rect.minY - low.rect.maxY)
         let expected = Double(high.settled.minY - low.settled.maxY)
         let deviation = actual - expected
         let key = "\(low.identity)|\(high.identity)"
@@ -768,24 +771,28 @@ final class ListStreamSendProbe: NSObject {
                                     "heightMismatch": heightMismatch, "heightChecked": heightChecked, "finalNonFinite": nonFinite,
                                     "loaded": "\(list.loadedIndexRange)", "insets": "\(list.viewportInsets.top)/\(list.viewportInsets.bottom)",
                                     "bounds": "\(list.bounds.size)", "offset": Self.json(list.currentScrollOffset)]
-        let inverted = content.transform.d < 0
-        if list.loadedIndexRange.contains(0), let view = list.loadedItemView(at: 0) {
+        let newest = list.items.count - 1
+        value["following"] = list.isFollowingBottom
+        if let distance = list.distanceFromBottom { value["distanceFromBottom"] = Self.json(distance) }
+        if list.loadedIndexRange.contains(newest), let view = list.loadedItemView(at: newest) {
             let rect = view.layer.presentation().flatMap { layer in list.layer.presentation().map { layer.convert(layer.bounds, to: $0) } } ?? view.convert(view.bounds, to: list)
-            let edge = Double(inverted ? rect.maxY : rect.minY)
-            let line = inverted ? Double(list.bounds.height) - list.viewportInsets.top : list.viewportInsets.top
-            value["newestGapToInset"] = Self.json(inverted ? line - edge : edge - line)
+            let line = Double(list.bounds.height) - list.viewportInsets.bottom
+            value["newestGapToInset"] = Self.json(line - Double(rect.maxY))
             if let bar = composerBar(in: chat) {
                 value["newestGapToComposer"] = Self.json(Double(bar.convert(bar.bounds, to: list).minY) - Double(rect.maxY))
             }
         } else { value["newestLoaded"] = false }
 
-        // The taps alone predict the collection: each insertion lands at index 0.
+        // The taps alone predict the collection: each insertion is appended.
         var problems: [String] = []
         let items = list.items
         if items.count != initialCount + result.taps.count { problems.append("count \(items.count) expected \(initialCount + result.taps.count)") }
-        let expectedPrefixes = result.taps.reversed().map { $0 == "Send" ? "sent-" : "stream-" }
-        for (offset, prefix) in expectedPrefixes.enumerated() where !(items.indices.contains(offset) && items[offset].identity.hasPrefix(prefix)) {
-            problems.append("index \(offset) is \(items.indices.contains(offset) ? items[offset].identity : "missing"), expected \(prefix)")
+        let expectedPrefixes = result.taps.map { $0 == "Send" ? "sent-" : "stream-" }
+        for (offset, prefix) in expectedPrefixes.enumerated() {
+            let index = initialCount + offset
+            if !(items.indices.contains(index) && items[index].identity.hasPrefix(prefix)) {
+                problems.append("index \(index) is \(items.indices.contains(index) ? items[index].identity : "missing"), expected \(prefix)")
+            }
         }
         if let lastStream {
             let revision = items.first { $0.identity == lastStream }?.revision

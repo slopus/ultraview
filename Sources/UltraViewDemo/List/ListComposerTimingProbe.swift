@@ -86,7 +86,7 @@ final class ListComposerTimingProbe: NSObject {
         await measure("layoutBaseline", list: list) { chat.view.setNeedsLayout(); chat.view.layoutIfNeeded() }
         for _ in 0..<runs {
             let insets = list.viewportInsets
-            var raised = insets; raised.top += 40
+            var raised = insets; raised.bottom += 40
             await measure("insetPass", list: list) { list.applyChanges(newInsets: raised, transition: .easeInOut(0.18)) }
             try? await Task.sleep(for: .milliseconds(250))
             await measure("insetPass", list: list) { list.applyChanges(newInsets: insets, transition: .easeInOut(0.18)) }

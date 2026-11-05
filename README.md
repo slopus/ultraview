@@ -115,6 +115,18 @@ drawn at the new width in the same frame; rows whose root has a fixed height in
 points keep their places and are only redrawn. See [the list design](Docs/UltraList.md)
 for threading, measurement, animation and host behavior.
 
+A chat sets `bottomGravity`: rows stay in natural order (oldest first),
+short content rests on the bottom inset, nothing being read moves when
+content changes, and a list at its end follows growth there by a budget of
+about two lines, then lets it continue below:
+
+```swift
+chat.bottomGravity = .lines(2, lineHeight: UIFont.preferredFont(forTextStyle: .body).lineHeight)
+chat.applyChanges(items: messages + [sent], scrollTo: .bottom) // a sent message is always shown
+```
+
+The rules are in [the list design](Docs/UltraList.md#chat-lists-bottom-gravity).
+
 On iPhone, set `CADisableMinimumFrameDurationOnPhone` to `YES` in the host app's
 Info.plist to allow app-driven Core Animation and display links above 60 Hz.
 The demo enables it. The display and system determine the achieved frame rate.

@@ -194,8 +194,9 @@ the width change in place:
    round. The main thread waits for them, then for the pipeline, at most
    `inPlaceResizeTimeLimit` (0.1 s) in total.
 3. One pass applies the new size with the new heights. The row being read
-   keeps the share of its height that was above the top edge; in a flipped
-   chat that row is the newest one at the bottom.
+   keeps the share of its height that was above the top edge; a
+   bottom-gravity list that follows its end keeps the end on the bottom
+   inset instead.
 4. A row that isn't ready in time, or doesn't support `prepareInPlace`, keeps
    its old height and drawing until its measurement arrives, like any late
    measurement. Rows off screen are measured again as scrolling reaches them.
@@ -222,11 +223,84 @@ streaming don't take this path. Over the 0.1 s limit, the list stops waiting
 and lets late rows catch up; under heavy host load the turn can still run
 longer than the limit, as the main thread itself waits to be scheduled.
 
+## Chat lists (bottom gravity)
+
+A chat reads from its end. Set `bottomGravity` and the list keeps rows in
+their natural order, oldest first, with no flipped transform:
+
+```swift
+list.bottomGravity = .lines(2, lineHeight: UIFont.preferredFont(forTextStyle: .body).lineHeight)
+list.applyChanges(items: messages)                      // opens on its end
+list.applyChanges(items: messages + [sent], scrollTo: .bottom)
+```
+
+Content shorter than the visible height rests on the bottom inset, with
+empty space above it. Taller content opens on its last row. The rules, in
+`BottomGravity.swift` (UIKit-free, exact-value tests in `BottomGravityTests`)
+and `UltraListView`:
+
+**Nothing being read moves.** Every pass picks an anchor: the row under a
+finger while one is down, otherwise the first row showing below the top
+inset. Changes below the anchor don't move it, insertions, deletions and
+height changes above it are compensated, and the anchor's own growth keeps
+its top. This holds while idle, mid-drag (the drag is re-anchored, so the
+content under the finger stays under it), during deceleration (the flight
+moves with the content), in a rubber band (a pass under a finger or a flight
+keeps the overscroll instead of resting on the edge), and for animated
+inserts and deletes. Prepending older history doesn't move what is shown.
+A new row comes in against the row above it and moves with that row while
+it slides or resizes, so no gap opens between them.
+
+**Following the end, within a budget.** A list resting on its bottom edge
+follows growth at its end (a streamed reply, a new message, rows growing
+together) by at most `followBudget` points in total, then stops and lets
+the growth continue below the bottom inset. `BottomFollow` holds the state:
+
+- *Re-arming* (full budget): the list comes to rest on its bottom edge after
+  a scroll or fling; `scrollToBottom(animated:)`; a `.bottom` target or any
+  target that lands on the bottom edge; a new last row (new identity) while
+  following; the first load and a full replacement.
+- *A finger*: a touch holds the follow. A tap that doesn't drag resumes it
+  with what was left, if the list is still on its bottom edge; it doesn't
+  refill the budget. A drag stops it, so the list never moves content
+  against the finger. `stopFollowingBottom()` stops it from code.
+- *Spending*: the budget counts the net distance the content moved up by
+  itself. Content shrinking at the end (a row that shrinks or is replaced by
+  a shorter one, a deletion) moves down and gives that distance back. A
+  height change that returns within a frame costs nothing.
+- *Short content*: always rests on the bottom inset. As it grows past the
+  visible height, its rise counts against the budget, so the list fills the
+  screen and then stops.
+- *Sending*: `ListScrollTarget.bottom` puts the last row's band on the
+  bottom inset (a row taller than the visible height shows its end) and
+  re-arms. Use it in the same `applyChanges` as the sent row.
+- *New rows*: with `revealsNewRows`, a new last row arriving while following
+  is shown whole outside the budget: its end rests on the bottom inset, or,
+  when the new rows are taller than the visible height, the first one's top
+  rests on the top inset and following stops. Off by default: new rows are
+  followed like growth.
+
+**The viewport.** While following, inset, height, width and environment
+changes (the keyboard, rotation, Dynamic Type) keep the end on the bottom
+inset without spending the budget, including the measurements that arrive
+later at the new width; passes that change the collection still spend it.
+Away from the end, `compensatesInsetChange: true` keeps the anchor's distance
+to the bottom inset (the content moves with the keyboard) and `false` keeps
+its distance to the top inset (it stays under a finger dragging the keyboard
+down, and moves with a top bar that changes height). A width change keeps the
+share of the anchor row above the top inset.
+
+`isFollowingBottom`, `remainingFollowBudget`, `onBottomFollowChanged` and
+`distanceFromBottom` drive a host's scroll-to-bottom affordance; the demo
+shows one while more than a line of newer content is out of view. Row
+pinning (`pinsToBottomEdge`) is ignored in this mode. `scrollToTop` goes to
+the first row, and accessibility page scrolls follow reading order.
+
 ## Scroll to top
 
-A tap on the status bar scrolls a list to the edge shown at the top: its first
-row, or, when the content is turned upside down as in a chat, its oldest loaded
-row. UIKit offers the tap only to a system scroll view, which the physics
+A tap on the status bar scrolls a list to its first row; in a chat with
+bottom gravity that is its oldest loaded message, and the list stops following
+its end. UIKit offers the tap only to a system scroll view, which the physics
 engines don't have, so every scroll host keeps an empty one that declines the
 system scroll and hands the tap to the host's own engine. The list then runs an
 ordinary `scrollTo` on the `.uiKitScroll()` curve; a fling stops where it is
@@ -745,7 +819,7 @@ Each run writes `Documents/list-chaos-<seed>.jsonl` and a matching summary JSON.
 The summary includes action counts, readiness and settle times, memory
 footprint and weak host/root counts. Host counts cover hosts observed in the
 window and are lower bounds; the driver does not impose a memory or host-count
-limit. Add `-listHostProbe YES` for chat headers and a pinned streaming row.
+limit. Add `-listHostProbe YES` for chat headers.
 
 The keyboard and node-ownership changes passed 205 Linux tests and 295 simulator
 tests, plus nine interaction tests using actual input gestures. The 44 list
@@ -997,11 +1071,11 @@ bundle identifier so independent test runners retain their own identities.
 | Area | Implemented | Deferred or not yet validated |
 |---|---|---|
 | Keyboard | Optional driven dismissal coalesces touch samples for window layout and shares its release curve with the composer and list inset. Unsupported configurations retain the system path. Programmatic show/hide and composer size changes compensate at every scroll position. Interactive dismissal preserves finger placement and release momentum. Simulator interaction checks cover all three engines. | Current physical-device interaction is blocked by the locked iPhone (passcode required, no developer image). Earlier device cold entry and UIKit keyboard/input costs exceed 16.7 ms; measured limits are described below. |
-| Accessibility | Hosted nodes apply accessibility properties; text nodes publish labels and static-text traits. Viewport-sized scroll actions follow screen direction, including inverted lists. Logical row focus survives virtualization and returns to a recreated descendant when available. | Physical VoiceOver interaction coverage, including custom accessibility-element containers. |
+| Accessibility | Hosted nodes apply accessibility properties; text nodes publish labels and static-text traits. Viewport-sized scroll actions follow reading order, also in a bottom-gravity chat. Logical row focus survives virtualization and returns to a recreated descendant when available. | Physical VoiceOver interaction coverage, including custom accessibility-element containers. |
 | Node row revisions | Ready content remains visible until the newest replacement applies its visible commit; superseded candidates are discarded. With `animatesContent`, keyed nodes, text and bitmaps animate on the row's height timing. | Rows without `animatesContent` (the default, and the demo's cards) still swap content at its final layout under the row's clip. Measured main-thread cost while content animates. |
 | Trackpad | Continuous indirect pan input has its own drag baseline and rubber-band coefficient. The physics model supports indirect replay. | Physical trackpad parity, indirect recording fixtures and discrete wheel input. The committed public gesture fixtures use direct touch. |
 | Paging | Hosts can supply measured row targets and append new data through `applyChanges`. | Built-in page snapping and network loading policy. |
-| Swipe actions | Leading and trailing actions, full swipe with one haptic per crossing, one open row, closing on drag, tap or another swipe, collapse on delete, VoiceOver custom actions. Presentation-layer simulator tests and real synthesized drags cover all three engines and the inverted chat. | Device timing. In the stepped engine, a tap that stops a fling still presses the content under it (a list-core issue; keyframe and the platform engine don't). Tapping the platform engine mid-fling can't be automated. |
+| Swipe actions | Leading and trailing actions, full swipe with one haptic per crossing, one open row, closing on drag, tap or another swipe, collapse on delete, VoiceOver custom actions. Presentation-layer simulator tests and real synthesized drags cover all three engines and the chat. | Device timing. In the stepped engine, a tap that stops a fling still presses the content under it (a list-core issue; keyframe and the platform engine don't). Tapping the platform engine mid-fling can't be automated. |
 | Horizontal lists | Transposed and right-to-left lists with every engine, mutations and VoiceOver paging; nested axis arbitration inside a vertical list. | A scroll indicator, self-measured row widths and paging. |
 | Attachments | Run serial continuity, top/bottom floating maps, reserved space, member trimming, one-level partner yielding, ownership, stick distance, flight keyframes and departure behavior have math and simulator coverage. The feed demonstrates reserving section headers. A physical probe combines partner yielding, pinning and keyboard movement. | Navigation during that combined physical scenario. Render-server depth and commit-delay sweeps remain empirical work. |
 
@@ -1069,10 +1143,10 @@ settling after a main-thread stall, continued coasting and handoff to native inp
 All 339 simulator unit tests and 76 focused tests under each sanitizer passed;
 the updated proof package checked 124 theorems.
 
-Add `-listHostProbe YES` to the keyboard probe to combine a streaming pin with
-reserving date headers and partner-yielding sender headers. Its exported states
-record pin placement, inset changes and attachment geometry before and after
-keyboard/send/dismissal. Sending releases the streaming pin deliberately.
+Add `-listHostProbe YES` to the keyboard probe to add reserving date headers
+and partner-yielding sender headers. Its exported states record the follow
+state, inset changes and attachment geometry before and after
+keyboard/send/dismissal.
 
 The device measurements below predate the multiline composer and the latest
 scroll and resize fixes; they describe the earlier implementation.

@@ -281,17 +281,17 @@ final class ListChaosDriver {
         (0..<random.int(1...9)).map { "Chaos line \($0 + 1) for step \(step)" }.joined(separator: "\n")
     }
 
-    private func makeRow(inverted: Bool, section: String?) -> DemoListRow {
+    private func makeRow(section: String?) -> DemoListRow {
         serial += 1
         var row = DemoListRow(identity: "chaos-\(seed)-\(serial)", title: "Chaos \(serial)", body: String(repeating: "Randomized row. ", count: random.int(1...8)),
-                              height: Double(random.int(24...420)), tint: random.pick([.systemGreen, .systemOrange, .systemPink]), inverted: inverted, section: section)
+                              height: Double(random.int(24...420)), tint: random.pick([.systemGreen, .systemOrange, .systemPink]), section: section)
         if swipes, random.bool(0.7) { addSwipeActions(to: &row) }
         return row
     }
 
     private static func freshCopy(_ row: DemoListRow) -> DemoListRow {
         var copy = DemoListRow(identity: row.identity, revision: row.revision, title: row.title, body: row.body, height: row.height, tint: row.tint,
-                               inverted: row.inverted, pinsToBottomEdge: row.pinsToBottomEdge, section: row.section)
+                               pinsToBottomEdge: row.pinsToBottomEdge, section: row.section)
         copy.extraAttachments = row.extraAttachments
         copy.leadingSwipeActions = row.leadingSwipeActions; copy.trailingSwipeActions = row.trailingSwipeActions
         return copy
@@ -393,7 +393,7 @@ final class ListChaosDriver {
     }
 
     private func mutate(_ action: Action, _ host: any ListChaosRowHost) {
-        let inverted = screen == .chat
+        let chat = screen == .chat
         var rows = host.chaosRows
         let transition = transition()
         let anchor: ListAnchorMode = random.bool(0.7) ? .automatic : .preserveVisibleContent
@@ -411,10 +411,10 @@ final class ListChaosDriver {
         case .insert:
             let at = min(index(in: host, count: rows.count), rows.count)
             let section = rows.indices.contains(at) ? rows[at].section : rows.last?.section
-            let inserted = (0..<random.int(1...5)).map { _ in makeRow(inverted: inverted, section: section) }
+            let inserted = (0..<random.int(1...5)).map { _ in makeRow(section: section) }
             rows.insert(contentsOf: inserted, at: at)
             apply(rows, transition: transition)
-            if inverted, random.bool(0.3) { host.list.animateInsertedBlock(identities: Set(inserted.map(\.identity)), from: .top, transition: self.transition()) }
+            if chat, random.bool(0.3) { host.list.animateInsertedBlock(identities: Set(inserted.map(\.identity)), from: .bottom, transition: self.transition()) }
             detail = "\(inserted.count)@\(at)"
         case .delete:
             guard rows.count > 3 else { return mutate(.insert, host) }
@@ -459,8 +459,8 @@ final class ListChaosDriver {
             // Fresh row values with unchanged identities and revisions.
             apply(rows.map(Self.freshCopy), transition: transition); detail = "\(rows.count)"
         case .replace:
-            let count = inverted ? random.pick([0, 1, 8, 60]) : random.pick([0, 1, 5, 60, 600, 3000])
-            let next = (0..<count).map { offset in makeRow(inverted: inverted, section: inverted ? nil : "CHAOS \(serial / 20 + offset / 20)") }
+            let count = chat ? random.pick([0, 1, 8, 60]) : random.pick([0, 1, 5, 60, 600, 3000])
+            let next = (0..<count).map { offset in makeRow(section: chat ? nil : "CHAOS \(serial / 20 + offset / 20)") }
             apply(next, transition: transition); detail = "\(count)"
         default: break
         }

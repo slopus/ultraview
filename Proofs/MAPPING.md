@@ -2971,6 +2971,57 @@ late rows keep their old content. `FixedHeightTests` (Linux) checks
 `LayoutStyle.hasFixedHeight` against Yoga at three widths, and
 `WindowProjectionTests` the kept share.
 
+## Bottom gravity (commits after `6f0e755`)
+
+`UltraListView.bottomGravity` adds a chat mode in natural order (see
+Docs/UltraList.md, "Chat lists (bottom gravity)"); the demo chat no longer
+flips its content view. Pins at the end of this review:
+
+| Source | SHA-256 |
+| --- | --- |
+| `Sources/UltraList/BottomGravity.swift` | `e6044be4560c8963ebe298e26a96a06c7882c0367c8387fed4a7171ceef3c1a5` |
+| `Sources/UltraList/UIKit/UltraListView.swift` | `84a494f6ddf3dc8969b272d6d297949f05d4b48b3b8421b90bf2e01be6fe08df` |
+| `Sources/UltraList/WindowProjection.swift` | `3d5894795d15116ceeab6a1824a7e29c93bd4530b1866d154a680478fc3adce7` |
+| `Sources/UltraList/UIKit/ListRow.swift` | `3af1fd48935d3a245c7639a6cd7608c0e49ccc167b1c15da984a26cd74cab541` |
+| `Sources/UltraList/UIKit/ScrollEngine.swift` | `4e1bf258e03adfe6ef88f00a6981437189adf9923d0cda2b0b9c8c960e54ca3b` |
+| `Sources/UltraList/UIKit/UltraScrollView.swift` | `8cc2111fd3a9b69cb1dc3fb7eabee0a057c0554e72a3e759f66d4dbf8bf66b5e` |
+
+With `bottomGravity == nil` every mapped value is unchanged except:
+
+| Model | Swift |
+| --- | --- |
+| `Readiness.pick` for a scroll to the top ("Edge targets for a scroll to the top") | `scrollToTop(animated:)` always targets `.first` with the first row's top reserve; the `count - 1` branch for a flipped content view is gone. `pick` and its theorems are about the index chosen, which is still one call's edge index |
+| `Insets.cheapSwift`, `Ev.keyboard` | unchanged without gravity; the gravity branch of `updateViewportInsets` computes its own `shift` (below) |
+| `ListPreparation` keys | `requestedPreparations` anchors an edge target at the edge index of the mutation's items (`.last` → `count - 1`) instead of the index stored with the target, and an empty bottom-gravity list at its last row. Which rows are requested changes; how a request is stored and retired does not |
+| (accessibility, unmodeled) | `accessibilityScroll` pages in content order; the sign taken from a flipped content view is gone |
+| the pass's and preflight's `WindowPlacement` (see the preparation-queue review) | a new `gravity` argument, default `false`, leaves every non-gravity placement as it was |
+| `Ev.touch` | the engines also report touch-up and the touch location (`didTouchUp`, `touchLocation(in:)`); nothing without gravity reads them |
+
+The `Placement` and `Pass` theorems about a flipped content view
+(`setter_exact_iff`, the inverted-chat lemma in `Pass.lean`) still hold for a
+host that flips; the repository's demo and tests no longer do except the
+UIKit tests that check that transform support.
+
+Not modeled; checked by exact-value tests instead:
+- `BottomGravity.swift` (UIKit-free): `BottomFollow`'s phases and budget,
+  `GravityAnchor`, `ListWindow.buildGravity` / `gravityEdges` /
+  `gravityCorrection` / `distanceBelowBottom`, and `GravityPass.resolve`
+  and `survivor`. `BottomGravityTests` (Linux, 14 cases) pins the windows,
+  edges, follow distances and anchors with exact values.
+- The gravity branches of the pass in `UltraListView`: the follow's events
+  (arm, hold, release, stop, record), the anchor choice
+  (`gravityAnchorFor`), the reflow state after a width or environment
+  change, `keepFollowedEnd` after a layout, re-anchoring the drag after a
+  gravity pass, and `SizePositionGeometry`'s anchor at `items.count` when the
+  end rests on the bottom inset, and a new row's position motion taken
+  from the row above it (`weldToRowAbove`). `BottomGravityListTests`
+  (UIKit, 29 tests, most in all three engines) covers them, including
+  every-sample checks of the end through rotations, of the row under a
+  finger and of the seams between rows as new ones arrive.
+- A natural Lean model would add `BottomFollow` as a state machine and prove
+  that `drift <= budget` while following and that a pass never moves the
+  anchor except by the follow or an edge rest. Neither is stated yet.
+
 ## Theorems
 
 **Correctness**
