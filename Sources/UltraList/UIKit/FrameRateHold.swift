@@ -12,7 +12,11 @@ import QuartzCore
 /// ask for the full rate from the transaction that starts the motion.
 @MainActor
 final class FrameRateHold {
-    private var link: CADisplayLink?
+    // Written only on the main actor, and read by the nonisolated deinit
+    // once nothing else holds the hold. The deinit isn't isolated: on iOS 26
+    // an isolated deinit crashes in the runtime when an autorelease pool
+    // drained after a main-actor job frees the hold.
+    nonisolated(unsafe) private var link: CADisplayLink?
     private let target = HoldTarget()
     private(set) var isHeld = false
     /// Whether a hold without an end runs; it lasts until `release()`.
@@ -20,7 +24,12 @@ final class FrameRateHold {
     /// When the timed hold ends, in media time; 0 without one.
     private var deadline = 0.0
 
-    isolated deinit { link?.invalidate() }
+    deinit {
+        guard let link else { return }
+        if Thread.isMainThread { link.invalidate(); return }
+        nonisolated(unsafe) let pending = link
+        DispatchQueue.main.async { pending.invalidate() }
+    }
 
     /// Holds until `release()`.
     func hold(maximumFramesPerSecond: Float) {
