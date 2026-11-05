@@ -223,6 +223,42 @@ private final class Chat {
         #expect(list.isFollowingBottom && list.remainingFollowBudget == 44)
     }
 
+    /// A rotation as a host applies it: the bars' insets at the old size,
+    /// then the new size, then the rows' measurements arriving. The end
+    /// stays on the bottom inset in every sample, and the budget is untouched.
+    @Test(arguments: ScrollEngineMode.allCases, [false, true]) func aRotationAtTheEndKeepsItOnTheComposer(mode: ScrollEngineMode, byFrame: Bool) async throws {
+        let list = UltraListView(engineMode: mode)
+        let window = makeWindow()
+        defer { window.isHidden = true }
+        window.frame = .init(x: 0, y: 0, width: 480, height: 480); window.isHidden = false
+        list.frame = .init(x: 0, y: 0, width: 320, height: 400); window.addSubview(list)
+        list.bottomGravity = .init(followBudget: 50)
+        list.layoutIfNeeded()
+        list.applyChanges(items: (0..<200).map { PreparedGravityRow(identity: "p\($0)", slowAwayFrom: 320) }, newInsets: .init(top: 128, bottom: 30), transition: .none)
+        for _ in 0..<600 where list.loadedIndexRange.isEmpty { try await Task.sleep(for: .milliseconds(5)) }
+        var worst = 0.0
+        func sample(_ line: Double) {
+            guard let settled = list.settledFrame(at: 199), let shown = list.presentedFrame(at: 199) else { return }
+            worst = max(worst, abs(Double(settled.maxY) - line), abs(Double(shown.maxY) - line))
+        }
+        for (size, top, bottom) in [(CGSize(width: 480, height: 300), 90.0, 20.0), (CGSize(width: 320, height: 400), 128.0, 30.0)] {
+            list.applyChanges(newInsets: .init(top: top, bottom: bottom), anchorMode: .preserveVisibleContent, compensatesInsetChange: false, transition: .none)
+            var log: [String] = []
+            list.onBottomFollowChanged = { log.append("follow \($0) at \(list.currentScrollOffset)") }
+            // A host that sizes the list itself tells it first; the frame then matches.
+            if !byFrame { list.applyChanges(newSize: size, transition: .none) }
+            list.frame.size = size; list.layoutIfNeeded()
+            let line = Double(size.height) - bottom
+            for _ in 0..<150 {
+                sample(line)
+                if log.count < 12, let frame = list.settledFrame(at: 199) { log.append("\(frame.maxY)/\(list.presentedFrame(at: 199)?.maxY ?? -1)") }
+                try await Task.sleep(for: .milliseconds(2))
+            }
+            #expect(worst < 0.5, "\(mode) by frame \(byFrame) to \(size): \(worst) \(log)")
+            #expect(list.isFollowingBottom && list.remainingFollowBudget == 50)
+        }
+    }
+
     @Test(arguments: ScrollEngineMode.allCases) func theSentMessageIsBroughtIntoViewAndFollowedAfresh(mode: ScrollEngineMode) throws {
         let chat = Chat(mode)
         chat.show(40)
@@ -424,6 +460,22 @@ private final class Chat {
         chat.grow("m38", by: 50, transition: .easeInOut(0.3))
         chat.grow("m99", by: 50, transition: .easeInOut(0.3))
         #expect(chat.frame("m40")?.minY == top)
+    }
+
+    @Test(arguments: ScrollEngineMode.allCases) func awayFromTheEndTheContentMovesWithTheInsetItFollows(mode: ScrollEngineMode) throws {
+        let chat = Chat(mode)
+        chat.show(40, at: 100)
+        // Not compensating, it keeps its distance from a taller top bar.
+        chat.list.applyChanges(newInsets: .init(top: 60, bottom: 30), compensatesInsetChange: false, transition: .none)
+        #expect(chat.frame("m40")?.minY == 140)
+        // Compensating, it moves with the composer instead.
+        chat.list.applyChanges(newInsets: .init(top: 20, bottom: 80), compensatesInsetChange: true, transition: .none)
+        #expect(chat.frame("m40")?.minY == 90)
+        // Both, then the width, in a rotation's order.
+        chat.list.applyChanges(newInsets: .init(top: 40, bottom: 80), compensatesInsetChange: false, transition: .none)
+        chat.list.frame.size.width = 480
+        chat.list.layoutIfNeeded()
+        #expect(chat.frame("m40")?.minY == 110)
     }
 
     @Test(arguments: ScrollEngineMode.allCases) func aWidthChangeKeepsTheReadRowAndTheEnd(mode: ScrollEngineMode) throws {

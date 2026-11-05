@@ -316,6 +316,9 @@ public final class UltraListView: UltraScrollView {
         registerForTraitChanges([UITraitPreferredContentSizeCategory.self, UITraitUserInterfaceStyle.self, UITraitDisplayScale.self, UITraitLayoutDirection.self]) { (view: UltraListView, _: UITraitCollection) in view.setNeedsLayout() }
     }
     public override func layoutSubviews() {
+        // The platform scroll view can move its offset as its frame changes.
+        let restedOnBottom = follow.isFollowing && restsOnBottom
+        defer { if restedOnBottom { keepFollowedEnd() } }
         super.layoutSubviews()
         carousel.frame = bounds
         let size = bounds.size
@@ -323,7 +326,7 @@ public final class UltraListView: UltraScrollView {
         let environment = RenderEnvironment(scale: traits.displayScale > 0 ? traits.displayScale : 3, fontScale: UIFontMetrics.default.scaledValue(for: 100, compatibleWith: traits) / 100, isDark: traits.userInterfaceStyle == .dark, isRightToLeft: effectiveUserInterfaceLayoutDirection == .rightToLeft)
         let changedEnvironment = environment != measurementEnvironment
         measurementEnvironment = environment; measurementEnvironmentKey = environmentKey(environment)
-        if changedEnvironment || abs(viewport.width - size.width) > 0.5, follow.isFollowing, restsOnBottom { reflowing = true }
+        if changedEnvironment || abs(viewport.width - size.width) > 0.5, restedOnBottom { reflowing = true }
         if !changedEnvironment, abs(viewport.width - size.width) <= 0.5,
            abs(viewport.height - size.height) > 0.5, !settledWindow.rows.isEmpty {
             // A height-only viewport change needs no collection diff or
@@ -439,6 +442,15 @@ public final class UltraListView: UltraScrollView {
         change(&follow)
         if !follow.isFollowing { reflowing = false }
         if isFollowingBottom != was { onBottomFollowChanged?(isFollowingBottom) }
+    }
+    /// Puts a following list back on its bottom edge when something other
+    /// than a pass moved it there from.
+    private func keepFollowedEnd() {
+        guard follow.isFollowing, !restsOnBottom, !engine.tracking, !engine.dragging, !engine.decelerating, engine.activeFlight == nil,
+              !settledWindow.rows.isEmpty, settledWindow.range.upperBound == items.count, let maximum = declaredEdges.maximum else { return }
+        engine.shift(by: maximum - engine.offset)
+        previousOffset = engine.offset
+        handleScroll(engine.offset)
     }
     /// The scroll edges of the settled window at the current viewport.
     private var settledEdges: ScrollEdges {
@@ -799,8 +811,10 @@ public final class UltraListView: UltraScrollView {
         var revealedRow: Int?
         if let bottomGravity, target == nil {
             let oldAtBottom = oldWindow.range.upperBound == oldItems.count && declaredEdges.maximum.map { abs(oldSettled - $0) <= 0.5 } == true
+            // A size change keeps a following end where it was; the platform
+            // scroll view may have moved its offset with its frame first.
             if oldWindow.rows.isEmpty || fullReplace { updateFollow { $0.arm() } }
-            else if follow.isFollowing, !oldAtBottom { updateFollow { $0.stop() } }
+            else if follow.isFollowing, !oldAtBottom, !sizeChanged { updateFollow { $0.stop() } }
             else if follow.isFollowing, changesCollection, let last = items.last, oldLookup[last.identity] == nil {
                 // A new last row while following: it gets a full budget.
                 updateFollow { $0.arm() }
@@ -810,6 +824,7 @@ public final class UltraListView: UltraScrollView {
                     revealedRow = first
                 }
             }
+            if follow.isFollowing, oldViewport.width != viewport.width { reflowing = true }
             gravityAnchor = gravityAnchorFor(oldWindow: oldWindow, oldItems: oldItems, oldBase: oldBase, oldOffset: oldOffset, oldSettled: oldSettled,
                 oldViewport: oldViewport, newViewport: viewport, newLookup: newLookup,
                 keepsEnd: oldWindow.rows.isEmpty || fullReplace || follow.isFollowing && (sizeChanged || reflowing) && !changesCollection,
@@ -1242,9 +1257,9 @@ public final class UltraListView: UltraScrollView {
     /// The row a bottom-gravity pass keeps in place (`GravityPass.survivor`)
     /// with its new top on screen, or the end when `keepsEnd` or nothing
     /// survives. A following list keeps the anchor's distance to the bottom
-    /// inset through viewport changes; otherwise the bottom inset's change
-    /// moves it when `compensates`. A width change keeps the share of the
-    /// anchor above the top inset.
+    /// inset through viewport changes; otherwise it keeps its distance to the
+    /// bottom inset when `compensates`, to the top inset when not. A width
+    /// change keeps the share of the anchor above the top inset.
     private func gravityAnchorFor(oldWindow: ListWindow, oldItems: [any ListRow], oldBase: Double, oldOffset: Double, oldSettled: Double,
                                   oldViewport: ListViewport, newViewport: ListViewport, newLookup: [String: Int], keepsEnd: Bool,
                                   compensates: Bool, additionalDistance: Double, keepsReadingPosition: Bool) -> GravityAnchor {
@@ -1255,7 +1270,7 @@ public final class UltraListView: UltraScrollView {
         }), let index = newLookup[oldItems[survivor.index].identity] else { return .end }
         let fixed = oldBase + survivor.y - oldSettled
         let shift = follow.isFollowing ? newViewport.bottomLine - oldViewport.bottomLine
-            : compensates ? oldViewport.insets.bottom - newViewport.insets.bottom : 0
+            : compensates ? oldViewport.insets.bottom - newViewport.insets.bottom : newViewport.insets.top - oldViewport.insets.top
         let fraction = keepsReadingPosition && survivor.height > 0 ? min(1, max(0, (oldViewport.insets.top - fixed) / survivor.height)) : 0
         return .row(index: index, y: fixed + shift + additionalDistance, fraction: fraction, height: survivor.height)
     }
@@ -1342,10 +1357,12 @@ public final class UltraListView: UltraScrollView {
         if bottomGravity != nil {
             // A following list keeps its end on the bottom inset. Otherwise
             // the content moves with the bottom inset when it compensates,
-            // and stays where it is when not, as under a finger that drags
-            // the keyboard down.
+            // and with the top inset when not: it keeps its place under a
+            // finger that drags the keyboard down, and its distance from a
+            // bar that changes height.
+            let moved = compensates ? insets.bottom - oldViewport.insets.bottom : oldViewport.insets.top - insets.top
             if keepsBottom, let maximum = declaredEdges.maximum { shift = maximum - oldOffset }
-            else if compensates { shift = declaredEdges.clamped(oldSettled + insets.bottom - oldViewport.insets.bottom) + oldOverscroll - oldOffset }
+            else if moved != 0 { shift = declaredEdges.clamped(oldSettled + moved) + oldOverscroll - oldOffset }
         } else if holdsPinnedRow, let pinnedIndex, let row = settledWindow.rows.first(where: { $0.index == pinnedIndex }) {
             let oldBoundary = oldViewport.height - oldViewport.insets.bottom + max(0, row.height - oldViewport.visibleHeight / 2)
             let newBoundary = viewport.height - insets.bottom + max(0, row.height - viewport.visibleHeight / 2)
