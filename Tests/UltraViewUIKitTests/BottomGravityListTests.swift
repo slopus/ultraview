@@ -15,6 +15,9 @@ private struct GravityRow: ListRow {
     var fixed = true
     var streaming = false
     var isStreaming: Bool { streaming }
+    /// The person's own message.
+    var pins = false
+    var pinsToBottomEdge: Bool { pins }
     func makeView() -> ListRowView { GravityRowView() }
     func apply(to view: ListRowView, transition: ListTransition) {
         (view as? GravityRowView)?.height = height; (view as? GravityRowView)?.fixed = fixed
@@ -87,6 +90,14 @@ private final class Chat {
         drag(.ended, distance, at: now + 0.6)
         try await settle()
     }
+    /// A quick drag by `distance` points that lifts while moving, so it flings.
+    func flick(by distance: Double) async throws {
+        let now = CACurrentMediaTime()
+        drag(.touchDown, 0, at: now); drag(.began, 0, at: now + 0.01)
+        for step in 1...5 { drag(.changed, distance * Double(step) / 5, at: now + 0.01 + 0.01 * Double(step)) }
+        drag(.ended, distance, at: now + 0.07)
+        try await settle()
+    }
     func frame(_ identity: String) -> CGRect? {
         list.items.firstIndex { $0.identity == identity }.flatMap { list.settledFrame(at: $0) }
     }
@@ -98,6 +109,7 @@ private final class Chat {
         list.loadedIndexRange.first { (list.settledFrame(at: $0)?.maxY ?? 0) > 20 }.map { list.items[$0].identity }
     }
     var lastBottom: Double { Double(list.settledFrame(at: list.items.count - 1)?.maxY ?? .nan) }
+    func bottom(_ identity: String) -> Double? { frame(identity).map { Double($0.maxY) } }
     /// Scrolls so row `index` starts `y` points from the top of the list.
     func show(_ index: Int, at y: Double = 20) {
         list.scrollTo(.init(index: index, pointOffset: y - 20), transition: .none)
@@ -711,6 +723,135 @@ private final class Chat {
         // The stepped engine's samples leave up to a few thousandths of a
         // point between older rows; the arrivals' seams were whole rows.
         #expect(seam < 1, "\(at)")
+    }
+
+    /// A chat whose reply has spent its budget and streams on below the
+    /// composer, then the person's message sent under it.
+    private func sendUnderAStreamingReply(_ mode: ScrollEngineMode) -> Chat {
+        let chat = Chat(mode)
+        chat.rows.append(GravityRow(identity: "reply", height: 20, streaming: true))
+        chat.apply()
+        for _ in 0..<4 { chat.grow("reply", by: 20) }
+        #expect(!chat.list.isFollowingBottom)
+        chat.rows.append(GravityRow(identity: "sent", height: 46, pins: true))
+        chat.apply(.easeInOut(0.2), scrollTo: .bottom)
+        #expect(chat.bottom("sent") == Chat.line && chat.list.isFollowingBottom && chat.list.remainingFollowBudget == 44)
+        return chat
+    }
+
+    /// Steve's rule: the person's own message stays on the composer while
+    /// the reply above it streams on, past any budget.
+    @Test(arguments: ScrollEngineMode.allCases) func aSendStaysOnTheComposerWhileTheReplyAboveStreams(mode: ScrollEngineMode) async throws {
+        let chat = sendUnderAStreamingReply(mode)
+        // The send's own reveal settles first.
+        try await Task.sleep(for: .milliseconds(300))
+        var worst = 0.0
+        for token in 0..<36 {
+            chat.grow("reply", by: token % 4 == 3 ? 22 : 0, transition: token % 2 == 0 ? .easeInOut(0.2) : .none)
+            #expect(chat.bottom("sent") == Chat.line && chat.bottom("reply") == Chat.line - 46, "\(mode) token \(token)")
+            for _ in 0..<3 {
+                try await Task.sleep(for: .milliseconds(16))
+                if let shown = chat.presented("sent") { worst = max(worst, abs(Double(shown.maxY) - Chat.line)) } else { worst = .infinity }
+            }
+        }
+        // Nine lines of growth on top of its 100 points, none of it from the budget.
+        #expect(chat.frame("reply")?.height == 298)
+        #expect(chat.list.isFollowingBottom && chat.list.remainingFollowBudget == 44)
+        #expect(worst < 0.5, "\(mode): the send moved \(worst) off the composer")
+    }
+
+    @Test(arguments: ScrollEngineMode.allCases) func aDragAwayEndsThePinAndReachingTheBottomRestoresIt(mode: ScrollEngineMode) async throws {
+        let chat = sendUnderAStreamingReply(mode)
+        try await chat.slowDrag(by: 80)
+        #expect(!chat.list.isFollowingBottom && chat.bottom("sent") == Chat.line + 80)
+        let reading = try #require(chat.firstVisible)
+        let top = try #require(chat.frame(reading)).minY
+        for _ in 0..<5 { chat.grow("reply", by: 22) }
+        #expect(chat.frame(reading)?.minY == top && chat.bottom("sent") == Chat.line + 80 + 110 && !chat.list.isFollowingBottom)
+        // Dragged past the end, it settles on it and pins again.
+        try await chat.slowDrag(by: -260)
+        #expect(chat.bottom("sent") == Chat.line && chat.list.isFollowingBottom)
+        for _ in 0..<5 { chat.grow("reply", by: 22) }
+        #expect(chat.bottom("sent") == Chat.line && chat.list.remainingFollowBudget == 44)
+        // A fling away, then one back onto the end.
+        try await chat.flick(by: 200)
+        #expect(!chat.list.isFollowingBottom)
+        let away = chat.bottom("sent")
+        chat.grow("reply", by: 22)
+        #expect(chat.bottom("sent") == away.map { $0 + 22 })
+        chat.list.beginMomentum(velocity: 4000)
+        try await chat.settle()
+        chat.grow("reply", by: 22)
+        #expect(chat.bottom("sent") == Chat.line && chat.list.isFollowingBottom, "\(mode): \(String(describing: chat.frame("sent")))")
+    }
+
+    @Test(arguments: ScrollEngineMode.allCases) func aRowArrivingUnderThePinnedSendEndsThePin(mode: ScrollEngineMode) throws {
+        // A streaming answer: a fresh budget, then it holds.
+        let streamed = sendUnderAStreamingReply(mode)
+        streamed.rows.append(GravityRow(identity: "answer", height: 20, streaming: true))
+        streamed.apply()
+        #expect(streamed.lastBottom == Chat.line && streamed.list.remainingFollowBudget == 24)
+        var tops = [streamed.frame("answer")?.minY]
+        for _ in 0..<4 { streamed.grow("answer", by: 10); tops.append(streamed.frame("answer")?.minY) }
+        #expect(zip(tops, tops.dropFirst()).map { ($1 ?? .nan) - ($0 ?? .nan) } == [-10, -10, -4, 0], "\(mode): \(tops)")
+        #expect(!streamed.list.isFollowingBottom)
+        // The reply above it growing now moves nothing being read.
+        let held = streamed.frame("sent")?.minY
+        streamed.grow("reply", by: 22)
+        #expect(streamed.frame("sent")?.minY == held.map { $0 + 22 })
+        // A complete answer shows whole; growth above it is followed by the budget only.
+        let complete = sendUnderAStreamingReply(mode)
+        complete.rows.append(GravityRow(identity: "tool", height: 120))
+        complete.apply(.easeInOut(0.2))
+        #expect(complete.lastBottom == Chat.line && complete.list.isFollowingBottom && complete.list.remainingFollowBudget == 44)
+        complete.grow("reply", by: 100)
+        #expect(complete.lastBottom == Chat.line + 56 && !complete.list.isFollowingBottom)
+    }
+
+    @Test(arguments: ScrollEngineMode.allCases) func queuedSendsPinTheNewest(mode: ScrollEngineMode) throws {
+        let chat = sendUnderAStreamingReply(mode)
+        // A queued send arrives under the first without a scroll.
+        chat.rows.append(GravityRow(identity: "queued", height: 46, pins: true))
+        chat.apply(.easeInOut(0.2))
+        #expect(chat.bottom("queued") == Chat.line && chat.bottom("sent") == Chat.line - 46 && chat.list.isFollowingBottom)
+        for _ in 0..<6 { chat.grow("reply", by: 22) }
+        #expect(chat.bottom("queued") == Chat.line && chat.bottom("sent") == Chat.line - 46 && chat.list.remainingFollowBudget == 44)
+        // A host that clears the flag ends the pin: the budget applies again.
+        chat.rows[chat.rows.count - 1].pins = false
+        chat.rows[chat.rows.count - 1].revision += 1
+        chat.apply()
+        chat.grow("reply", by: 66)
+        #expect(chat.lastBottom == Chat.line + 22 && !chat.list.isFollowingBottom)
+    }
+
+    @Test(arguments: ScrollEngineMode.allCases) func aPinnedSendStaysOnTheComposerThroughTheKeyboardAndRotation(mode: ScrollEngineMode) throws {
+        let chat = sendUnderAStreamingReply(mode)
+        chat.list.applyChanges(newInsets: .init(top: 20, bottom: 280), transition: .keyboard(0.3))
+        #expect(chat.bottom("sent") == 120 && chat.list.isFollowingBottom)
+        for _ in 0..<4 { chat.grow("reply", by: 22) }
+        #expect(chat.bottom("sent") == 120)
+        chat.list.applyChanges(newInsets: .init(top: 20, bottom: 30), compensatesInsetChange: false, transition: .keyboard(0.3))
+        #expect(chat.bottom("sent") == Chat.line && chat.list.isFollowingBottom)
+        // A composer that grows a line, then a rotation.
+        chat.list.applyChanges(newInsets: .init(top: 20, bottom: 52), compensatesInsetChange: false, transition: .none)
+        #expect(chat.bottom("sent") == 348)
+        chat.list.frame.size = .init(width: 480, height: 320)
+        chat.list.layoutIfNeeded()
+        #expect(chat.bottom("sent") == 268 && chat.list.isFollowingBottom)
+        chat.grow("reply", by: 22)
+        #expect(chat.bottom("sent") == 268 && chat.list.remainingFollowBudget == 44)
+    }
+
+    @Test(arguments: ScrollEngineMode.allCases) func aSendTallerThanTheScreenKeepsItsEndOnTheComposer(mode: ScrollEngineMode) throws {
+        let chat = Chat(mode)
+        // Appended while following, without a scroll: shown to its end.
+        chat.rows.append(GravityRow(identity: "long", height: 600, pins: true))
+        chat.apply()
+        #expect(chat.bottom("long") == Chat.line && chat.list.isFollowingBottom)
+        chat.grow("m99", by: 40)
+        #expect(chat.bottom("long") == Chat.line && chat.list.isFollowingBottom)
+        chat.grow("long", by: 30)
+        #expect(chat.bottom("long") == Chat.line && chat.list.remainingFollowBudget == 44)
     }
 }
 #endif

@@ -884,7 +884,8 @@ public final class UltraListView: UltraScrollView {
             }
         } else if let gravityAnchor {
             let pass = GravityPass.resolve(count: items.count, anchor: gravityAnchor, viewport: viewport, margin: preloadMargin,
-                                           clamps: gravityClamps, follow: follow, arrival: arrival, measure: measure)
+                                           clamps: gravityClamps, follow: follow, arrival: arrival,
+                                           pinsEnd: items.last?.pinsToBottomEdge == true, measure: measure)
             gravityPass = pass; newWindow = pass.window
         } else {
             newWindow = preserved.window(count: items.count, margin: preloadMargin, measure: measure)
@@ -1524,7 +1525,7 @@ public final class UltraListView: UltraScrollView {
                 oldViewport: viewport, newViewport: next, newLookup: identityIndices, keepsEnd: follow.isFollowing, compensates: true,
                 additionalDistance: 0, keepsReadingPosition: true)
             window = GravityPass.resolve(count: items.count, anchor: anchor, viewport: next, margin: margin, clamps: true,
-                                         follow: follow, measure: measure).window
+                                         follow: follow, pinsEnd: items.last?.pinsToBottomEdge == true, measure: measure).window
         } else {
             window = preserved.window(count: items.count, margin: margin, measure: measure)
         }
@@ -2034,7 +2035,8 @@ public final class UltraListView: UltraScrollView {
                 if arrival?.streams == true { predicted.arm() }
             }
             window = GravityPass.resolve(count: mutation.items.count, anchor: anchor, viewport: viewport, margin: preloadMargin,
-                                         clamps: clamps, follow: predicted, arrival: arrival, measure: measure).window
+                                         clamps: clamps, follow: predicted, arrival: arrival,
+                                         pinsEnd: mutation.items.last?.pinsToBottomEdge == true, measure: measure).window
         } else {
             window = preserved.window(count: mutation.items.count, margin: preloadMargin, measure: measure)
         }

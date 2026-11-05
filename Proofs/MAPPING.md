@@ -2979,10 +2979,10 @@ flips its content view. Pins at the end of this review:
 
 | Source | SHA-256 |
 | --- | --- |
-| `Sources/UltraList/BottomGravity.swift` | `5dc16a2a7ba975d9c3ad470863747b7ec61390b95e320597f889f6832bd26182` |
-| `Sources/UltraList/UIKit/UltraListView.swift` | `96d96bbfd7b80953b1614d7b1634ad2fabb3b9ed8b045bbdc4dbdc1e3f5d5c22` |
+| `Sources/UltraList/BottomGravity.swift` | `650dd8f22ae05509d1e6385355c1305c9b828731ed18b95f10188cca5c967a10` |
+| `Sources/UltraList/UIKit/UltraListView.swift` | `6ab388dbaf68b618fb2cfbb426aac46dc59e9cdc40daba3cd06da8ce16111232` |
 | `Sources/UltraList/WindowProjection.swift` | `3d5894795d15116ceeab6a1824a7e29c93bd4530b1866d154a680478fc3adce7` |
-| `Sources/UltraList/UIKit/ListRow.swift` | `a9487dc973a671a8d9b342190142d2330622b67a116313bb24f5d91e4e22fe99` |
+| `Sources/UltraList/UIKit/ListRow.swift` | `eb06e65c217b8478df35f152ba48ed9b8d9606f3ce67b47b13ccd366188cd0ba` |
 | `Sources/UltraList/UIKit/NodeRow.swift` | `7d4f0e858a9db1f78b95262c10fd676e8a3d65a94a330c16ac885a17c2f92531` |
 | `Sources/UltraList/UIKit/ScrollEngine.swift` | `6c73260a99d209cc42520aa965b31e07b2fdd72c522231a8a312bb86b64c4df8` |
 | `Sources/UltraList/UIKit/UltraScrollView.swift` | `8cc2111fd3a9b69cb1dc3fb7eabee0a057c0554e72a3e759f66d4dbf8bf66b5e` |
@@ -3008,8 +3008,9 @@ Not modeled; checked by exact-value tests instead:
 - `BottomGravity.swift` (UIKit-free): `BottomFollow`'s phases and budget,
   `GravityAnchor`, `ListWindow.buildGravity` / `gravityEdges` /
   `gravityCorrection` / `distanceBelowBottom`, `GravityPass.resolve`
-  (with an arrival's reveal outside the budget) and `survivor`, and
-  `GravityArrival.find`. `BottomGravityTests` (Linux, 15 cases) pins the windows,
+  (with an arrival's reveal and a pinned end outside the budget) and
+  `survivor`, and `GravityArrival.find`. `BottomGravityTests` (Linux, 16
+  cases) pins the windows,
   edges, follow distances and anchors with exact values.
 - The gravity branches of the pass in `UltraListView`: the follow's events
   (arm, hold, release, stop, record), the anchor choice
@@ -3019,8 +3020,10 @@ Not modeled; checked by exact-value tests instead:
   end rests on the bottom inset, and a new row's position motion taken
   from the row above it when no kept row sits below it
   (`weldToRowAbove`), and which new rows a pass reveals or follows
-  (`gravityArrival`, `ListRow.isStreaming`). `BottomGravityListTests`
-  (UIKit, 34 tests, most in all three engines) covers them, including
+  (`gravityArrival`, `ListRow.isStreaming`), and the last row's
+  `pinsToBottomEdge` handed to every gravity pass as `pinsEnd`.
+  `BottomGravityListTests` (UIKit, 40 tests, most in all three engines)
+  covers them, including
   every-sample checks of the end through rotations, of the row under a
   finger and of the seams between rows as new ones arrive.
 - A natural Lean model would add `BottomFollow` as a state machine and prove

@@ -109,6 +109,11 @@ public final class ListInPlacePreparation {
 public protocol ListRow {
     var identity: String { get }
     var revision: UInt64 { get }
+    /// A row that holds the bottom edge. In a list without bottom gravity,
+    /// targeting it arms a latch that a touch releases. In a bottom-gravity
+    /// list it marks the person's own message, sent or queued: while it is
+    /// the last row and the list follows, it stays on the bottom inset
+    /// whatever grows above it.
     var pinsToBottomEdge: Bool { get }
     var attachments: [String: any ListAttachment] { get }
     var measuresAsynchronously: Bool { get }

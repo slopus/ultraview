@@ -291,6 +291,19 @@ continues below the bottom inset. `BottomFollow` holds the state:
   bottom inset (a row taller than the visible height shows its end) and
   re-arms. Use it in the same `applyChanges` as the sent row.
 
+**The person's own message stays at the foot.** A row that sets
+`pinsToBottomEdge` (`NodeRow` takes it in its initializer) is one the
+person sent or queued. While it is the last row and the list is following,
+every height change above it is followed in full, outside the budget: its
+end stays on the bottom inset, a reply streaming above it grows upward and
+older content leaves at the top. The list reads the flag on its last row
+in every pass, so with several queued sends the newest one holds, and a
+host that clears the flag ends the pin. A pinned row that arrives is shown
+to its end even when it is taller than the visible height. The pin ends
+when a drag or fling stops following, and when a row arrives below it: a
+streaming one gets a fresh budget, a complete one shows whole. Coming back
+to rest on the bottom edge while the row is still last pins it again.
+
 **The viewport.** While following, inset, height, width and environment
 changes (the keyboard, rotation, Dynamic Type) keep the end on the bottom
 inset without spending the budget, including the measurements that arrive
@@ -303,8 +316,9 @@ share of the anchor row above the top inset.
 
 `isFollowingBottom`, `remainingFollowBudget`, `onBottomFollowChanged` and
 `distanceFromBottom` drive a host's scroll-to-bottom affordance; the demo
-shows one while more than a line of newer content is out of view. Row
-pinning (`pinsToBottomEdge`) is ignored in this mode. `scrollToTop` goes to
+shows one while more than a line of newer content is out of view. The
+bottom-edge pin of an inverted list's row (`holdsPinnedRow`) isn't used in
+this mode; `pinsToBottomEdge` means the foot pin above. `scrollToTop` goes to
 the first row, and accessibility page scrolls follow reading order.
 
 ## Scroll to top

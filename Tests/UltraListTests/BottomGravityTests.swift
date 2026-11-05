@@ -260,4 +260,37 @@ import Testing
         let stopped = pass([60], arrival: complete, follow: BottomFollow(budget: 44, phase: .stopped))
         #expect(stopped.followed == 0 && stopped.revealed == 0 && top(stopped.window, 20) == 370)
     }
+
+    @Test func aPinnedLastRowStaysOnTheBottomInsetOutsideTheBudget() {
+        // Row 19 is the person's message on the bottom inset; row 18, the
+        // reply above it, grew by 200.
+        var values = Array(repeating: 50.0, count: 20)
+        values[18] = 250
+        func pass(_ values: [Double], pins: Bool, arrival: GravityArrival? = nil, follow: BottomFollow = BottomFollow(budget: 44)) -> GravityPass {
+            GravityPass.resolve(count: values.count, anchor: .row(index: 13, y: 20), viewport: viewport, clamps: true,
+                                follow: follow, arrival: arrival, pinsEnd: pins, measure: heights(values))
+        }
+        let budgeted = pass(values, pins: false)
+        #expect(budgeted.followed == 44 && budgeted.revealed == 0 && !budgeted.atBottom)
+        let pinned = pass(values, pins: true)
+        #expect(pinned.followed == 200 && pinned.revealed == 200 && pinned.moved == 200 && pinned.atBottom && pinned.window.maxY == 370)
+        #expect(top(pinned.window, 13) == -180)
+        // A spent budget doesn't limit it; a list that isn't following moves nothing.
+        var spent = BottomFollow(budget: 44)
+        spent.record(moved: 44, atBottom: true)
+        #expect(pass(values, pins: true, follow: spent) == pinned)
+        #expect(pass(values, pins: true, follow: BottomFollow(budget: 44, phase: .stopped)).followed == 0)
+        #expect(pass(values, pins: true, follow: BottomFollow(budget: 44, phase: .held)).followed == 0)
+        // A pinned row taller than the visible height arrives: its end rests
+        // on the bottom inset, where a complete row would show its top.
+        let tall = Array(repeating: 50.0, count: 20) + [500]
+        let complete = GravityArrival(first: 20, revealsThrough: 20, streams: false)
+        #expect(pass(tall, pins: false, arrival: complete).followed == 350)
+        let sent = pass(tall, pins: true, arrival: complete)
+        #expect(sent.followed == 500 && sent.revealed == 500 && sent.atBottom && top(sent.window, 20) == -130)
+        // An end too far to measure is still reached.
+        let far = GravityPass.resolve(count: 1000, anchor: .row(index: 500, y: 0), viewport: viewport, clamps: true,
+                                      follow: BottomFollow(budget: 44), pinsEnd: true, measure: { _ in (50, 0, 0) })
+        #expect(far.atBottom && far.window.maxY == 370 && far.window.range.upperBound == 1000 && far.revealed == far.followed)
+    }
 }

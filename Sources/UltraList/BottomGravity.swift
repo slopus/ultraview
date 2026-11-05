@@ -6,11 +6,14 @@ import Foundation
 /// it empty, and the list opens on its last row.
 ///
 /// Nothing the person is reading moves because content changed, except in
-/// three cases. A list resting on its bottom edge shows complete new rows
+/// four cases. A list resting on its bottom edge shows complete new rows
 /// at its end whole, and follows a streaming row (`ListRow.isStreaming`) and
-/// growth at its end only by `followBudget` points in total. Content shorter
-/// than the viewport always rests on the bottom inset. See `BottomFollow`
-/// for when the budget is spent and when it is filled again.
+/// growth at its end only by `followBudget` points in total. While its last
+/// row pins to the bottom edge (`ListRow.pinsToBottomEdge`, the person's
+/// own message), it keeps that row on the bottom inset whatever grows above
+/// it. Content shorter than the viewport always rests on the bottom inset.
+/// See `BottomFollow` for when the budget is spent and when it is filled
+/// again.
 public struct ListBottomGravity: Sendable, Equatable {
     /// How far, in points, the list moves its content up by itself to follow
     /// a streaming row and growth at its end, before it stops and lets them
@@ -76,7 +79,8 @@ public struct GravityArrival: Sendable, Equatable {
 ///   scrolled there, or the host scrolled to the bottom (`scrollToBottom`, a
 ///   `.bottom` target, a target that lands on the bottom edge), or a new
 ///   streaming row arrived at the end while the list was following. The
-///   budget is full again. Complete new rows neither fill nor spend it.
+///   budget is full again. Complete new rows neither fill nor spend it,
+///   and neither does keeping a pinned last row on the bottom inset.
 /// - `hold()`: a finger touched the list. Nothing follows while it is down.
 /// - `release(atBottom:)`: the finger lifted without scrolling. A held list
 ///   follows again with what was left of its budget, but only if it is still
@@ -246,8 +250,8 @@ public struct GravityPass: Sendable, Equatable {
     public let followed: Double
     /// Whether the content's end rests on the bottom inset.
     public let atBottom: Bool
-    /// The part of `followed` that showed complete new rows, outside the
-    /// budget.
+    /// The part of `followed` that showed complete new rows or kept a
+    /// pinned last row on the bottom inset, outside the budget.
     public let revealed: Double
 
     /// Builds the window around `anchor`, resting it on its edges when
@@ -256,8 +260,11 @@ public struct GravityPass: Sendable, Equatable {
     /// the budget until the end of row `revealsThrough` rests on the bottom
     /// inset, or the first new row's top reaches the top inset, whichever
     /// comes first; only in the first case does the budget cover the rest.
+    /// With `pinsEnd` (the last row pins to the bottom edge), a following
+    /// pass rests the end on the bottom inset outside the budget, however
+    /// far that is and whatever arrived.
     public static func resolve(count: Int, anchor: GravityAnchor, viewport: ListViewport, margin: Double = 160, clamps: Bool,
-                               follow: BottomFollow, arrival: GravityArrival? = nil,
+                               follow: BottomFollow, arrival: GravityArrival? = nil, pinsEnd: Bool = false,
                                measure: (Int) -> (height: Double, top: Double, bottom: Double)?) -> GravityPass {
         func build(_ lift: Double) -> ListWindow {
             ListWindow.buildGravity(count: count, anchor: anchor, viewport: viewport, margin: margin, clamps: clamps, lift: lift, measure: measure)
@@ -285,7 +292,7 @@ public struct GravityPass: Sendable, Equatable {
                 let needed: Double
                 if let below = window.distanceBelowBottom(count: count, viewport: viewport) { needed = below + followed }
                 else if let current = top(window), let end = endTop() { needed = current - end + followed }
-                else if follow.remaining.isInfinite, let ended, !ended.rows.isEmpty {
+                else if follow.remaining.isInfinite || pinsEnd, let ended, !ended.rows.isEmpty {
                     // Too far to measure, and nothing limits the follow.
                     followed += window.maxY - viewport.bottomLine
                     window = ended; break
@@ -295,7 +302,9 @@ public struct GravityPass: Sendable, Equatable {
                     needed = window.maxY - viewport.bottomLine + followed
                 }
                 var total: Double
-                if let arrival, let through = arrival.revealsThrough {
+                if pinsEnd {
+                    total = needed
+                } else if let arrival, let through = arrival.revealsThrough {
                     // Rows not loaded yet lie below: following further loads them.
                     let room = window.rows.first { $0.index == arrival.first }.map { max(0, $0.y - viewport.insets.top) } ?? .infinity
                     let shown = window.rows.first { $0.index == through }.map { $0.y + $0.height - viewport.bottomLine + followed } ?? needed
@@ -314,6 +323,7 @@ public struct GravityPass: Sendable, Equatable {
                 window = build(followed)
             }
         }
+        if pinsEnd { revealed = followed }
         let moved = anchor == .end ? 0 : top(window).map { intended - $0 } ?? forced + followed
         let atBottom = window.distanceBelowBottom(count: count, viewport: viewport).map { abs($0) <= 0.5 } ?? false
         return .init(window: window, moved: moved, followed: followed, atBottom: atBottom, revealed: min(revealed, followed))

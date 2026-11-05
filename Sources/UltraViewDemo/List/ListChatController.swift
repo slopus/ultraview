@@ -626,7 +626,7 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
             // bubble shows, a snapshot keeps the draft in the field.
             let source = draftFrames()
             showDraftSnapshot()
-            let message = ChatMessage(id: "sent-\(nextID)", text: body, outgoing: true, time: ChatThread.now())
+            let message = ChatMessage(id: "sent-\(nextID)", text: body, outgoing: true, time: ChatThread.now(), sent: true)
             thread.insert(message, appearance: .growing(from: { [weak self] in
                 self?.draftDidLeave()
                 return source
@@ -635,7 +635,7 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
             transition = thread.config.send
         } else {
             var cards = chaosRows
-            var row = DemoListRow(identity: "sent-\(nextID)", title: "You", body: body, height: 100, tint: .systemIndigo)
+            var row = DemoListRow(identity: "sent-\(nextID)", title: "You", body: body, height: 100, tint: .systemIndigo, pinsToBottomEdge: true)
             if hostProbe { row.extraAttachments = headers(group: -1, sender: "You") }
             cards.append(withSwipeActions(row))
             rows = cards

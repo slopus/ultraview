@@ -53,6 +53,9 @@ struct ChatMessage: Sendable, Equatable {
     var alternate: String?
     /// A reply still streaming in.
     var streaming = false
+    /// Sent from the composer: it stays on the composer while a reply above
+    /// it grows.
+    var sent = false
 }
 
 /// Where a bubble sits in a run of messages from the same sender, oldest
@@ -307,6 +310,7 @@ struct ChatBubbleRow: ListRow {
     var identity: String { message.id }
     var measuresAsynchronously: Bool { true }
     var isStreaming: Bool { message.streaming }
+    var pinsToBottomEdge: Bool { message.sent }
 
     func makeView() -> ListRowView { node.makeView() }
     func apply(to view: ListRowView, transition: ListTransition) {
