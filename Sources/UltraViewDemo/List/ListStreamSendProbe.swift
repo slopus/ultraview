@@ -638,10 +638,12 @@ final class ListStreamSendProbe: NSObject {
         else if send.lastShrinking != nil, send.shrinkEnd == nil { send.shrinkEnd = t }
         if sent, send.firstSent == nil { send.firstSent = t }
         if sent, send.curve == nil, let first = send.firstSent, let view = list.loadedItemView(at: list.items.count - 1) {
-            if let slide = insertCurve("rowSlide", view.layer, "ultraview.list.positionY", sendTime: send.sendTime) {
-                send.curve = slide; send.distance = abs(slide.to - slide.from)
-            } else if let track = insertCurve("viewport", list.contentView.layer, "ultraview.list.viewportOffset", sendTime: send.sendTime) {
+            // The viewport carries the sent row up by its height; a slide of
+            // the row's own is only what it shares with the row above it.
+            if let track = insertCurve("viewport", list.contentView.layer, "ultraview.list.viewportOffset", sendTime: send.sendTime) {
                 send.curve = track
+            } else if let slide = insertCurve("rowSlide", view.layer, "ultraview.list.positionY", sendTime: send.sendTime) {
+                send.curve = slide; send.distance = abs(slide.to - slide.from)
             } else if t - first > 0.1 { send.curve = .fallback(begin: first) }
             if let curve = send.curve {
                 if send.distance == nil { send.distance = list.settledFrame(at: list.items.count - 1).map { Double($0.height) } }

@@ -52,7 +52,10 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
     override func viewDidLoad() {
         super.viewDidLoad(); view.backgroundColor = .systemGroupedBackground; view.clipsToBounds = true
         // Oldest at the top; growth at the end is followed by two lines.
-        list.bottomGravity = .lines(lineHeight: UIFont.preferredFont(forTextStyle: .body).lineHeight)
+        // Two body lines; `-listFollowBudget <points>` overrides it for tests
+        // that watch a whole reply stream in.
+        let budget = UserDefaults.standard.string(forKey: "listFollowBudget").flatMap(Double.init)
+        list.bottomGravity = budget.map { .init(followBudget: $0) } ?? .lines(lineHeight: UIFont.preferredFont(forTextStyle: .body).lineHeight)
         list.keyboardDismissMode = .interactive
         list.accessibilityIdentifier = "chatList"
         // Chaos runs mutate card rows; `-chatCards YES` shows them too.

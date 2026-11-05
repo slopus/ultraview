@@ -14,8 +14,10 @@ import UltraView
 /// 120 ms around the row under it: rows above it grow, shrink and go,
 /// older rows arrive at the top, the row itself and rows below it grow,
 /// and the last row grows. Each frame compares the row's top on screen with
-/// the finger; the gap must stay what it was at touch-down (strictly while
-/// the finger rests, within a frame's travel while it moves).
+/// the finger; the gap must stay what it was when the drag began (strictly
+/// while the finger rests, within a frame's travel while it moves). The
+/// drag begins after the finger has moved a few points, which the content
+/// doesn't follow, as with any scroll view; `slop` reports that distance.
 ///
 /// `stream`: after Stream is tapped at the newest message, each frame
 /// measures how far the message that was newest rose on screen. It must
@@ -60,6 +62,10 @@ final class ListGravityProbe: NSObject, UIGestureRecognizerDelegate {
     private var lastMove = 0.0
     private var touched: String?
     private var gap0 = 0.0
+    private var slop: Double?
+    private var dragged = false
+    private var dragGaps: [Double] = []
+    private var errors: [[Double]] = []
     private var holdFrames = 0, dragFrames = 0, missingFrames = 0
     private var holdMax = 0.0, dragMax = 0.0
     private var dragStep = 0.0, previousFinger: Double?
@@ -182,13 +188,21 @@ final class ListGravityProbe: NSObject, UIGestureRecognizerDelegate {
         guard let index = chat.list.items.firstIndex(where: { $0.identity == touched }), let rect = shown(index, in: chat) else {
             missingFrames += 1; return
         }
-        let error = abs(Double(rect.minY - finger.y) - gap0)
+        let gap = Double(rect.minY - finger.y)
         let resting = CACurrentMediaTime() - lastMove > 0.05
-        if resting {
+        if chat.list.isDragging { dragged = true }
+        // The gap the drag keeps is the one the finger first rests at.
+        if dragged, slop == nil, resting { slop = gap - gap0; gap0 = gap }
+        if errors.count < 600 {
+            errors.append([CACurrentMediaTime(), gap - gap0, chat.list.isDragging ? 1 : 0, Double(mutations.count)])
+        }
+        if resting, !dragged || slop != nil {
+            let error = abs(gap - gap0)
             holdFrames += 1
             if error > holdMax { holdMax = error; worst = ["error": error, "row": touched, "mutations": mutations.suffix(3).joined(separator: ","), "resting": true] }
-        } else {
-            dragFrames += 1; dragMax = max(dragMax, error)
+        } else if dragged, !resting {
+            // Before the drag begins, the content doesn't follow the finger.
+            dragGaps.append(gap)
             if let previousFinger { dragStep = max(dragStep, abs(Double(finger.y) - previousFinger)) }
         }
         previousFinger = Double(finger.y)
@@ -235,8 +249,15 @@ final class ListGravityProbe: NSObject, UIGestureRecognizerDelegate {
         if scenario == "hold" {
             document["touched"] = touched ?? ""
             document["holdFrames"] = holdFrames; document["dragFrames"] = dragFrames; document["missingFrames"] = missingFrames
+            dragFrames = dragGaps.count
+            dragMax = dragGaps.map { abs($0 - gap0) }.max() ?? 0
+            document["dragFrames"] = dragFrames
             document["holdMaxError"] = holdMax; document["dragMaxError"] = dragMax; document["dragMaxStep"] = dragStep
-            document["worst"] = worst; document["mutations"] = mutations
+            document["worst"] = worst; document["mutations"] = mutations; document["slop"] = slop ?? 0
+            // Each mutation's first frame after it, and the frames where the error changed.
+            var changes: [[Double]] = [], last = Double.nan
+            for entry in errors where last.isNaN || abs(entry[1] - last) > 0.25 { changes.append(entry); last = entry[1] }
+            document["errorChanges"] = Array(changes.prefix(80))
         } else {
             var settledRise = -1.0
             if let reference, let index = list.items.firstIndex(where: { $0.identity == reference }), let rect = shown(index, in: chat) {

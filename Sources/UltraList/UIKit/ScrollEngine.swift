@@ -598,7 +598,11 @@ final class PlatformEngine: NSObject, ScrollEngine, UIScrollViewDelegate {
     }
     func containerOrigin(height: Double, top: Bool, bottom: Bool) -> Double { top ? 0 : bottom ? 10_000_000 - height : 5_000_000 - height / 2 }
     func touchLocation(in view: UIView) -> CGPoint? {
-        touchObserver.hasActiveTouches && touchObserver.numberOfTouches > 0 ? touchObserver.location(in: view) : nil
+        if touchObserver.hasActiveTouches, touchObserver.numberOfTouches > 0 { return touchObserver.location(in: view) }
+        // The observer fails once the scroll view's pan recognizes, and the
+        // pan follows the finger from there.
+        let pan = scroll.panGestureRecognizer
+        return (pan.state == .began || pan.state == .changed) && pan.numberOfTouches > 0 ? pan.location(in: view) : nil
     }
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         guard !writing else { return }

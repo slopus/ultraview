@@ -146,13 +146,14 @@ final class ChatBubbleScreenTests: XCTestCase {
         }
     }
 
-    /// A streamed reply grows word by word, its bottom on the line above the
-    /// field while the list follows it and below that line afterwards; it
-    /// never narrows, shrinks or disappears, and its time stays at the same
+    /// A streamed reply grows word by word with its bottom on the same line
+    /// above the field (the list follows it without a budget here), never
+    /// narrows, shrinks or disappears, and its time stays at the same
     /// distance from its right edge.
     @MainActor func testAStreamedReplyGrowsWithItsTimeAlongItsEdge() throws {
         for engine in engines {
-            let app = launch(engine, ["-bubbleStreamInterval", "250"])
+            // The list follows the whole reply, so its end stays in view.
+            let app = launch(engine, ["-bubbleStreamInterval", "250", "-listFollowBudget", "100000"])
             let width = Double(app.frame.width)
             let bar = Points(app.otherElements["composerBar"].frame)
             let stream = app.buttons["Stream"]
@@ -179,13 +180,10 @@ final class ChatBubbleScreenTests: XCTestCase {
             let settled = Array(seen.drop { $0.time < (seen.first?.time ?? 0) + 0.5 })
             XCTAssertGreaterThan(settled.count, 5, "\(engine): the reply was seen in too few screens")
             guard let base = settled.first else { continue }
-            // The list follows the reply's growth by its budget, its bottom on
-            // the composer, then lets it grow on below: the bottom never rises.
             for item in settled {
-                XCTAssertGreaterThanOrEqual(item.bottom, base.bottom - 1.5, "\(engine): the reply's bottom rose at \(item.time)")
+                XCTAssertEqual(item.bottom, base.bottom, accuracy: 1.5, "\(engine): the reply's bottom moved at \(item.time)")
             }
             for (a, b) in zip(settled, settled.dropFirst()) {
-                XCTAssertGreaterThanOrEqual(b.bottom, a.bottom - 1.5, "\(engine): the reply's bottom rose: \(a.summary) → \(b.summary)")
                 XCTAssertGreaterThanOrEqual(b.right, a.right - 1.5, "\(engine): the reply narrowed: \(a.summary) → \(b.summary)")
                 XCTAssertLessThanOrEqual(b.top, a.top + 1.5, "\(engine): the reply got shorter: \(a.summary) → \(b.summary)")
             }
