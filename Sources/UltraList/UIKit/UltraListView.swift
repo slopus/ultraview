@@ -443,6 +443,10 @@ public final class UltraListView: UltraScrollView {
         if !follow.isFollowing { reflowing = false }
         if isFollowingBottom != was { onBottomFollowChanged?(isFollowingBottom) }
     }
+    private func gravityArrival(in items: [any ListRow], after oldItems: [any ListRow], oldLookup: [String: Int]) -> GravityArrival? {
+        GravityArrival.find(count: items.count, oldCount: oldItems.count, identity: { items[$0].identity }, oldIdentity: { oldItems[$0].identity },
+                            isNew: { oldLookup[items[$0].identity] == nil }, streams: { items[$0].isStreaming })
+    }
     /// Puts a following list back on its bottom edge when something other
     /// than a pass moved it there from.
     private func keepFollowedEnd() {
@@ -808,21 +812,18 @@ public final class UltraListView: UltraScrollView {
         // the end on the bottom inset within its budget.
         let gravityClamps = !(engine.tracking || engine.dragging || engine.decelerating || engine.activeFlight != nil || absorbsEdgeChangeIntoOverscroll)
         var gravityAnchor: GravityAnchor?
-        var revealedRow: Int?
-        if let bottomGravity, target == nil {
+        var arrival: GravityArrival?
+        if bottomGravity != nil, target == nil {
             let oldAtBottom = oldWindow.range.upperBound == oldItems.count && declaredEdges.maximum.map { abs(oldSettled - $0) <= 0.5 } == true
             // A size change keeps a following end where it was; the platform
             // scroll view may have moved its offset with its frame first.
             if oldWindow.rows.isEmpty || fullReplace { updateFollow { $0.arm() } }
             else if follow.isFollowing, !oldAtBottom, !sizeChanged { updateFollow { $0.stop() } }
-            else if follow.isFollowing, changesCollection, let last = items.last, oldLookup[last.identity] == nil {
-                // A new last row while following: it gets a full budget.
-                updateFollow { $0.arm() }
-                if bottomGravity.revealsNewRows {
-                    var first = items.count - 1
-                    while first > 0, oldLookup[items[first - 1].identity] == nil { first -= 1 }
-                    revealedRow = first
-                }
+            else if follow.isFollowing, changesCollection {
+                // New rows at the end while following: complete ones show
+                // whole, and a streaming one gets a full budget.
+                arrival = gravityArrival(in: items, after: oldItems, oldLookup: oldLookup)
+                if arrival?.streams == true { updateFollow { $0.arm() } }
             }
             if follow.isFollowing, oldViewport.width != viewport.width { reflowing = true }
             gravityAnchor = gravityAnchorFor(oldWindow: oldWindow, oldItems: oldItems, oldBase: oldBase, oldOffset: oldOffset, oldSettled: oldSettled,
@@ -883,7 +884,7 @@ public final class UltraListView: UltraScrollView {
             }
         } else if let gravityAnchor {
             let pass = GravityPass.resolve(count: items.count, anchor: gravityAnchor, viewport: viewport, margin: preloadMargin,
-                                           clamps: gravityClamps, follow: follow, reveal: revealedRow, measure: measure)
+                                           clamps: gravityClamps, follow: follow, arrival: arrival, measure: measure)
             gravityPass = pass; newWindow = pass.window
         } else {
             newWindow = preserved.window(count: items.count, margin: preloadMargin, measure: measure)
@@ -1019,7 +1020,7 @@ public final class UltraListView: UltraScrollView {
         if absorbsEdgeChangeIntoOverscroll || bottomGravity != nil { engine.reanchorDrag() }
         if bottomGravity != nil {
             if let gravityPass {
-                updateFollow { $0.record(moved: gravityPass.revealed ? 0 : gravityPass.moved, atBottom: gravityPass.atBottom) }
+                updateFollow { $0.record(moved: gravityPass.moved - gravityPass.revealed, atBottom: gravityPass.atBottom) }
             } else if target != nil {
                 // A scroll that lands on the end follows from there afresh.
                 let atBottom = newWindow.distanceBelowBottom(count: items.count, viewport: viewport).map { abs($0) <= 0.5 } ?? false
@@ -1139,10 +1140,13 @@ public final class UltraListView: UltraScrollView {
                                   restarts: displacing || animations.positionLayersChanged(.row(id)))
             retainCarry(id, view: carry.view, transition: transition)
         }
-        // A chat's new row comes in against the row above it, moving with
-        // that row (its own size followers already match the neighbour's).
+        // A chat's new row at its end comes in against the row above it,
+        // moving with that row (its own size followers already match the
+        // neighbour's). One that opens a place above a kept row shows where
+        // it settles, as the rows above make room.
         func weldToRowAbove(_ row: WindowRow, owner: AnimationOwner) {
             guard bottomGravity != nil, !isCarousel, !fullReplace, !transition.isImmediate, row.index > 0,
+                  !items[(row.index + 1)...].contains(where: { oldLookup[$0.identity] != nil }),
                   settledWindow.rows.contains(where: { $0.index == row.index - 1 }) else { return }
             animations.inheritPosition(owner, from: .row(items[row.index - 1].identity))
         }
@@ -2023,10 +2027,14 @@ public final class UltraListView: UltraScrollView {
                 oldViewport: viewport, newViewport: viewport, newLookup: identityIndices, keepsEnd: false, compensates: mutation.compensates,
                 additionalDistance: 0, keepsReadingPosition: false)
             let clamps = !(engine.tracking || engine.dragging || engine.decelerating || engine.activeFlight != nil || mutation.absorbsOverscroll)
-            var predicted = follow
+            var predicted = follow, arrival: GravityArrival?
             if predicted.isFollowing, declaredEdges.maximum.map({ abs(oldSettled - $0) <= 0.5 }) != true { predicted.stop() }
+            if predicted.isFollowing {
+                arrival = gravityArrival(in: mutation.items, after: items, oldLookup: identityIndices)
+                if arrival?.streams == true { predicted.arm() }
+            }
             window = GravityPass.resolve(count: mutation.items.count, anchor: anchor, viewport: viewport, margin: preloadMargin,
-                                         clamps: clamps, follow: predicted, measure: measure).window
+                                         clamps: clamps, follow: predicted, arrival: arrival, measure: measure).window
         } else {
             window = preserved.window(count: mutation.items.count, margin: preloadMargin, measure: measure)
         }

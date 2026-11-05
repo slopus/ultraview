@@ -51,6 +51,8 @@ struct ChatMessage: Sendable, Equatable {
     var time: String
     /// An edit swaps in this text and back.
     var alternate: String?
+    /// A reply still streaming in.
+    var streaming = false
 }
 
 /// Where a bubble sits in a run of messages from the same sender, oldest
@@ -304,6 +306,7 @@ struct ChatBubbleRow: ListRow {
     var trailingSwipeActions: [ListSwipeAction] = []
     var identity: String { message.id }
     var measuresAsynchronously: Bool { true }
+    var isStreaming: Bool { message.streaming }
 
     func makeView() -> ListRowView { node.makeView() }
     func apply(to view: ListRowView, transition: ListTransition) {

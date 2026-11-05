@@ -116,9 +116,10 @@ points keep their places and are only redrawn. See [the list design](Docs/UltraL
 for threading, measurement, animation and host behavior.
 
 A chat sets `bottomGravity`: rows stay in natural order (oldest first),
-short content rests on the bottom inset, nothing being read moves when
-content changes, and a list at its end follows growth there by a budget of
-about two lines, then lets it continue below:
+short content rests on the bottom inset, and nothing being read moves when
+content changes. A list at its end shows a complete new message whole, and
+follows a streaming one (`ListRow.isStreaming`) by a budget of about two
+lines, then holds still while it continues below:
 
 ```swift
 chat.bottomGravity = .lines(2, lineHeight: UIFont.preferredFont(forTextStyle: .body).lineHeight)

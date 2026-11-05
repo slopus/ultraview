@@ -248,18 +248,34 @@ content under the finger stays under it), during deceleration (the flight
 moves with the content), in a rubber band (a pass under a finger or a flight
 keeps the overscroll instead of resting on the edge), and for animated
 inserts and deletes. Prepending older history doesn't move what is shown.
-A new row comes in against the row above it and moves with that row while
-it slides or resizes, so no gap opens between them.
+A new row at the end comes in against the row above it and moves with that
+row while it slides or resizes, so no gap opens between them; one that
+opens a place above rows that stay shows where it settles.
+
+**New rows at the end.** A change that brings new rows to the end of a
+following list (`GravityArrival`: a run of new rows ending at the last row,
+or directly above rows that were already the last ones, such as a footer
+the host keeps under its newest message) shows complete rows whole, outside
+the budget: their end, with any kept rows under them, rests on the bottom
+inset, or, when they are taller than the visible height, the first new
+row's top rests on the top inset and the list stops following. A row whose
+content is still arriving says so with `ListRow.isStreaming` (`NodeRow`
+takes it in its initializer): it fills the budget afresh, and its
+appearance and growth spend it. Only arrival reads the flag; the revision
+that ends a stream is ordinary growth. A list that isn't following moves
+nothing for new rows.
 
 **Following the end, within a budget.** A list resting on its bottom edge
-follows growth at its end (a streamed reply, a new message, rows growing
-together) by at most `followBudget` points in total, then stops and lets
-the growth continue below the bottom inset. `BottomFollow` holds the state:
+follows a streaming row and growth at its end by at most `followBudget`
+points in total, then stops: the offset holds still and the growth
+continues below the bottom inset. `BottomFollow` holds the state:
 
 - *Re-arming* (full budget): the list comes to rest on its bottom edge after
   a scroll or fling; `scrollToBottom(animated:)`; a `.bottom` target or any
-  target that lands on the bottom edge; a new last row (new identity) while
-  following; the first load and a full replacement.
+  target that lands on the bottom edge; a new streaming row at the end while
+  following; the first load and a full replacement. Being near the bottom
+  edge without reaching it doesn't count. Complete new rows neither fill
+  nor spend the budget.
 - *A finger*: a touch holds the follow. A tap that doesn't drag resumes it
   with what was left, if the list is still on its bottom edge; it doesn't
   refill the budget. A drag stops it, so the list never moves content
@@ -274,11 +290,6 @@ the growth continue below the bottom inset. `BottomFollow` holds the state:
 - *Sending*: `ListScrollTarget.bottom` puts the last row's band on the
   bottom inset (a row taller than the visible height shows its end) and
   re-arms. Use it in the same `applyChanges` as the sent row.
-- *New rows*: with `revealsNewRows`, a new last row arriving while following
-  is shown whole outside the budget: its end rests on the bottom inset, or,
-  when the new rows are taller than the visible height, the first one's top
-  rests on the top inset and following stops. Off by default: new rows are
-  followed like growth.
 
 **The viewport.** While following, inset, height, width and environment
 changes (the keyboard, rotation, Dynamic Type) keep the end on the bottom

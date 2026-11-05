@@ -655,19 +655,20 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
         let transition: ListTransition, interval: Duration
         if let thread {
             let appearance = NodeAppearance(key: "bubble", scale: thread.config.appearScale, anchor: CGPoint(x: 0, y: 1))
-            thread.insert(ChatMessage(id: id, text: ChatStreamScript.opening, outgoing: false, time: ChatThread.now()), appearance: .appearing([appearance]))
+            thread.insert(ChatMessage(id: id, text: ChatStreamScript.opening, outgoing: false, time: ChatThread.now(), streaming: true), appearance: .appearing([appearance]))
             rows = thread.rows
             transition = thread.config.incoming; interval = thread.config.streamInterval
         } else {
             var cards = chaosRows
             var row = DemoListRow(identity: id, title: "Assistant · streaming", body: "A reply", height: hostProbe ? 420 : 84, tint: .systemTeal)
+            row.isStreaming = true
             if hostProbe { row.extraAttachments = headers(group: -1, sender: "Assistant") }
             cards.append(withSwipeActions(row))
             rows = cards
             transition = .easeInOut(0.3); interval = .milliseconds(100)
         }
-        // An incoming reply: followed by two lines at the bottom, left below
-        // the composer when the person reads further up.
+        // A streaming reply: followed by two lines at the bottom, then left
+        // to grow below the composer.
         list.applyChanges(items: rows, transition: transition)
         streaming = Task { [weak self] in
             for token in 1...ChatStreamScript.tokenCount {
@@ -676,7 +677,7 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
                 if let thread {
                     let started = CACurrentMediaTime()
                     defer { MainThreadMonitor.shared.note("chat token \((CACurrentMediaTime() - started) * 1000) ms") }
-                    thread.update(id) { $0.text += ChatStreamScript.token(token) }
+                    thread.update(id) { $0.text += ChatStreamScript.token(token); $0.streaming = token < ChatStreamScript.tokenCount }
                     rows = thread.rows
                     list.applyChanges(items: rows, anchorMode: .preserveVisibleContent, transition: thread.config.growth)
                 } else {
@@ -685,6 +686,7 @@ final class ListChatController: UIViewController, UITextViewDelegate, ListChaosR
                     cards[index].revision += 1
                     cards[index].body += " \(token % 5 == 0 ? "rendered smoothly." : "another word")"
                     if token % 4 == 0 { cards[index].height += 20 }
+                    cards[index].isStreaming = token < ChatStreamScript.tokenCount
                     rows = cards
                     list.applyChanges(items: rows, anchorMode: .preserveVisibleContent, transition: .easeInOut(0.2))
                 }

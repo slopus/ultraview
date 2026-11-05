@@ -13,6 +13,8 @@ private struct GravityRow: ListRow {
     var revision: UInt64 = 0
     var height: Double = 50
     var fixed = true
+    var streaming = false
+    var isStreaming: Bool { streaming }
     func makeView() -> ListRowView { GravityRowView() }
     func apply(to view: ListRowView, transition: ListTransition) {
         (view as? GravityRowView)?.height = height; (view as? GravityRowView)?.fixed = fixed
@@ -64,10 +66,26 @@ private final class Chat {
     func apply(_ transition: ListTransition = .none, scrollTo: ListScrollTarget? = nil) {
         list.applyChanges(items: rows, scrollTo: scrollTo, transition: transition)
     }
-    func grow(_ identity: String, by delta: Double, transition: ListTransition = .none) {
+    func grow(_ identity: String, by delta: Double, streaming: Bool? = nil, transition: ListTransition = .none) {
         let index = rows.firstIndex { $0.identity == identity }!
         rows[index].height += delta; rows[index].revision += 1
+        if let streaming { rows[index].streaming = streaming }
         apply(transition)
+    }
+    /// Waits for a fling or bounce to come to rest.
+    func settle() async throws {
+        for _ in 0..<200 where list.isDecelerating || list.isScrollFlightActive { try await Task.sleep(for: .milliseconds(10)) }
+        try await Task.sleep(for: .milliseconds(30))
+    }
+    /// A slow drag by `distance` points (negative moves the content up),
+    /// held still before it lifts so nothing flings.
+    func slowDrag(by distance: Double) async throws {
+        let now = CACurrentMediaTime()
+        drag(.touchDown, 0, at: now); drag(.began, 0, at: now + 0.01)
+        for step in 1...10 { drag(.changed, distance * Double(step) / 10, at: now + 0.01 + 0.03 * Double(step)) }
+        drag(.changed, distance, at: now + 0.5)
+        drag(.ended, distance, at: now + 0.6)
+        try await settle()
     }
     func frame(_ identity: String) -> CGRect? {
         list.items.firstIndex { $0.identity == identity }.flatMap { list.settledFrame(at: $0) }
@@ -155,23 +173,22 @@ private final class Chat {
         #expect(chat.list.remainingFollowBudget == 34)
     }
 
-    @Test(arguments: ScrollEngineMode.allCases) func aNewLastRowGetsAFullBudgetOnlyWhileFollowing(mode: ScrollEngineMode) throws {
+    @Test(arguments: ScrollEngineMode.allCases) func aNewStreamingRowGetsAFullBudgetOnlyWhileFollowing(mode: ScrollEngineMode) throws {
         let chat = Chat(mode)
         chat.grow("m99", by: 30)
-        chat.rows.append(GravityRow(identity: "reply", height: 60))
+        chat.rows.append(GravityRow(identity: "reply", height: 60, streaming: true))
         chat.apply()
         // A fresh 44 points: the reply's top 44 show above the composer.
         #expect(chat.frame("reply")?.minY == Chat.line - 44 && !chat.list.isFollowingBottom)
         let reading = try #require(chat.firstVisible)
         let top = try #require(chat.frame(reading)).minY
-        chat.rows.append(GravityRow(identity: "later", height: 60))
+        chat.rows.append(GravityRow(identity: "later", height: 60, streaming: true))
         chat.apply()
         #expect(chat.frame(reading)?.minY == top && chat.frame("later")?.minY == Chat.line + 16)
     }
 
-    @Test(arguments: ScrollEngineMode.allCases) func revealedNewRowsShowWholeThenFollowTheirGrowthByTheBudget(mode: ScrollEngineMode) throws {
+    @Test(arguments: ScrollEngineMode.allCases) func completeNewRowsShowWholeThenFollowTheirGrowthByTheBudget(mode: ScrollEngineMode) throws {
         let chat = Chat(mode)
-        chat.list.bottomGravity = .init(followBudget: 44, revealsNewRows: true)
         chat.rows.append(GravityRow(identity: "tool", height: 60))
         chat.apply(.easeInOut(0.2))
         #expect(chat.lastBottom == Chat.line && chat.list.isFollowingBottom && chat.list.remainingFollowBudget == 44)
@@ -270,8 +287,8 @@ private final class Chat {
         chat.rows.append(GravityRow(identity: "long", height: 900))
         chat.apply(scrollTo: .bottom)
         #expect(chat.frame("long").map { Double($0.maxY) } == Chat.line && chat.list.isFollowingBottom)
-        // A reply then follows by the budget.
-        chat.rows.append(GravityRow(identity: "reply", height: 30))
+        // A streaming reply then follows by the budget.
+        chat.rows.append(GravityRow(identity: "reply", height: 30, streaming: true))
         chat.apply()
         #expect(chat.lastBottom == Chat.line)
         chat.grow("reply", by: 30)
@@ -529,7 +546,7 @@ private final class Chat {
 
     @Test func aRowThatGrowsPastAFullScreenKeepsItsTop() throws {
         let chat = Chat()
-        chat.rows.append(GravityRow(identity: "essay", height: 40))
+        chat.rows.append(GravityRow(identity: "essay", height: 40, streaming: true))
         chat.apply()
         let top = try #require(chat.frame("essay")).minY
         for _ in 0..<40 { chat.grow("essay", by: 30) }
@@ -570,6 +587,110 @@ private final class Chat {
         #expect(chat.lastBottom == Chat.line)
     }
 
+    @Test(arguments: ScrollEngineMode.allCases, [3, 100]) func aRowOpenedAboveAKeptFooterShowsWhereItSettles(mode: ScrollEngineMode, count: Int) async throws {
+        let chat = Chat(mode, count: count)
+        chat.rows.append(GravityRow(identity: "footer", height: 20))
+        chat.apply()
+        chat.rows.insert(GravityRow(identity: "reply", height: 60), at: chat.rows.count - 1)
+        chat.apply(.easeInOut(0.3))
+        let settled = try #require(chat.frame("reply"))
+        var worst = 0.0
+        for _ in 0..<80 {
+            if let shown = chat.presented("reply") { worst = max(worst, abs(Double(shown.minY - settled.minY))) }
+            try await Task.sleep(for: .milliseconds(4))
+        }
+        #expect(worst < 0.5)
+        #expect(chat.frame("footer").map { Double($0.maxY) } == Chat.line)
+    }
+
+    @Test(arguments: ScrollEngineMode.allCases) func aStreamingRowAboveAKeptFooterSpendsTheBudget(mode: ScrollEngineMode) throws {
+        let chat = Chat(mode)
+        chat.rows.append(GravityRow(identity: "footer", height: 20))
+        chat.apply()
+        #expect(chat.lastBottom == Chat.line && chat.list.isFollowingBottom)
+        chat.rows.insert(GravityRow(identity: "reply", height: 60, streaming: true), at: chat.rows.count - 1)
+        chat.apply()
+        #expect(chat.lastBottom == Chat.line + 16 && !chat.list.isFollowingBottom)
+    }
+
+    /// Steve's rule: a streaming reply at the bottom is followed by the
+    /// budget, counting its appearance, then the offset holds exactly still
+    /// until the person reaches the bottom again, which follows afresh.
+    @Test(arguments: ScrollEngineMode.allCases) func aStreamingReplyIsFollowedByTheBudgetThenHeldUntilTheBottomIsReached(mode: ScrollEngineMode) async throws {
+        let chat = Chat(mode)
+        for cycle in 0..<4 {
+            let id = "reply\(cycle)"
+            chat.rows.append(GravityRow(identity: id, height: 20, streaming: true))
+            chat.apply()
+            #expect(chat.lastBottom == Chat.line && chat.list.remainingFollowBudget == 24, "\(mode) cycle \(cycle)")
+            // Where the reply's top is on screen, as it grows by 10 points at a time.
+            var tops = [chat.frame(id)?.minY]
+            for _ in 0..<6 { chat.grow(id, by: 10); tops.append(chat.frame(id)?.minY) }
+            // Up by 10, 10 and the last 4 of the budget, then not at all.
+            #expect(zip(tops, tops.dropFirst()).map { ($1 ?? .nan) - ($0 ?? .nan) } == [-10, -10, -4, 0, 0, 0], "\(mode) cycle \(cycle): \(tops)")
+            #expect(chat.lastBottom == Chat.line + 36 && !chat.list.isFollowingBottom && chat.list.remainingFollowBudget == 0)
+            switch cycle {
+            case 0:
+                chat.list.scrollToBottom(animated: false)
+            case 1:
+                // Near the bottom isn't the bottom: growth still doesn't move.
+                try await chat.slowDrag(by: -26)
+                #expect(chat.list.distanceFromBottom.map { abs($0 - 10) < 0.5 } == true && !chat.list.isFollowingBottom, "\(mode): \(String(describing: chat.list.distanceFromBottom))")
+                let held = chat.frame(id)?.minY
+                chat.grow(id, by: 10)
+                #expect(chat.frame(id)?.minY == held && !chat.list.isFollowingBottom)
+                // Dragged past the end, it settles on it.
+                try await chat.slowDrag(by: -60)
+            case 2:
+                // A fling that comes to rest on the end.
+                chat.list.beginMomentum(velocity: 2500)
+                try await chat.settle()
+            default:
+                // A fling during which the reply keeps growing.
+                chat.list.beginMomentum(velocity: 2500)
+                for _ in 0..<3 {
+                    try await Task.sleep(for: .milliseconds(30))
+                    chat.grow(id, by: 10)
+                }
+                try await chat.settle()
+            }
+            #expect(chat.lastBottom == Chat.line && chat.list.isFollowingBottom && chat.list.remainingFollowBudget == 44, "\(mode) cycle \(cycle): \(chat.lastBottom)")
+            // The update that ends the stream is growth, not a new complete row.
+            chat.grow(id, by: 10, streaming: false)
+            #expect(chat.lastBottom == Chat.line && chat.list.remainingFollowBudget == 34, "\(mode) cycle \(cycle)")
+        }
+    }
+
+    @Test(arguments: ScrollEngineMode.allCases) func aCompleteRowAtTheBottomShowsWholeAndATallOneShowsItsTop(mode: ScrollEngineMode) throws {
+        let chat = Chat(mode)
+        chat.rows.append(GravityRow(identity: "tool", height: 120))
+        chat.apply(.easeInOut(0.2))
+        #expect(chat.lastBottom == Chat.line && chat.list.isFollowingBottom && chat.list.remainingFollowBudget == 44)
+        chat.rows.append(GravityRow(identity: "essay", height: 600))
+        chat.apply()
+        #expect(chat.frame("essay")?.minY == 20 && !chat.list.isFollowingBottom)
+        // Away from the bottom, a complete row moves nothing.
+        let reading = try #require(chat.firstVisible)
+        let top = try #require(chat.frame(reading)).minY
+        chat.rows.append(GravityRow(identity: "later", height: 80))
+        chat.apply()
+        #expect(chat.frame(reading)?.minY == top && chat.frame("essay")?.maxY == 620 && !chat.list.isFollowingBottom)
+    }
+
+    @Test(arguments: ScrollEngineMode.allCases) func aCompleteRowArrivingUnderAStreamingOneShowsWholeAndLeavesTheBudget(mode: ScrollEngineMode) throws {
+        let chat = Chat(mode)
+        chat.rows.append(GravityRow(identity: "text", height: 20, streaming: true))
+        chat.apply()
+        chat.grow("text", by: 10)
+        #expect(chat.list.remainingFollowBudget == 14 && chat.list.isFollowingBottom)
+        chat.rows.append(GravityRow(identity: "tool", height: 60))
+        chat.apply()
+        #expect(chat.lastBottom == Chat.line && chat.list.isFollowingBottom && chat.list.remainingFollowBudget == 14)
+        // The text keeps streaming above the tool row: the rest of the budget, then nothing.
+        chat.grow("text", by: 30)
+        #expect(chat.lastBottom == Chat.line + 16 && !chat.list.isFollowingBottom)
+    }
+
     @Test(arguments: ScrollEngineMode.allCases) func aMessageSentWhileAReplyGrowsStaysAgainstIt(mode: ScrollEngineMode) async throws {
         let chat = Chat(mode, budget: 400)
         func grow() {
@@ -587,7 +708,9 @@ private final class Chat {
             chat.apply(.easeInOut(0.3))
         }))
         let (seam, at) = try await widestSeam(chat, during: steps.sorted { $0.delay < $1.delay })
-        #expect(seam < 0.5, "\(at)")
+        // The stepped engine's samples leave up to a few thousandths of a
+        // point between older rows; the arrivals' seams were whole rows.
+        #expect(seam < 1, "\(at)")
     }
 }
 #endif

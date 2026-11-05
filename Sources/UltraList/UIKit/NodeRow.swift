@@ -101,6 +101,7 @@ public final class NodeRow: ListRow {
     public let identity: String
     public let revision: UInt64
     public var pinsToBottomEdge: Bool
+    public var isStreaming: Bool
     public var attachments: [String: any ListAttachment]
     public var measuresAsynchronously: Bool { true }
     public let measurementEnvironment: UInt64
@@ -125,8 +126,8 @@ public final class NodeRow: ListRow {
     // Lists call prepare instead and own the returned content themselves.
     private var prepared: [PreparedKey: PreparedNodeContent] = [:]
 
-    public init(identity: String, revision: UInt64 = 0, pinsToBottomEdge: Bool = false, attachments: [String: any ListAttachment] = [:], environment: RenderEnvironment? = nil, measurer: any NodeRowMeasuring = NodeRowMeasurer(), animatesContent: Bool = false, appearance: NodeRowAppearance? = nil, makeNode: @escaping @Sendable () -> UltraNode) {
-        self.identity = identity; self.revision = revision; self.pinsToBottomEdge = pinsToBottomEdge
+    public init(identity: String, revision: UInt64 = 0, pinsToBottomEdge: Bool = false, attachments: [String: any ListAttachment] = [:], environment: RenderEnvironment? = nil, measurer: any NodeRowMeasuring = NodeRowMeasurer(), animatesContent: Bool = false, appearance: NodeRowAppearance? = nil, isStreaming: Bool = false, makeNode: @escaping @Sendable () -> UltraNode) {
+        self.identity = identity; self.revision = revision; self.pinsToBottomEdge = pinsToBottomEdge; self.isStreaming = isStreaming
         self.animatesContent = animatesContent; self.appearance = appearance
         self.attachments = attachments; self.environment = environment; self.measurer = measurer; factory = makeNode
         measurementEnvironment = environment.map(environmentKey) ?? 0

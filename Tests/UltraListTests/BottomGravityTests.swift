@@ -201,27 +201,63 @@ import Testing
         #expect(missing.window.rows.isEmpty && missing.moved == 0 && !missing.atBottom)
     }
 
-    @Test func newRowsAreRevealedWholeOutsideTheBudget() {
+    @Test func newRowsAtTheEndAreFoundAboveKeptTrailingRows() {
+        func find(_ old: [String], _ new: [String], streaming: Set<String> = []) -> GravityArrival? {
+            GravityArrival.find(count: new.count, oldCount: old.count, identity: { new[$0] }, oldIdentity: { old[$0] },
+                                isNew: { !old.contains(new[$0]) }, streams: { streaming.contains(new[$0]) })
+        }
+        #expect(find(["a", "b", "c"], ["a", "b", "c", "d"]) == .init(first: 3, revealsThrough: 3, streams: false))
+        #expect(find(["a", "b", "c"], ["a", "b", "c", "d", "e"], streaming: ["e"]) == .init(first: 3, revealsThrough: 3, streams: true))
+        #expect(find(["a", "b", "c"], ["a", "b", "c", "d", "e"], streaming: ["d"]) == .init(first: 3, revealsThrough: 4, streams: true))
+        #expect(find(["a", "b", "c"], ["a", "b", "c", "d"], streaming: ["d"]) == .init(first: 3, revealsThrough: nil, streams: true))
+        // Rows that were the last ones stay under the new run.
+        #expect(find(["a", "b", "footer"], ["a", "b", "d", "footer"]) == .init(first: 2, revealsThrough: 3, streams: false))
+        #expect(find(["a", "b", "footer"], ["a", "b", "d", "e", "footer"], streaming: ["e"]) == .init(first: 2, revealsThrough: 2, streams: true))
+        // A deletion at the end and an append in one change: the append.
+        #expect(find(["a", "b", "c"], ["a", "b", "d"]) == .init(first: 2, revealsThrough: 2, streams: false))
+        // Not an arrival: nothing new at the end, a new row above every old
+        // one, or a run that doesn't open where the kept rows were attached.
+        #expect(find(["a", "b"], ["a", "b"]) == nil)
+        #expect(find(["a", "b", "c"], ["a", "b"]) == nil)
+        #expect(find(["a", "b"], ["x", "a", "b"]) == nil)
+        #expect(find(["footer"], ["d", "footer"]) == nil)
+        #expect(find(["a", "b", "c", "footer"], ["a", "d", "c", "footer"]) == nil)
+        #expect(find([], []) == nil)
+    }
+
+    @Test func completeNewRowsAreRevealedWholeOutsideTheBudget() {
         // Row 13 is the first shown, at the top inset; row 19 ends on the bottom inset.
-        func pass(_ added: [Double], reveal: Bool) -> GravityPass {
+        func pass(_ added: [Double], arrival: GravityArrival?, follow: BottomFollow = BottomFollow(budget: 44)) -> GravityPass {
             let values = Array(repeating: 50.0, count: 20) + added
             return GravityPass.resolve(count: values.count, anchor: .row(index: 13, y: 20), viewport: viewport, clamps: true,
-                                       follow: BottomFollow(budget: 44), reveal: reveal ? 20 : nil, measure: heights(values))
+                                       follow: follow, arrival: arrival, measure: heights(values))
         }
-        let budgeted = pass([60], reveal: false)
-        #expect(budgeted.followed == 44 && !budgeted.atBottom && !budgeted.revealed)
-        let shown = pass([60], reveal: true)
-        #expect(shown.followed == 60 && shown.atBottom && shown.revealed && shown.window.maxY == 370)
-        // Taller than the visible height: its top stops on the top inset.
-        let tall = pass([500], reveal: true)
-        #expect(tall.followed == 350 && top(tall.window, 20) == 20 && !tall.atBottom)
+        let complete = GravityArrival(first: 20, revealsThrough: 20, streams: false)
+        let streaming = GravityArrival(first: 20, revealsThrough: nil, streams: true)
+        let budgeted = pass([60], arrival: streaming)
+        #expect(budgeted.followed == 44 && budgeted.revealed == 0 && !budgeted.atBottom)
+        #expect(pass([60], arrival: nil) == budgeted)
+        let shown = pass([60], arrival: complete)
+        #expect(shown.followed == 60 && shown.revealed == 60 && shown.atBottom && shown.window.maxY == 370)
+        // Taller than the visible height: its top stops on the top inset,
+        // and the budget doesn't push it further.
+        let tall = pass([500], arrival: complete)
+        #expect(tall.followed == 350 && tall.revealed == 350 && top(tall.window, 20) == 20 && !tall.atBottom)
         // Several new rows: the first one's top.
-        let several = pass([100, 300], reveal: true)
-        #expect(several.followed == 350 && top(several.window, 20) == 20 && top(several.window, 21) == 120)
+        let several = pass([100, 300], arrival: .init(first: 20, revealsThrough: 21, streams: false))
+        #expect(several.followed == 350 && several.revealed == 350 && top(several.window, 20) == 20 && top(several.window, 21) == 120)
+        // A kept footer under the new row shows under it.
+        let footer = pass([60, 20], arrival: .init(first: 20, revealsThrough: 21, streams: false))
+        #expect(footer.followed == 80 && footer.revealed == 80 && footer.atBottom && top(footer.window, 21) == 350)
+        // A complete row and a streaming one under it: the complete one
+        // shows whole, and the streaming one spends the budget.
+        let mixed = pass([30, 120], arrival: .init(first: 20, revealsThrough: 20, streams: true))
+        #expect(mixed.followed == 74 && mixed.revealed == 30 && !mixed.atBottom && top(mixed.window, 21) == 326)
+        // Showing whole doesn't need what's left of the budget.
+        let spent = pass([60], arrival: complete, follow: { var follow = BottomFollow(budget: 44); follow.record(moved: 44, atBottom: true); return follow }())
+        #expect(spent.followed == 60 && spent.revealed == 60 && spent.atBottom)
         // A list that isn't following leaves them below.
-        let values = Array(repeating: 50.0, count: 20) + [60]
-        let stopped = GravityPass.resolve(count: 21, anchor: .row(index: 13, y: 20), viewport: viewport, clamps: true,
-                                          follow: BottomFollow(budget: 44, phase: .stopped), reveal: 20, measure: heights(values))
-        #expect(stopped.followed == 0 && !stopped.revealed && top(stopped.window, 20) == 370)
+        let stopped = pass([60], arrival: complete, follow: BottomFollow(budget: 44, phase: .stopped))
+        #expect(stopped.followed == 0 && stopped.revealed == 0 && top(stopped.window, 20) == 370)
     }
 }

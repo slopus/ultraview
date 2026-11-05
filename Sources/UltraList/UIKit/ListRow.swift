@@ -134,6 +134,12 @@ public protocol ListRow {
     func prepareInPlace(width: Double, environment: RenderEnvironment) -> ListInPlacePreparation?
     var leadingSwipeActions: [ListSwipeAction] { get }
     var trailingSwipeActions: [ListSwipeAction] { get }
+    /// Whether the row's content is still arriving, like a reply streaming
+    /// in. A bottom-gravity list shows a complete new row at its end whole,
+    /// but follows a streaming one, from its appearance on, only within its
+    /// budget. Only a row's arrival reads it: the revision that ends a stream
+    /// is growth like any other.
+    var isStreaming: Bool { get }
 }
 public extension ListRow {
     var revision: UInt64 { 0 }
@@ -151,6 +157,7 @@ public extension ListRow {
     func prepareInPlace(width: Double, environment: RenderEnvironment) -> ListInPlacePreparation? { nil }
     var leadingSwipeActions: [ListSwipeAction] { [] }
     var trailingSwipeActions: [ListSwipeAction] { [] }
+    var isStreaming: Bool { false }
 }
 
 @MainActor

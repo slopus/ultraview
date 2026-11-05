@@ -6,31 +6,66 @@ import Foundation
 /// it empty, and the list opens on its last row.
 ///
 /// Nothing the person is reading moves because content changed, except in
-/// two cases. A list resting on its bottom edge follows growth at its end,
-/// but only by `followBudget` points in total. Content shorter than the
-/// viewport always rests on the bottom inset. See `BottomFollow` for when the
-/// budget is spent and when it is given back.
+/// three cases. A list resting on its bottom edge shows complete new rows
+/// at its end whole, and follows a streaming row (`ListRow.isStreaming`) and
+/// growth at its end only by `followBudget` points in total. Content shorter
+/// than the viewport always rests on the bottom inset. See `BottomFollow`
+/// for when the budget is spent and when it is filled again.
 public struct ListBottomGravity: Sendable, Equatable {
     /// How far, in points, the list moves its content up by itself to follow
-    /// growth at its end, before it stops and lets the growth continue below
-    /// the bottom inset. About two lines of body text is enough to show that
-    /// something new started. `.infinity` follows without limit.
+    /// a streaming row and growth at its end, before it stops and lets them
+    /// continue below the bottom inset. About two lines of body text is
+    /// enough to show that something new started. `.infinity` follows
+    /// without limit.
     public var followBudget: Double
-    /// Whether a following list shows new last rows whole, without spending
-    /// its budget: their end rests on the bottom inset, or, when they are
-    /// taller than the visible height, the first new row's top rests on the
-    /// top inset and the list stops following. The budget then covers the
-    /// new rows' growth. Off, new rows are followed like growth.
-    public var revealsNewRows: Bool
 
-    public init(followBudget: Double = 44, revealsNewRows: Bool = false) {
+    public init(followBudget: Double = 44) {
         self.followBudget = followBudget.isNaN ? 0 : max(0, followBudget)
-        self.revealsNewRows = revealsNewRows
     }
 
     /// A budget of `count` lines at `lineHeight` points each.
-    public static func lines(_ count: Double = 2, lineHeight: Double, revealsNewRows: Bool = false) -> Self {
-        .init(followBudget: count * lineHeight, revealsNewRows: revealsNewRows)
+    public static func lines(_ count: Double = 2, lineHeight: Double) -> Self {
+        .init(followBudget: count * lineHeight)
+    }
+}
+
+/// The new rows one change brings to a bottom-gravity list's end: a run of
+/// new rows that ends at the last row, or directly above rows that were
+/// already the list's last ones (a footer the host keeps under its newest
+/// message).
+public struct GravityArrival: Sendable, Equatable {
+    /// The first new row of the run.
+    public var first: Int
+    /// The last row a following pass shows outside the budget: the list's
+    /// last row when the run ends with a complete row, otherwise the last
+    /// complete new row; nil when every new row streams.
+    public var revealsThrough: Int?
+    /// Whether a new row streams. Its appearance and growth spend a fresh
+    /// budget.
+    public var streams: Bool
+
+    public init(first: Int, revealsThrough: Int?, streams: Bool) {
+        self.first = first; self.revealsThrough = revealsThrough; self.streams = streams
+    }
+
+    /// Finds the run in a collection of `count` rows that had `oldCount`.
+    /// `identity` and `oldIdentity` name rows by index, `isNew` tells rows
+    /// that weren't in the old collection, and `streams` rows whose content
+    /// is still arriving. Looks only at the rows at the end.
+    public static func find(count: Int, oldCount: Int, identity: (Int) -> String, oldIdentity: (Int) -> String,
+                            isNew: (Int) -> Bool, streams: (Int) -> Bool) -> GravityArrival? {
+        var kept = 0
+        while kept < count, kept < oldCount, identity(count - 1 - kept) == oldIdentity(oldCount - 1 - kept) { kept += 1 }
+        let last = count - 1 - kept
+        guard last >= 0, isNew(last) else { return nil }
+        var first = last
+        while first > 0, isNew(first - 1) { first -= 1 }
+        // Above kept rows, the run must open where they were attached; new
+        // rows above every old row are older history.
+        if kept > 0, first == 0 || oldCount - 1 - kept < 0 || identity(first - 1) != oldIdentity(oldCount - 1 - kept) { return nil }
+        let streaming = (first...last).contains(where: streams)
+        let lastComplete = (first...last).last { !streams($0) }
+        return .init(first: first, revealsThrough: lastComplete.map { $0 == last ? count - 1 : $0 }, streams: streaming)
     }
 }
 
@@ -39,8 +74,9 @@ public struct ListBottomGravity: Sendable, Equatable {
 ///
 /// - `arm()`: the list came to rest on its bottom edge because the person
 ///   scrolled there, or the host scrolled to the bottom (`scrollToBottom`, a
-///   `.bottom` target, a target that lands on the bottom edge), or a new last
-///   row arrived while the list was following. The budget is full again.
+///   `.bottom` target, a target that lands on the bottom edge), or a new
+///   streaming row arrived at the end while the list was following. The
+///   budget is full again. Complete new rows neither fill nor spend it.
 /// - `hold()`: a finger touched the list. Nothing follows while it is down.
 /// - `release(atBottom:)`: the finger lifted without scrolling. A held list
 ///   follows again with what was left of its budget, but only if it is still
@@ -210,16 +246,18 @@ public struct GravityPass: Sendable, Equatable {
     public let followed: Double
     /// Whether the content's end rests on the bottom inset.
     public let atBottom: Bool
-    /// Whether the pass followed to reveal new rows, outside the budget.
-    public let revealed: Bool
+    /// The part of `followed` that showed complete new rows, outside the
+    /// budget.
+    public let revealed: Double
 
     /// Builds the window around `anchor`, resting it on its edges when
-    /// `clamps`, then follows the end within `follow`'s budget. With
-    /// `reveal`, the index of the first new row at the end, a following pass
-    /// instead follows until the end rests on the bottom inset or that row's
-    /// top reaches the top inset, whichever comes first.
+    /// `clamps`, then follows the end within `follow`'s budget. With an
+    /// `arrival` whose rows reveal, a following pass first follows outside
+    /// the budget until the end of row `revealsThrough` rests on the bottom
+    /// inset, or the first new row's top reaches the top inset, whichever
+    /// comes first; only in the first case does the budget cover the rest.
     public static func resolve(count: Int, anchor: GravityAnchor, viewport: ListViewport, margin: Double = 160, clamps: Bool,
-                               follow: BottomFollow, reveal: Int? = nil,
+                               follow: BottomFollow, arrival: GravityArrival? = nil,
                                measure: (Int) -> (height: Double, top: Double, bottom: Double)?) -> GravityPass {
         func build(_ lift: Double) -> ListWindow {
             ListWindow.buildGravity(count: count, anchor: anchor, viewport: viewport, margin: margin, clamps: clamps, lift: lift, measure: measure)
@@ -228,12 +266,12 @@ public struct GravityPass: Sendable, Equatable {
         let index = anchor.index(count: count)
         func top(_ window: ListWindow) -> Double? { window.rows.first { $0.index == index }?.y }
         guard let placed = window.rows.first(where: { $0.index == index }) else {
-            return .init(window: window, moved: 0, followed: 0, atBottom: false, revealed: false)
+            return .init(window: window, moved: 0, followed: 0, atBottom: false, revealed: 0)
         }
         // Where the anchor was asked to be, at the height it has now.
         let intended = anchor.resolveY(placed.height) ?? placed.y
         let forced = intended - placed.y
-        var followed = 0.0
+        var followed = 0.0, revealed = 0.0
         if follow.isFollowing {
             // Where the anchor sits when the end rests on the bottom inset.
             var ended: ListWindow?
@@ -256,11 +294,18 @@ public struct GravityPass: Sendable, Equatable {
                     // far loads more of the way there.
                     needed = window.maxY - viewport.bottomLine + followed
                 }
-                let total: Double
-                if let reveal {
-                    // Not loaded yet: it lies below, so following further loads it.
-                    let room = window.rows.first { $0.index == reveal }.map { max(0, $0.y - viewport.insets.top) } ?? .infinity
-                    total = max(0, min(needed, followed + room))
+                var total: Double
+                if let arrival, let through = arrival.revealsThrough {
+                    // Rows not loaded yet lie below: following further loads them.
+                    let room = window.rows.first { $0.index == arrival.first }.map { max(0, $0.y - viewport.insets.top) } ?? .infinity
+                    let shown = window.rows.first { $0.index == through }.map { $0.y + $0.height - viewport.bottomLine + followed } ?? needed
+                    let reach = max(0, min(needed, shown))
+                    if followed + room < reach {
+                        total = followed + room; revealed = total
+                    } else {
+                        revealed = reach
+                        total = reach + follow.distance(toward: needed - reach, after: forced)
+                    }
                 } else {
                     total = follow.distance(toward: needed, after: forced)
                 }
@@ -271,7 +316,7 @@ public struct GravityPass: Sendable, Equatable {
         }
         let moved = anchor == .end ? 0 : top(window).map { intended - $0 } ?? forced + followed
         let atBottom = window.distanceBelowBottom(count: count, viewport: viewport).map { abs($0) <= 0.5 } ?? false
-        return .init(window: window, moved: moved, followed: followed, atBottom: atBottom, revealed: reveal != nil && follow.isFollowing)
+        return .init(window: window, moved: moved, followed: followed, atBottom: atBottom, revealed: min(revealed, followed))
     }
 
     /// The row a bottom-gravity pass keeps in place: the surviving row under

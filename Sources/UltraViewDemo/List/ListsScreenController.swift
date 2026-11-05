@@ -87,6 +87,7 @@ struct DemoListRow: ListRow {
     var height: Double
     var tint: UIColor = .systemIndigo
     var pinsToBottomEdge = false
+    var isStreaming = false
     var section: String?
     var extraAttachments: [String: any ListAttachment] = [:]
     var leadingSwipeActions: [ListSwipeAction] = []

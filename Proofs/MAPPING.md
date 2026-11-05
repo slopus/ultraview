@@ -2979,12 +2979,14 @@ flips its content view. Pins at the end of this review:
 
 | Source | SHA-256 |
 | --- | --- |
-| `Sources/UltraList/BottomGravity.swift` | `e6044be4560c8963ebe298e26a96a06c7882c0367c8387fed4a7171ceef3c1a5` |
-| `Sources/UltraList/UIKit/UltraListView.swift` | `84a494f6ddf3dc8969b272d6d297949f05d4b48b3b8421b90bf2e01be6fe08df` |
+| `Sources/UltraList/BottomGravity.swift` | `5dc16a2a7ba975d9c3ad470863747b7ec61390b95e320597f889f6832bd26182` |
+| `Sources/UltraList/UIKit/UltraListView.swift` | `96d96bbfd7b80953b1614d7b1634ad2fabb3b9ed8b045bbdc4dbdc1e3f5d5c22` |
 | `Sources/UltraList/WindowProjection.swift` | `3d5894795d15116ceeab6a1824a7e29c93bd4530b1866d154a680478fc3adce7` |
-| `Sources/UltraList/UIKit/ListRow.swift` | `3af1fd48935d3a245c7639a6cd7608c0e49ccc167b1c15da984a26cd74cab541` |
+| `Sources/UltraList/UIKit/ListRow.swift` | `a9487dc973a671a8d9b342190142d2330622b67a116313bb24f5d91e4e22fe99` |
+| `Sources/UltraList/UIKit/NodeRow.swift` | `7d4f0e858a9db1f78b95262c10fd676e8a3d65a94a330c16ac885a17c2f92531` |
 | `Sources/UltraList/UIKit/ScrollEngine.swift` | `4e1bf258e03adfe6ef88f00a6981437189adf9923d0cda2b0b9c8c960e54ca3b` |
 | `Sources/UltraList/UIKit/UltraScrollView.swift` | `8cc2111fd3a9b69cb1dc3fb7eabee0a057c0554e72a3e759f66d4dbf8bf66b5e` |
+| `Sources/UltraList/UIKit/FrameRateHold.swift` | `731089003fcb4bfd34c716f39acd05f2e3e096feef7353aa5f0a6b28ce974afa` |
 
 With `bottomGravity == nil` every mapped value is unchanged except:
 
@@ -3005,8 +3007,9 @@ UIKit tests that check that transform support.
 Not modeled; checked by exact-value tests instead:
 - `BottomGravity.swift` (UIKit-free): `BottomFollow`'s phases and budget,
   `GravityAnchor`, `ListWindow.buildGravity` / `gravityEdges` /
-  `gravityCorrection` / `distanceBelowBottom`, and `GravityPass.resolve`
-  and `survivor`. `BottomGravityTests` (Linux, 14 cases) pins the windows,
+  `gravityCorrection` / `distanceBelowBottom`, `GravityPass.resolve`
+  (with an arrival's reveal outside the budget) and `survivor`, and
+  `GravityArrival.find`. `BottomGravityTests` (Linux, 15 cases) pins the windows,
   edges, follow distances and anchors with exact values.
 - The gravity branches of the pass in `UltraListView`: the follow's events
   (arm, hold, release, stop, record), the anchor choice
@@ -3014,8 +3017,10 @@ Not modeled; checked by exact-value tests instead:
   change, `keepFollowedEnd` after a layout, re-anchoring the drag after a
   gravity pass, and `SizePositionGeometry`'s anchor at `items.count` when the
   end rests on the bottom inset, and a new row's position motion taken
-  from the row above it (`weldToRowAbove`). `BottomGravityListTests`
-  (UIKit, 29 tests, most in all three engines) covers them, including
+  from the row above it when no kept row sits below it
+  (`weldToRowAbove`), and which new rows a pass reveals or follows
+  (`gravityArrival`, `ListRow.isStreaming`). `BottomGravityListTests`
+  (UIKit, 34 tests, most in all three engines) covers them, including
   every-sample checks of the end through rotations, of the row under a
   finger and of the seams between rows as new ones arrive.
 - A natural Lean model would add `BottomFollow` as a state machine and prove
