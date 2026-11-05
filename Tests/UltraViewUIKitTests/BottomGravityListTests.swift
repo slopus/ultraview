@@ -535,5 +535,59 @@ private final class Chat {
         for _ in 0..<40 { chat.grow("essay", by: 30) }
         #expect(chat.frame("essay")?.minY == top - 4 && chat.frame("essay")?.height == 1240)
     }
+
+    /// The largest distance, over about half a second, between adjacent
+    /// loaded rows as shown: they touch in their settled frames.
+    private func widestSeam(_ chat: Chat, during steps: [(delay: Int, change: () -> Void)]) async throws -> (Double, String) {
+        var worst = 0.0, at = ""
+        var pending = steps, elapsed = 0
+        while elapsed < 600 {
+            while let next = pending.first, next.delay <= elapsed { pending.removeFirst(); next.change() }
+            var previous: (String, CGRect)?
+            for index in chat.list.loadedIndexRange {
+                guard let rect = chat.list.presentedFrame(at: index) else { previous = nil; continue }
+                let id = chat.list.items[index].identity
+                if let (above, aboveRect) = previous, rect.maxY > 20, aboveRect.minY < Chat.line {
+                    let seam = abs(Double(rect.minY - aboveRect.maxY))
+                    if seam > worst { worst = seam; at = "\(above)|\(id) at \(elapsed) ms: \(aboveRect) \(rect)" }
+                }
+                previous = (id, rect)
+            }
+            try await Task.sleep(for: .milliseconds(4)); elapsed += 4
+        }
+        return (worst, at)
+    }
+
+    @Test(arguments: ScrollEngineMode.allCases, [false, true]) func aRowAppendedAsItsNeighbourResizesStaysAgainstIt(mode: ScrollEngineMode, sent: Bool) async throws {
+        let chat = Chat(mode)
+        // The previous last row loses its group spacing as the new row arrives.
+        let (seam, at) = try await widestSeam(chat, during: [(0, {
+            chat.rows[99].height -= 5; chat.rows[99].revision += 1
+            chat.rows.append(GravityRow(identity: "new", height: 46))
+            chat.apply(.easeInOut(0.3), scrollTo: sent ? .bottom : nil)
+        })])
+        #expect(seam < 0.5, "\(at)")
+        #expect(chat.lastBottom == Chat.line)
+    }
+
+    @Test(arguments: ScrollEngineMode.allCases) func aMessageSentWhileAReplyGrowsStaysAgainstIt(mode: ScrollEngineMode) async throws {
+        let chat = Chat(mode, budget: 400)
+        func grow() {
+            let index = chat.rows.firstIndex { $0.identity == "m99" }!
+            chat.rows[index].height += 6; chat.rows[index].revision += 1
+            chat.apply(.easeInOut(0.3))
+        }
+        var steps: [(delay: Int, change: () -> Void)] = (0..<12).map { ($0 * 33, grow) }
+        steps.append((100, {
+            chat.rows.append(GravityRow(identity: "sent", height: 46))
+            chat.apply(.easeInOut(0.3), scrollTo: .bottom)
+        }))
+        steps.append((250, {
+            chat.rows.append(GravityRow(identity: "reply", height: 46))
+            chat.apply(.easeInOut(0.3))
+        }))
+        let (seam, at) = try await widestSeam(chat, during: steps.sorted { $0.delay < $1.delay })
+        #expect(seam < 0.5, "\(at)")
+    }
 }
 #endif

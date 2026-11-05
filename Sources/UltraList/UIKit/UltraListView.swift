@@ -1139,6 +1139,13 @@ public final class UltraListView: UltraScrollView {
                                   restarts: displacing || animations.positionLayersChanged(.row(id)))
             retainCarry(id, view: carry.view, transition: transition)
         }
+        // A chat's new row comes in against the row above it, moving with
+        // that row (its own size followers already match the neighbour's).
+        func weldToRowAbove(_ row: WindowRow, owner: AnimationOwner) {
+            guard bottomGravity != nil, !isCarousel, !fullReplace, !transition.isImmediate, row.index > 0,
+                  settledWindow.rows.contains(where: { $0.index == row.index - 1 }) else { return }
+            animations.inheritPosition(owner, from: .row(items[row.index - 1].identity))
+        }
         for row in settledWindow.rows {
             let id = items[row.index].identity, owner = AnimationOwner.row(id)
             if let old = oldSnapshot[id] {
@@ -1149,6 +1156,9 @@ public final class UltraListView: UltraScrollView {
                 }
             } else if oldLookup[id] == nil, animatesInsertions, !(isCarousel && destinationNew) {
                 animations.replace(owner, .opacity, from: 0, to: 1, at: time, transition: transition)
+                weldToRowAbove(row, owner: owner)
+            } else if oldLookup[id] == nil {
+                weldToRowAbove(row, owner: owner)
             } else if !isCarousel, oldLookup[id] != nil, !transition.isImmediate, mutatesRows {
                 let newY = newBase + row.y
                 let inferred = incomingPlans[id] ?? (row.index < anchor ? engine.offset - preloadMargin - row.height : engine.offset + viewport.height + preloadMargin)
