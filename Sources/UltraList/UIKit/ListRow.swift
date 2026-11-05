@@ -236,6 +236,17 @@ public struct ListScrollTarget {
     /// A target at the first or last row goes to the row there when it
     /// applies, which may not be the one there when it was asked for.
     var edge: Edge?
+    /// Rests the last row's band on the bottom inset, whatever `resolve` says.
+    var restsOnBottom = false
+    /// The end of the list: the last row when this applies, its band resting
+    /// on the bottom inset (a row taller than the visible height shows its
+    /// end). A bottom-gravity list follows again from there with a full
+    /// budget, so use it for a message the person sent.
+    public static var bottom: ListScrollTarget {
+        var target = ListScrollTarget(index: 0) { _, _ in 0 }
+        target.edge = .last; target.restsOnBottom = true
+        return target
+    }
     public init(index: Int, identity: String? = nil, forward: Bool? = nil, resolve: @escaping (Double, ListRowView?) -> Double) {
         self.index = index; self.identity = identity; self.forward = forward; self.resolve = resolve
     }

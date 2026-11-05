@@ -33,6 +33,36 @@ public final class UltraListView: UltraScrollView {
     public var settledContentHeight: Double { settledWindow.height }
     public var overscrollDistance: Double { engine.offset - declaredEdges.clamped(engine.offset) }
     public var scrollGestureHostView: UIView { contentView }
+    /// Places rows like a chat: in their natural order, short content resting
+    /// on the bottom inset, opening on the last row, and following growth at
+    /// the end within a budget (see `ListBottomGravity` and `BottomFollow`).
+    /// Rows don't pin to the bottom edge in this mode. `nil`, the default, is
+    /// an ordinary list.
+    public var bottomGravity: ListBottomGravity? {
+        didSet {
+            guard bottomGravity != oldValue else { return }
+            follow.budget = bottomGravity?.followBudget ?? 0
+            if (bottomGravity == nil) != (oldValue == nil) {
+                updateFollow { $0.arm() }
+                if !items.isEmpty { applyChanges(scrollTo: bottomGravity == nil ? nil : .bottom, transition: .immediate) }
+            }
+        }
+    }
+    private var follow = BottomFollow(budget: 0)
+    /// Stands in for the finger's location in tests, which can't touch.
+    var touchLocationOverride: CGPoint?
+    /// Whether the list rests on its bottom edge and follows growth at its end.
+    public var isFollowingBottom: Bool { bottomGravity != nil && follow.isFollowing }
+    /// How much more the list follows by itself before it stops.
+    public var remainingFollowBudget: Double { bottomGravity == nil ? 0 : follow.remaining }
+    /// Called when `isFollowingBottom` changes.
+    public var onBottomFollowChanged: ((Bool) -> Void)?
+    /// How far the settled offset is above the bottom edge; `nil` while the
+    /// last row isn't loaded.
+    public var distanceFromBottom: Double? {
+        guard !settledWindow.rows.isEmpty, settledWindow.range.upperBound == items.count, let maximum = declaredEdges.maximum else { return nil }
+        return max(0, maximum - declaredEdges.clamped(engine.offset))
+    }
     public var isStrictlyPinnedToBottomEdge: Bool {
         guard holdsPinnedRow, let index = pinnedIndex, let frame = presentedFrame(at: index) else { return false }
         let ext = max(0, frame.height - viewport.visibleHeight / 2)
@@ -102,6 +132,11 @@ public final class UltraListView: UltraScrollView {
     /// Set while a width change's pass applies, which keeps the reading
     /// position (`PreservedWindowAnchor`'s `keepsReadingPosition`).
     private var resizingInPlace = false
+    /// Set when a following list resting on its end lays its rows out again
+    /// for a new width or environment. Until it stops following, passes that
+    /// don't change the collection (measurements arriving at the new width)
+    /// keep the end on the bottom inset without spending the budget.
+    private var reflowing = false
     /// How long a width change waits on the main thread for its visible
     /// rows to be measured and drawn at the new width, so they show at that
     /// width in the frame of the change. Rows not ready by then keep their
@@ -267,7 +302,17 @@ public final class UltraListView: UltraScrollView {
             renderAttachments()
             if flight != nil { handleScroll(engine.offset) }
         }
-        engine.didTouchDown = { [weak self] in self?.holdsPinnedRow = false; self?.scrollToTopGeneration &+= 1 }
+        engine.didTouchDown = { [weak self] in
+            self?.holdsPinnedRow = false; self?.scrollToTopGeneration &+= 1
+            self?.updateFollow { $0.hold() }
+        }
+        engine.didTouchUp = { [weak self] in
+            // A drag stops following and a rest on the bottom edge refills it;
+            // a touch that didn't drag picks up where it left off.
+            guard let self else { return }
+            let atBottom = abs(engine.offset - (declaredEdges.maximum ?? .infinity)) <= 0.5 && settledWindow.range.upperBound == items.count
+            updateFollow { $0.release(atBottom: atBottom) }
+        }
         registerForTraitChanges([UITraitPreferredContentSizeCategory.self, UITraitUserInterfaceStyle.self, UITraitDisplayScale.self, UITraitLayoutDirection.self]) { (view: UltraListView, _: UITraitCollection) in view.setNeedsLayout() }
     }
     public override func layoutSubviews() {
@@ -278,21 +323,29 @@ public final class UltraListView: UltraScrollView {
         let environment = RenderEnvironment(scale: traits.displayScale > 0 ? traits.displayScale : 3, fontScale: UIFontMetrics.default.scaledValue(for: 100, compatibleWith: traits) / 100, isDark: traits.userInterfaceStyle == .dark, isRightToLeft: effectiveUserInterfaceLayoutDirection == .rightToLeft)
         let changedEnvironment = environment != measurementEnvironment
         measurementEnvironment = environment; measurementEnvironmentKey = environmentKey(environment)
+        if changedEnvironment || abs(viewport.width - size.width) > 0.5, follow.isFollowing, restsOnBottom { reflowing = true }
         if !changedEnvironment, abs(viewport.width - size.width) <= 0.5,
            abs(viewport.height - size.height) > 0.5, !settledWindow.rows.isEmpty {
             // A height-only viewport change needs no collection diff or
             // second row/viewport animation.
             engine.sync()
             let oldHeight = viewport.visibleHeight
+            // A following list keeps its end on the bottom inset; otherwise
+            // the content keeps its place below the view's top.
+            let keepsBottom = follow.isFollowing && restsOnBottom
             viewport.height = size.height
-            if holdsPinnedRow, let pinnedIndex, let row = settledWindow.rows.first(where: { $0.index == pinnedIndex }) {
+            if keepsBottom {
+                let maximum = settledEdges.maximum ?? engine.offset
+                engine.shift(by: maximum - engine.offset)
+                previousOffset = engine.offset
+            } else if holdsPinnedRow, let pinnedIndex, let row = settledWindow.rows.first(where: { $0.index == pinnedIndex }) {
                 let oldBoundary = oldHeight + max(0, row.height - oldHeight / 2)
                 let newHeight = viewport.visibleHeight
                 let newBoundary = newHeight + max(0, row.height - newHeight / 2)
                 engine.shift(by: oldBoundary - newBoundary)
                 previousOffset = engine.offset
             }
-            declaredEdges = settledWindow.edges(origin: origin, count: items.count, viewport: viewport, pinnedIndex: pinnedIndex)
+            declaredEdges = settledEdges
             engine.setEdges(declaredEdges)
             handleScroll(engine.offset)
         } else if !changedEnvironment, abs(viewport.width - size.width) > 0.5,
@@ -314,10 +367,10 @@ public final class UltraListView: UltraScrollView {
         }
         let page = viewport.visibleHeight
         guard page > 0, !settledWindow.rows.isEmpty else { return false }
-        let sign = contentView.transform.d < 0 ? -1.0 : 1.0
-        let offset = declaredEdges.clamped(engine.offset + advance * sign * page)
+        let offset = declaredEdges.clamped(engine.offset + advance * page)
         guard abs(offset - engine.offset) > 0.5 else { return false }
         engine.halt(); engine.setOffset(offset); handleScroll(offset)
+        updateFollow { $0.stop() }; noteRest()
         accessibilityCoordinator.notify(.pageScrolled, nil)
         return true
     }
@@ -330,6 +383,7 @@ public final class UltraListView: UltraScrollView {
     public override func handleDragBegin() {
         inputGeneration &+= 1
         holdsPinnedRow = false; scrollToTopGeneration &+= 1
+        updateFollow { $0.stop() }
         if let pending = pendingIntent, eligibleIntent(pending) == nil {
             let hadRetry = pendingScroll != nil
             let relativeRetry = pending.relativeDistance != 0 ? pendingScroll : nil
@@ -368,6 +422,49 @@ public final class UltraListView: UltraScrollView {
     public func scrollTo(_ target: ListScrollTarget, transition: ListTransition = .uiKitScroll()) {
         applyChanges(scrollTo: target, transition: transition)
     }
+    /// Scrolls to the end (`ListScrollTarget.bottom`). A bottom-gravity list
+    /// follows again from there with a full budget.
+    public func scrollToBottom(animated: Bool = true) {
+        guard !items.isEmpty else { return }
+        scrollToTopGeneration &+= 1
+        scrollTo(.bottom, transition: animated ? .uiKitScroll() : .immediate)
+    }
+    /// Stops following growth at the end until the person scrolls back to
+    /// the bottom or the host scrolls there. Rows that grow then grow
+    /// downward, keeping the content above them still: call this before
+    /// opening a row the person tapped.
+    public func stopFollowingBottom() { updateFollow { $0.stop() } }
+    private func updateFollow(_ change: (inout BottomFollow) -> Void) {
+        let was = isFollowingBottom
+        change(&follow)
+        if !follow.isFollowing { reflowing = false }
+        if isFollowingBottom != was { onBottomFollowChanged?(isFollowingBottom) }
+    }
+    /// The scroll edges of the settled window at the current viewport.
+    private var settledEdges: ScrollEdges {
+        bottomGravity == nil ? settledWindow.edges(origin: origin, count: items.count, viewport: viewport, pinnedIndex: pinnedIndex)
+            : settledWindow.gravityEdges(origin: origin, count: items.count, viewport: viewport)
+    }
+    /// Whether the list rests, untouched, with its end on the bottom inset.
+    private var restsOnBottom: Bool {
+        guard bottomGravity != nil, !settledWindow.rows.isEmpty, settledWindow.range.upperBound == items.count,
+              let maximum = declaredEdges.maximum, !engine.tracking, !engine.dragging, !engine.decelerating,
+              engine.activeFlight == nil else { return false }
+        return abs(engine.offset - maximum) <= 0.5
+    }
+    /// A scroll that came to rest on the bottom edge refills the budget.
+    private func noteRest() {
+        guard bottomGravity != nil, !engine.tracking, !engine.dragging, !engine.decelerating, engine.activeFlight == nil else { return }
+        if restsOnBottom { updateFollow { $0.arm() } }
+    }
+    public override func handleDragEnd() {
+        noteRest()
+        super.handleDragEnd()
+    }
+    public override func handleScrollEnd() {
+        noteRest()
+        super.handleScrollEnd()
+    }
     /// Runs immediately outside a list pass, or queues the whole update after it.
     /// Use this when an accessory must share the viewport animation's transaction.
     public func performAfterCurrentPass(_ update: @escaping @MainActor () -> Void) {
@@ -375,40 +472,37 @@ public final class UltraListView: UltraScrollView {
             deferred.append { [weak self] in self?.performAfterCurrentPass(update) }
         } else { update() }
     }
-    /// Scrolls to the edge shown at the top: the first row, or the last one
-    /// when the content is turned upside down (a chat's oldest loaded row).
-    /// Momentum stops where it is shown and the list moves on from there.
+    /// Scrolls to the top: the first row, in a bottom-gravity list the
+    /// oldest loaded one. Momentum stops where it is shown and the list moves
+    /// on from there.
     public override func scrollToTop(animated: Bool = true) {
         guard !items.isEmpty else { return }
-        let inverted = contentView.transform.d < 0
         // The row's band meets the viewport's edge, so the list lands on its
         // edge without overscrolling past it. The target resolves when it
         // applies, which may wait for the row's measurement, so it reads the
         // edge row, the insets and the reserved space then.
-        var target = ListScrollTarget(index: inverted ? items.count - 1 : 0) { [weak self] height, _ in
+        var target = ListScrollTarget(index: 0) { [weak self] _, _ in
             guard let self, !items.isEmpty else { return 0 }
-            let reserve = reservedHeights(at: inverted ? items.count - 1 : 0)
-            return inverted ? viewport.visibleHeight - height - reserve.1 : reserve.0
+            return reservedHeights(at: 0).0
         }
-        target.edge = inverted ? .last : .first
+        target.edge = .first
         holdsPinnedRow = false
         scrollToTopGeneration &+= 1
         let transition: ListTransition = animated ? .uiKitScroll() : .immediate
         scrollTo(target, transition: transition)
-        reportScrollToTop(scrollToTopGeneration, inverted: inverted, after: transition.duration * animations.durationScale, until: CACurrentMediaTime() + 10)
+        reportScrollToTop(scrollToTopGeneration, after: transition.duration * animations.durationScale, until: CACurrentMediaTime() + 10)
     }
-    /// Calls `didScrollToTop` once the list rests on the edge shown at the
-    /// top: the target applied, the viewport's transition ended and nothing
-    /// moves. A touch, a drag or a newer scroll to the top cancels the call,
-    /// and so does not getting there by `deadline`.
-    private func reportScrollToTop(_ generation: UInt64, inverted: Bool, after delay: Double, until deadline: Double) {
+    /// Calls `didScrollToTop` once the list rests on its top edge: the target
+    /// applied, the viewport's transition ended and nothing moves. A touch,
+    /// a drag or a newer scroll to the top cancels the call, and so does not
+    /// getting there by `deadline`.
+    private func reportScrollToTop(_ generation: UInt64, after delay: Double, until deadline: Double) {
         DispatchQueue.main.asyncAfter(deadline: .now() + max(0, delay)) { [weak self] in
             guard let self, scrollToTopGeneration == generation, CACurrentMediaTime() < deadline else { return }
-            let edge = inverted ? declaredEdges.maximum.map { _ in declaredEdges.clamped(.greatestFiniteMagnitude) } : declaredEdges.minimum
             let resting = pendingTarget == nil && pendingScroll == nil && engine.activeFlight == nil && !engine.decelerating && !engine.dragging
                 && abs(animations.value(.viewport, .viewportOffset, at: animations.now)) < 0.5
-            guard resting, let edge, abs(engine.offset - edge) < 0.5 else {
-                reportScrollToTop(generation, inverted: inverted, after: 1.0 / 60, until: deadline); return
+            guard resting, let edge = declaredEdges.minimum, abs(engine.offset - edge) < 0.5 else {
+                reportScrollToTop(generation, after: 1.0 / 60, until: deadline); return
             }
             didScrollToTop?()
         }
@@ -623,7 +717,8 @@ public final class UltraListView: UltraScrollView {
             precondition(Set(nextIDs).count == incoming.count)
             items = incoming; identities = nextIDs
             identityIndices = Dictionary(uniqueKeysWithValues: nextIDs.enumerated().map { ($0.element, $0.offset) })
-            pinnedIndex = incoming.firstIndex(where: \.pinsToBottomEdge); pendingItems = nil; pendingIdentityIndices.removeAll()
+            pinnedIndex = bottomGravity == nil ? incoming.firstIndex(where: \.pinsToBottomEdge) : nil
+            pendingItems = nil; pendingIdentityIndices.removeAll()
             let preparingIDs = preparationQueue.entries.flatMap { $0.value.items.map(\.identity) }
             measurements.retain(identities: Set(nextIDs).union(preparingIDs).union(preparations.keys.map(\.identity)))
             unavailableMeasurements = unavailableMeasurements.filter { key in identityIndices[key.identity].map { items[$0].revision == key.revision } == true }
@@ -696,7 +791,31 @@ public final class UltraListView: UltraScrollView {
             survivorNewIndex: survivor.flatMap { newLookup[oldItems[$0.index].identity] }, atTop: atTop,
             automatic: anchorMode == .automatic, additionalDistance: additionalScrollDistance, compensates: compensatesInsetChange,
             keepsReadingPosition: resizingInPlace)
-        let anchor = target.map { min(max(0, $0.index), items.count - 1) } ?? preserved.index
+        // A bottom-gravity pass keeps the row under the finger, or the first
+        // row shown below the top inset, where it is; a following one keeps
+        // the end on the bottom inset within its budget.
+        let gravityClamps = !(engine.tracking || engine.dragging || engine.decelerating || engine.activeFlight != nil || absorbsEdgeChangeIntoOverscroll)
+        var gravityAnchor: GravityAnchor?
+        var revealedRow: Int?
+        if let bottomGravity, target == nil {
+            let oldAtBottom = oldWindow.range.upperBound == oldItems.count && declaredEdges.maximum.map { abs(oldSettled - $0) <= 0.5 } == true
+            if oldWindow.rows.isEmpty || fullReplace { updateFollow { $0.arm() } }
+            else if follow.isFollowing, !oldAtBottom { updateFollow { $0.stop() } }
+            else if follow.isFollowing, changesCollection, let last = items.last, oldLookup[last.identity] == nil {
+                // A new last row while following: it gets a full budget.
+                updateFollow { $0.arm() }
+                if bottomGravity.revealsNewRows {
+                    var first = items.count - 1
+                    while first > 0, oldLookup[items[first - 1].identity] == nil { first -= 1 }
+                    revealedRow = first
+                }
+            }
+            gravityAnchor = gravityAnchorFor(oldWindow: oldWindow, oldItems: oldItems, oldBase: oldBase, oldOffset: oldOffset, oldSettled: oldSettled,
+                oldViewport: oldViewport, newViewport: viewport, newLookup: newLookup,
+                keepsEnd: oldWindow.rows.isEmpty || fullReplace || follow.isFollowing && (sizeChanged || reflowing) && !changesCollection,
+                compensates: compensatesInsetChange, additionalDistance: additionalScrollDistance, keepsReadingPosition: resizingInPlace)
+        }
+        let anchor = target.map { min(max(0, $0.index), items.count - 1) } ?? gravityAnchor?.index(count: items.count) ?? preserved.index
         requestAhead(anchor: anchor, direction: (engine.activeFlight?.settledOffset ?? engine.offset) >= engine.offset ? 1 : -1)
         var measuredViews: [String: ListRowView] = [:]
         func measure(_ index: Int) -> (height: Double, top: Double, bottom: Double)? {
@@ -724,20 +843,33 @@ public final class UltraListView: UltraScrollView {
             return (height, reserve.0, reserve.1)
         }
         let newWindow: ListWindow
+        var gravityPass: GravityPass?
         if let target {
-            newWindow = ListWindow.build(count: items.count, anchor: anchor, viewport: viewport, margin: preloadMargin,
-                pinnedIndex: pinnedIndex, measure: measure) { height in
-                    let resolved: Double
-                    if let preparedTarget, let resolution = preparedTarget.resolution,
-                       resolution.generation == preparedTarget.generation, resolution.gate === intent?.gate,
-                       resolution.key == measurementKey(items[anchor], width: viewport.contentWidth),
-                       resolution.height == height, resolution.viewport == viewport {
-                        resolved = resolution.offset
-                    } else {
-                        resolved = target.resolve(height, target.identity == nil ? measuredViews[items[anchor].identity] : nil)
-                    }
-                    return viewport.insets.top + additionalScrollDistance + resolved
+            func resolveTarget(_ height: Double, _ reservedBottom: Double) -> Double {
+                if target.restsOnBottom { return viewport.bottomLine - reservedBottom - height }
+                let resolved: Double
+                if let preparedTarget, let resolution = preparedTarget.resolution,
+                   resolution.generation == preparedTarget.generation, resolution.gate === intent?.gate,
+                   resolution.key == measurementKey(items[anchor], width: viewport.contentWidth),
+                   resolution.height == height, resolution.viewport == viewport {
+                    resolved = resolution.offset
+                } else {
+                    resolved = target.resolve(height, target.identity == nil ? measuredViews[items[anchor].identity] : nil)
                 }
+                return viewport.insets.top + additionalScrollDistance + resolved
+            }
+            if bottomGravity != nil {
+                newWindow = ListWindow.buildGravity(count: items.count, anchorIndex: anchor, viewport: viewport, margin: preloadMargin,
+                                                    clamps: true, measure: measure, resolveY: resolveTarget)
+            } else {
+                let reserve = reservedHeights(at: anchor)
+                newWindow = ListWindow.build(count: items.count, anchor: anchor, viewport: viewport, margin: preloadMargin,
+                    pinnedIndex: pinnedIndex, measure: measure) { resolveTarget($0, reserve.1) }
+            }
+        } else if let gravityAnchor {
+            let pass = GravityPass.resolve(count: items.count, anchor: gravityAnchor, viewport: viewport, margin: preloadMargin,
+                                           clamps: gravityClamps, follow: follow, reveal: revealedRow, measure: measure)
+            gravityPass = pass; newWindow = pass.window
         } else {
             newWindow = preserved.window(count: items.count, margin: preloadMargin, measure: measure)
         }
@@ -767,7 +899,8 @@ public final class UltraListView: UltraScrollView {
             oldWindowIsEmpty: oldWindow.rows.isEmpty, platformCoordinates: engineMode == .uiKit, hasTarget: target != nil,
             oldOrigin: oldOrigin, oldOffset: oldOffset, oldSettled: oldSettled, oldOverscroll: oldOverscroll,
             displaces: displaces, moves: !diff.moves.isEmpty, absorbsOverscroll: absorbsEdgeChangeIntoOverscroll,
-            containerOrigin: engine.containerOrigin(height: newWindow.height, top: newWindow.range.lowerBound == 0, bottom: newWindow.range.upperBound == items.count))
+            containerOrigin: engine.containerOrigin(height: newWindow.height, top: newWindow.range.lowerBound == 0, bottom: newWindow.range.upperBound == items.count),
+            gravity: bottomGravity != nil)
         let newOrigin = placement.origin, newBase = placement.base, newEdges = placement.edges, destination = placement.destination
         let shift = destination - oldOffset
         let reference = shared.first(where: { oldItems[$0.index].identity == survivor.map { oldItems[$0.index].identity } }) ?? shared.first
@@ -868,7 +1001,17 @@ public final class UltraListView: UltraScrollView {
         for (id, view) in oldViews where !nextIDs.contains(id) { view.visibleRectUpdated(nil) }
         engine.setEdges(newEdges); declaredEdges = newEdges
         engine.shift(by: destination - engine.offset); previousOffset = engine.offset
-        if absorbsEdgeChangeIntoOverscroll { engine.reanchorDrag() }
+        if absorbsEdgeChangeIntoOverscroll || bottomGravity != nil { engine.reanchorDrag() }
+        if bottomGravity != nil {
+            if let gravityPass {
+                updateFollow { $0.record(moved: gravityPass.revealed ? 0 : gravityPass.moved, atBottom: gravityPass.atBottom) }
+            } else if target != nil {
+                // A scroll that lands on the end follows from there afresh.
+                let atBottom = newWindow.distanceBelowBottom(count: items.count, viewport: viewport).map { abs($0) <= 0.5 } ?? false
+                updateFollow { atBottom ? $0.arm() : $0.stop() }
+                if engine.tracking { updateFollow { $0.hold() } }
+            }
+        }
         if displacing {
             let carries = target != nil || correctionCarriesTarget && abs(oldCorrection) > 0.5
             let generation = animations.replace(.viewport, .viewportOffset, from: oldOffset + coordinateMap + oldCorrection - engine.offset, to: 0, at: time, transition: transition)
@@ -932,8 +1075,9 @@ public final class UltraListView: UltraScrollView {
             }
         }
         let heightMotions = animations.heightMotions(at: time)
-        let sizeGeometry = SizePositionGeometry(anchor: anchor,
-            anchorsTop: newWindow.range.lowerBound == 0 && newWindow.range.upperBound == items.count
+        // Content resting on the bottom inset grows upward from it.
+        let sizeGeometry = SizePositionGeometry(anchor: gravityPass?.atBottom == true ? items.count : anchor,
+            anchorsTop: bottomGravity == nil && newWindow.range.lowerBound == 0 && newWindow.range.upperBound == items.count
                 && newWindow.height <= viewport.visibleHeight && pinnedIndex == nil,
             pinsAnchorBottom: holdsPinnedRow && target == nil && anchor == pinnedIndex,
             visibleHeight: viewport.visibleHeight)
@@ -1095,6 +1239,26 @@ public final class UltraListView: UltraScrollView {
     }
 
     /// An edge target at the edge row of the items this pass shows.
+    /// The row a bottom-gravity pass keeps in place (`GravityPass.survivor`)
+    /// with its new top on screen, or the end when `keepsEnd` or nothing
+    /// survives. A following list keeps the anchor's distance to the bottom
+    /// inset through viewport changes; otherwise the bottom inset's change
+    /// moves it when `compensates`. A width change keeps the share of the
+    /// anchor above the top inset.
+    private func gravityAnchorFor(oldWindow: ListWindow, oldItems: [any ListRow], oldBase: Double, oldOffset: Double, oldSettled: Double,
+                                  oldViewport: ListViewport, newViewport: ListViewport, newLookup: [String: Int], keepsEnd: Bool,
+                                  compensates: Bool, additionalDistance: Double, keepsReadingPosition: Bool) -> GravityAnchor {
+        guard !keepsEnd else { return .end }
+        let touchY = (touchLocationOverride ?? engine.touchLocation(in: self)).map { Double($0.y) }
+        guard let survivor = GravityPass.survivor(in: oldWindow, base: oldBase, offset: oldOffset, topInset: oldViewport.insets.top, touchY: touchY, survives: {
+            oldItems.indices.contains($0) && newLookup[oldItems[$0].identity] != nil
+        }), let index = newLookup[oldItems[survivor.index].identity] else { return .end }
+        let fixed = oldBase + survivor.y - oldSettled
+        let shift = follow.isFollowing ? newViewport.bottomLine - oldViewport.bottomLine
+            : compensates ? oldViewport.insets.bottom - newViewport.insets.bottom : 0
+        let fraction = keepsReadingPosition && survivor.height > 0 ? min(1, max(0, (oldViewport.insets.top - fixed) / survivor.height)) : 0
+        return .row(index: index, y: fixed + shift + additionalDistance, fraction: fraction, height: survivor.height)
+    }
     private func atEdge(_ target: ListScrollTarget) -> ListScrollTarget {
         guard let edge = target.edge, !items.isEmpty else { return target }
         var target = target
@@ -1170,11 +1334,19 @@ public final class UltraListView: UltraScrollView {
         let oldSettled = declaredEdges.clamped(oldOffset), oldOverscroll = oldOffset - oldSettled
         let oldSlack = settledWindow.pinSlack(index: pinnedIndex, viewport: oldViewport)
         let correction = animations.value(.viewport, .viewportOffset, at: time)
+        let keepsBottom = follow.isFollowing && restsOnBottom
         viewport.insets = insets
         let newSlack = settledWindow.pinSlack(index: pinnedIndex, viewport: viewport)
-        declaredEdges = settledWindow.edges(origin: origin, count: items.count, viewport: viewport, pinnedIndex: pinnedIndex)
+        declaredEdges = settledEdges
         var shift = 0.0
-        if holdsPinnedRow, let pinnedIndex, let row = settledWindow.rows.first(where: { $0.index == pinnedIndex }) {
+        if bottomGravity != nil {
+            // A following list keeps its end on the bottom inset. Otherwise
+            // the content moves with the bottom inset when it compensates,
+            // and stays where it is when not, as under a finger that drags
+            // the keyboard down.
+            if keepsBottom, let maximum = declaredEdges.maximum { shift = maximum - oldOffset }
+            else if compensates { shift = declaredEdges.clamped(oldSettled + insets.bottom - oldViewport.insets.bottom) + oldOverscroll - oldOffset }
+        } else if holdsPinnedRow, let pinnedIndex, let row = settledWindow.rows.first(where: { $0.index == pinnedIndex }) {
             let oldBoundary = oldViewport.height - oldViewport.insets.bottom + max(0, row.height - oldViewport.visibleHeight / 2)
             let newBoundary = viewport.height - insets.bottom + max(0, row.height - viewport.visibleHeight / 2)
             shift = oldBoundary - newBoundary
@@ -1307,13 +1479,23 @@ public final class UltraListView: UltraScrollView {
             automatic: true, additionalDistance: 0, compensates: true, keepsReadingPosition: true)
         let loaded = Dictionary(uniqueKeysWithValues: settledWindow.rows.map { ($0.index, $0.height) })
         let mean = settledWindow.height / Double(settledWindow.rows.count)
-        let window = preserved.window(count: items.count, margin: margin) { index in
+        func measure(_ index: Int) -> (height: Double, top: Double, bottom: Double)? {
             let item = items[index], key = measurementKey(item, width: width)
             let height = item.measuresAsynchronously
                 ? measurements.height(for: key) ?? provisionalHeights[key] ?? mean
                 : loaded[index] ?? mean
             let reserve = reservedHeights(at: index)
             return (height, reserve.0, reserve.1)
+        }
+        let window: ListWindow
+        if bottomGravity != nil {
+            let anchor = gravityAnchorFor(oldWindow: settledWindow, oldItems: items, oldBase: base, oldOffset: offset, oldSettled: settled,
+                oldViewport: viewport, newViewport: next, newLookup: identityIndices, keepsEnd: follow.isFollowing, compensates: true,
+                additionalDistance: 0, keepsReadingPosition: true)
+            window = GravityPass.resolve(count: items.count, anchor: anchor, viewport: next, margin: margin, clamps: true,
+                                         follow: follow, measure: measure).window
+        } else {
+            window = preserved.window(count: items.count, margin: margin, measure: measure)
         }
         return window.rows.filter { $0.bandBottom > -margin && $0.bandTop < next.height + margin }.map(\.index)
     }
@@ -1431,7 +1613,7 @@ public final class UltraListView: UltraScrollView {
                 if !previous.range.contains(row.index) { animations.seed(.row(id), width: viewport.contentWidth, height: row.height); joinWidthMotion(id) }
             }
             mountMotion(previous: previous, carriedPositions: mountedCarries, at: time)
-            declaredEdges = settledWindow.edges(origin: origin, count: items.count, viewport: viewport, pinnedIndex: pinnedIndex)
+            declaredEdges = settledEdges
             engine.setEdges(declaredEdges); resolveAttachments(transition: .immediate)
             CATransaction.commit()
         }
@@ -1662,7 +1844,13 @@ public final class UltraListView: UltraScrollView {
         guard width > 0 else { return [] }
         let witness = settledWindow.rows.first(where: { (settledFrame(at: $0.index)?.maxY ?? 0) > viewport.insets.top })
         let identity = witness.flatMap { items.indices.contains($0.index) ? items[$0.index].identity : nil }
-        let anchor = eligibleIntent(preparedIntent(mutation))?.target.index ?? identity.flatMap { id in mutation.items.firstIndex { $0.identity == id } } ?? 0
+        // An edge target, or a bottom-gravity list with nothing shown yet,
+        // shows the rows at its edge.
+        let target = eligibleIntent(preparedIntent(mutation)).map { intent in
+            intent.target.edge.map { $0 == .last ? mutation.items.count - 1 : 0 } ?? intent.target.index
+        }
+        let end = bottomGravity != nil && settledWindow.rows.isEmpty ? mutation.items.count - 1 : nil
+        let anchor = target ?? identity.flatMap { id in mutation.items.firstIndex { $0.identity == id } } ?? end ?? 0
         return MeasurementCache.priority(count: mutation.items.count, anchor: anchor, direction: 1, limit: min(80, max(24, settledWindow.rows.count + 8))).compactMap { index in
             let item = mutation.items[index], key = measurementKey(item, width: width)
             guard item.measuresAsynchronously else { return nil }
@@ -1692,7 +1880,7 @@ public final class UltraListView: UltraScrollView {
         let width = viewport.contentWidth, oldWindow = settledWindow
         let oldOffset = engine.offset, oldSettled = declaredEdges.clamped(oldOffset)
         let anchor = min(max(0, intent.target.index), mutation.items.count - 1)
-        let nextPinned = mutation.items.firstIndex(where: \.pinsToBottomEdge)
+        let nextPinned = bottomGravity == nil ? mutation.items.firstIndex(where: \.pinsToBottomEdge) : nil
         var missing: [MeasurementKey: (item: any ListRow, key: MeasurementKey, width: Double)] = [:]
         var unsupported = false
         var resolution: TargetResolution?
@@ -1721,14 +1909,18 @@ public final class UltraListView: UltraScrollView {
             let reserve = reservedHeights(at: index, in: mutation.items)
             return (height, reserve.0, reserve.1)
         }
-        let window = ListWindow.build(count: mutation.items.count, anchor: anchor, viewport: viewport,
-            margin: preloadMargin, pinnedIndex: nextPinned, measure: measure) { height in
-                let offset = intent.target.resolve(height, nil)
-                resolution = TargetResolution(generation: generation, gate: intent.gate,
-                    key: measurementKey(mutation.items[anchor], width: width), height: height,
-                    viewport: viewport, offset: offset)
-                return viewport.insets.top + mutation.additionalDistance + intent.distance + offset
-            }
+        func resolveTarget(_ height: Double) -> Double {
+            let offset = intent.target.resolve(height, nil)
+            resolution = TargetResolution(generation: generation, gate: intent.gate,
+                key: measurementKey(mutation.items[anchor], width: width), height: height,
+                viewport: viewport, offset: offset)
+            return viewport.insets.top + mutation.additionalDistance + intent.distance + offset
+        }
+        let window = bottomGravity == nil
+            ? ListWindow.build(count: mutation.items.count, anchor: anchor, viewport: viewport,
+                               margin: preloadMargin, pinnedIndex: nextPinned, measure: measure) { resolveTarget($0) }
+            : ListWindow.buildGravity(count: mutation.items.count, anchorIndex: anchor, viewport: viewport, margin: preloadMargin,
+                                      clamps: true, measure: measure) { height, _ in resolveTarget(height) }
         // A synchronous row without a known value still takes the existing
         // path. Reuse a resolution already made before reaching that row.
         if unsupported { return .init(required: [], missing: Array(missing.values), retained: retained, target: resolution) }
@@ -1738,7 +1930,8 @@ public final class UltraListView: UltraScrollView {
             oldOrigin: origin, oldOffset: oldOffset, oldSettled: oldSettled, oldOverscroll: oldOffset - oldSettled,
             displaces: mutation.additionalDistance + intent.distance != 0, moves: false,
             absorbsOverscroll: mutation.absorbsOverscroll,
-            containerOrigin: engine.containerOrigin(height: window.height, top: window.range.lowerBound == 0, bottom: window.range.upperBound == mutation.items.count))
+            containerOrigin: engine.containerOrigin(height: window.height, top: window.range.lowerBound == 0, bottom: window.range.upperBound == mutation.items.count),
+            gravity: bottomGravity != nil)
         for index in placement.uncoveredIndices { _ = measure(index) }
         return .init(required: placement.physicalRows.map { measurementKey(mutation.items[$0.index], width: width) },
             missing: Array(missing.values), retained: retained, target: resolution)
@@ -1753,7 +1946,7 @@ public final class UltraListView: UltraScrollView {
               (candidate?.relativeDistance ?? 0) == 0, (pendingIntent?.relativeDistance ?? 0) == 0,
               mutation.additionalDistance == 0, mutation.items.count == items.count,
               zip(mutation.items, items).allSatisfy({ $0.identity == $1.identity }),
-              mutation.items.firstIndex(where: \.pinsToBottomEdge) == pinnedIndex else { return nil }
+              bottomGravity != nil || mutation.items.firstIndex(where: \.pinsToBottomEdge) == pinnedIndex else { return nil }
         let currentViewport = mutation.viewportRequest == viewportRequest
         let size = currentViewport ? mutation.size : nil
         let insets = currentViewport ? mutation.insets ?? viewport.insets : viewport.insets
@@ -1776,7 +1969,7 @@ public final class UltraListView: UltraScrollView {
         var unsupported = false
         let width = viewport.contentWidth
         var retained: Set<MeasurementKey> = []
-        let window = preserved.window(count: mutation.items.count, margin: preloadMargin) { index in
+        func measure(_ index: Int) -> (height: Double, top: Double, bottom: Double)? {
             let item = mutation.items[index], key = measurementKey(item, width: width)
             retained.insert(key)
             let height: Double
@@ -1797,13 +1990,27 @@ public final class UltraListView: UltraScrollView {
             let reserve = reservedHeights(at: index, in: mutation.items)
             return (height, reserve.0, reserve.1)
         }
+        let window: ListWindow
+        if bottomGravity != nil {
+            let anchor = gravityAnchorFor(oldWindow: oldWindow, oldItems: items, oldBase: oldBase, oldOffset: oldOffset, oldSettled: oldSettled,
+                oldViewport: viewport, newViewport: viewport, newLookup: identityIndices, keepsEnd: false, compensates: mutation.compensates,
+                additionalDistance: 0, keepsReadingPosition: false)
+            let clamps = !(engine.tracking || engine.dragging || engine.decelerating || engine.activeFlight != nil || mutation.absorbsOverscroll)
+            var predicted = follow
+            if predicted.isFollowing, declaredEdges.maximum.map({ abs(oldSettled - $0) <= 0.5 }) != true { predicted.stop() }
+            window = GravityPass.resolve(count: mutation.items.count, anchor: anchor, viewport: viewport, margin: preloadMargin,
+                                         clamps: clamps, follow: predicted, measure: measure).window
+        } else {
+            window = preserved.window(count: mutation.items.count, margin: preloadMargin, measure: measure)
+        }
         guard !unsupported else { return nil }
         guard !window.rows.isEmpty else { return .init(required: [], missing: Array(missing.values), retained: retained) }
         let placement = WindowPlacement(newWindow: window, count: mutation.items.count, viewport: viewport, pinnedIndex: pinnedIndex,
             oldWindowIsEmpty: false, platformCoordinates: engineMode == .uiKit, hasTarget: false,
             oldOrigin: oldOrigin, oldOffset: oldOffset, oldSettled: oldSettled, oldOverscroll: oldOverscroll,
             displaces: false, moves: false, absorbsOverscroll: mutation.absorbsOverscroll,
-            containerOrigin: engine.containerOrigin(height: window.height, top: window.range.lowerBound == 0, bottom: window.range.upperBound == items.count))
+            containerOrigin: engine.containerOrigin(height: window.height, top: window.range.lowerBound == 0, bottom: window.range.upperBound == items.count),
+            gravity: bottomGravity != nil)
         let required = placement.physicalRows.compactMap { row -> MeasurementKey? in
             let item = mutation.items[row.index]
             guard item.measuresAsynchronously else { return nil }
@@ -1990,7 +2197,8 @@ public final class UltraListView: UltraScrollView {
                 }
                 sweepPreparations()
                 if !awaited, let index = identityIndices[item.identity], items[index].revision == item.revision,
-                   settledWindow.range.contains(index) || index == settledWindow.range.lowerBound - 1 || index == settledWindow.range.upperBound || index == pendingTarget?.index || pendingDisplayMeasurements.contains(key) {
+                   settledWindow.range.contains(index) || index == settledWindow.range.lowerBound - 1 || index == settledWindow.range.upperBound || index == pendingTarget?.index || pendingDisplayMeasurements.contains(key)
+                    || bottomGravity != nil && settledWindow.rows.isEmpty && index == items.count - 1 {
                     markDirty(item.identity, animated: false)
                 } else if !awaited, let pendingItems, let index = pendingIdentityIndices[item.identity], pendingItems[index].revision == item.revision {
                     markDirty(item.identity, animated: false)

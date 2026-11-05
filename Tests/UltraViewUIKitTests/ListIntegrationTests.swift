@@ -863,15 +863,18 @@ private actor MeasurementGate: NodeRowMeasuring {
         list.scrollTo(.init(index: 99), transition: .immediate)
         #expect(!list.accessibilityScroll(.down))
     }
-    @Test func invertedAccessibilityDirectionsFollowTheScreen() throws {
+    @Test func bottomGravityAccessibilityScrollsInReadingOrder() throws {
         let list = list(count: 100)
-        list.contentView.transform = .init(scaleX: 1, y: -1)
-        #expect(!list.accessibilityScroll(.down))
-        let before = try #require(list.settledFrame(at: 10)).minY
+        list.bottomGravity = .init()
+        #expect(list.isFollowingBottom && !list.accessibilityScroll(.down))
+        let shown = try #require(list.loadedIndexRange.first { (list.settledFrame(at: $0)?.maxY ?? 0) > 0 })
+        let before = try #require(list.settledFrame(at: shown)).minY
         #expect(list.accessibilityScroll(.up))
-        #expect(abs(before - (try #require(list.settledFrame(at: 10))).minY - 400) < 0.01)
+        #expect(abs((try #require(list.settledFrame(at: shown))).minY - before - 400) < 0.01)
+        #expect(!list.isFollowingBottom)
         #expect(list.accessibilityScroll(.next))
-        #expect(abs((try #require(list.settledFrame(at: 0))).minY) < 0.01)
+        #expect(abs((try #require(list.settledFrame(at: 99))).maxY - 400) < 0.01)
+        #expect(list.isFollowingBottom)
     }
     @Test func accessibilityFocusReturnsToTheRecreatedRow() throws {
         let list = list(count: 100)

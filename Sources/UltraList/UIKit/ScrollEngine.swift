@@ -17,6 +17,10 @@ protocol ScrollEngine: AnyObject {
     var didEndDragging: (() -> Void)? { get set }
     var didEndScrolling: (() -> Void)? { get set }
     var didTouchDown: (() -> Void)? { get set }
+    /// The last finger lifted, whether or not it dragged.
+    var didTouchUp: (() -> Void)? { get set }
+    /// Where the first finger is, while one is on the content.
+    func touchLocation(in view: UIView) -> CGPoint?
     var shouldStopOnRelease: ((Double) -> Bool)? { get set }
     var onInput: ((GestureRecording.Event) -> Void)? { get set }
     func receive(_ event: GestureRecording.Event)
@@ -89,6 +93,7 @@ final class PhysicsEngine: NSObject, ScrollEngine, UIGestureRecognizerDelegate {
     var didEndDragging: (() -> Void)?
     var didEndScrolling: (() -> Void)?
     var didTouchDown: (() -> Void)?
+    var didTouchUp: (() -> Void)?
     var shouldStopOnRelease: ((Double) -> Bool)?
     var onInput: ((GestureRecording.Event) -> Void)?
     weak var keyboardPanRecognizer: UIPanGestureRecognizer?
@@ -139,6 +144,7 @@ final class PhysicsEngine: NSObject, ScrollEngine, UIGestureRecognizerDelegate {
         }
         pan.touchUp = { [weak self] in
             guard let self else { return }
+            didTouchUp?()
             if pan.state != .began && pan.state != .changed { touchRate.release() }
             guard !sawDrag, core.resumeBounce() else { return }
             startMotion()
@@ -149,6 +155,9 @@ final class PhysicsEngine: NSObject, ScrollEngine, UIGestureRecognizerDelegate {
     }
     func containerOrigin(height: Double, top: Bool, bottom: Bool) -> Double {
         ScrollCore.containerOrigin(height: height, topLoaded: top, bottomLoaded: bottom)
+    }
+    func touchLocation(in view: UIView) -> CGPoint? {
+        pan.hasActiveTouches && pan.numberOfTouches > 0 ? pan.location(in: view) : nil
     }
     func attachInput(to view: UIView) {
         view.addGestureRecognizer(pan)
@@ -449,6 +458,7 @@ final class PlatformEngine: NSObject, ScrollEngine, UIScrollViewDelegate {
     var didEndDragging: (() -> Void)?
     var didEndScrolling: (() -> Void)?
     var didTouchDown: (() -> Void)?
+    var didTouchUp: (() -> Void)?
     var shouldStopOnRelease: ((Double) -> Bool)?
     var onInput: ((GestureRecording.Event) -> Void)?
     private var writing = false
@@ -483,7 +493,7 @@ final class PlatformEngine: NSObject, ScrollEngine, UIScrollViewDelegate {
             stopReplay()
             didTouchDown?(); onInput?(.init(time: CACurrentMediaTime(), phase: .touchDown))
         }
-        touchObserver.up = { [weak self] in self?.settleIfNeeded() }
+        touchObserver.up = { [weak self] in self?.didTouchUp?(); self?.settleIfNeeded() }
         scroll.addGestureRecognizer(touchObserver)
         scroll.panGestureRecognizer.addTarget(self, action: #selector(panned))
     }
@@ -587,6 +597,9 @@ final class PlatformEngine: NSObject, ScrollEngine, UIScrollViewDelegate {
         return driver
     }
     func containerOrigin(height: Double, top: Bool, bottom: Bool) -> Double { top ? 0 : bottom ? 10_000_000 - height : 5_000_000 - height / 2 }
+    func touchLocation(in view: UIView) -> CGPoint? {
+        touchObserver.hasActiveTouches && touchObserver.numberOfTouches > 0 ? touchObserver.location(in: view) : nil
+    }
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         guard !writing else { return }
         if let replay, replay.dragging || replay.decelerating {

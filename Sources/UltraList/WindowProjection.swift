@@ -106,12 +106,21 @@ struct WindowPlacement: Sendable, Equatable {
     let edges: ScrollEdges
     let destination: Double
 
+    /// With `gravity`, the window was built by `ListWindow.buildGravity`,
+    /// which already rested it on its edges unless the pass holds content
+    /// where it is: the destination keeps the window's screen placement and
+    /// the old overscroll.
     init(newWindow: ListWindow, count: Int, viewport: ListViewport, pinnedIndex: Int?, oldWindowIsEmpty: Bool,
          platformCoordinates: Bool, hasTarget: Bool, oldOrigin: Double, oldOffset: Double, oldSettled: Double,
-         oldOverscroll: Double, displaces: Bool, moves: Bool, absorbsOverscroll: Bool, containerOrigin: Double) {
+         oldOverscroll: Double, displaces: Bool, moves: Bool, absorbsOverscroll: Bool, containerOrigin: Double, gravity: Bool = false) {
         window = newWindow; self.count = count; self.viewport = viewport
         origin = platformCoordinates && !hasTarget && !oldWindowIsEmpty ? oldSettled + newWindow.minY : containerOrigin
         base = origin - newWindow.minY
+        if gravity {
+            edges = newWindow.gravityEdges(origin: origin, count: count, viewport: viewport)
+            destination = hasTarget || oldWindowIsEmpty ? base : base + oldOverscroll
+            return
+        }
         edges = newWindow.edges(origin: origin, count: count, viewport: viewport, pinnedIndex: pinnedIndex)
         var destination = base
         if !hasTarget && (!moves || displaces) && (oldOverscroll == 0 || displaces) { destination = edges.clamped(destination) }

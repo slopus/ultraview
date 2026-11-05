@@ -70,8 +70,8 @@ open class UltraScrollView: UIView {
         clipsToBounds = true; addSubview(engine.host)
         engine.onScroll = { [weak self] value in self?.handleScroll(value) }
         engine.willBeginDragging = { [weak self] in self?.handleDragBegin() }
-        engine.didEndDragging = { [weak self] in self?.didEndDragging?() }
-        engine.didEndScrolling = { [weak self] in self?.didEndScrolling?() }
+        engine.didEndDragging = { [weak self] in self?.handleDragEnd() }
+        engine.didEndScrolling = { [weak self] in self?.handleScrollEnd() }
         engine.shouldStopOnRelease = { [weak self] value in self?.shouldStopScrolling?(value) ?? false }
         insertSubview(scrollToTopProxy, at: 0)
         ScrollToTopClaims.register(self)
@@ -174,6 +174,8 @@ open class UltraScrollView: UIView {
     }
     open func handleScroll(_ offset: Double) { onScroll?(offset) }
     open func handleDragBegin() { willBeginDragging?() }
+    open func handleDragEnd() { didEndDragging?() }
+    open func handleScrollEnd() { didEndScrolling?() }
     open func updateEdges() {
         engine.setEdges(.init(minimum: -contentInsets.top, maximum: max(-contentInsets.top, contentHeight + contentInsets.bottom - bounds.height)))
     }
