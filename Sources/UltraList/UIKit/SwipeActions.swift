@@ -403,8 +403,10 @@ public final class ListSwipeController: NSObject, UIGestureRecognizerDelegate {
         let text = NSAttributedString(string: title, attributes: [.font: font, .foregroundColor: UIColor.white])
         let textSize = text.boundingRect(with: .init(width: 160, height: 100), options: [.usesLineFragmentOrigin], context: nil).size
         let iconSize = icon.map { _ in CGSize(width: 22, height: 22) } ?? .zero
-        let gap = icon == nil ? 0 : 4.0
-        let width = ceil(max(textSize.width, iconSize.width)), height = ceil(textSize.height + iconSize.height + gap)
+        // CGFloat throughout: Xcode 26.2's type checker can't pick between
+        // CGFloat and Double for the arithmetic below when they mix.
+        let gap: CGFloat = icon == nil ? 0 : 4
+        let width: CGFloat = ceil(max(textSize.width, iconSize.width)), height: CGFloat = ceil(textSize.height + iconSize.height + gap)
         guard width > 0, height > 0 else { return nil }
         let format = UIGraphicsImageRendererFormat(); format.scale = scale; format.opaque = false
         let image = UIGraphicsImageRenderer(size: .init(width: width, height: height), format: format).image { _ in
@@ -499,7 +501,8 @@ public final class ListSwipeController: NSObject, UIGestureRecognizerDelegate {
             let previous = customActionOwners[key]
             // Custom actions the row set itself are left alone.
             let current = view.accessibilityCustomActions ?? []
-            let ownsCurrent = previous.map { current.elementsEqual($0, by: ===) } ?? current.isEmpty
+            let ownsCurrent: Bool
+            if let previous { ownsCurrent = current.elementsEqual(previous) { $0 === $1 } } else { ownsCurrent = current.isEmpty }
             guard ownsCurrent else { continue }
             if entries.isEmpty {
                 if previous != nil { view.accessibilityCustomActions = nil }
