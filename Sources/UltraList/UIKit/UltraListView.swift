@@ -846,7 +846,10 @@ public final class UltraListView: UltraScrollView {
                 let reserve = reservedHeights(at: index)
                 return (kept, reserve.0, reserve.1)
             }
-            let view = oldViews[identity] ?? carried[identity]?.view ?? measuredViews[identity] ?? pendingDisplayViews[key] ?? item.makeView()
+            // Not `?? item.makeView()`: Xcode 26.2 reads the row captured in
+            // that autoclosure as sent across isolation.
+            let view: ListRowView
+            if let existing = oldViews[identity] ?? carried[identity]?.view ?? measuredViews[identity] ?? pendingDisplayViews[key] { view = existing } else { view = item.makeView() }
             if oldViews[identity] == nil && measuredViews[identity] == nil { item.apply(to: view, transition: .immediate) }
             measuredViews[identity] = view
             let height = item.measuresAsynchronously ? measurements.height(for: key)! : view.update(width: viewport.contentWidth, transition: (reconciled.contains(identity) || sizeChanged) ? transition : .immediate)
